@@ -9,7 +9,7 @@
 - Database: PostgreSQL + Prisma（后续启用 PostGIS）
 - Jobs: Redis + BullMQ
 - Media: Tencent COS（私有桶 + 临时签名 URL）
-- Deployment: Docker Compose + Caddy
+- Deployment: Docker Compose + Nginx + Certbot
 
 ## 目录
 
