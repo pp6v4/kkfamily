@@ -11,6 +11,7 @@
   },
   "dependencies": {
     "@dcloudio/uni-app": "3.0.0-5020420260813003",
+    "@dcloudio/uni-components": "3.0.0-5020420260813003",
     "@dcloudio/uni-mp-weixin": "3.0.0-5020420260813003",
     "@dcloudio/uni-ui": "^1.5.11",
     "pinia": "^3.0.0",
