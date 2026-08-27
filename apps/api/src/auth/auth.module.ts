@@ -12,7 +12,9 @@ import { AccessTokenGuard } from './access-token.guard';
       inject: [ConfigService],
       useFactory: (config: ConfigService) => ({
         secret: config.getOrThrow<string>('JWT_ACCESS_SECRET'),
-        signOptions: { expiresIn: config.get<string>('JWT_ACCESS_TTL') ?? '15m' },
+        // @nestjs/jwt v11 narrows string durations to a template-literal type.
+        // Use seconds here so the value remains unambiguous to both TypeScript and JWT.
+        signOptions: { expiresIn: 15 * 60 },
       }),
     }),
   ],
