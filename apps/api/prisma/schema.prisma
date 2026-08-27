@@ -7,13 +7,54 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-enum MemberStatus { PENDING ACTIVE DISABLED LEFT }
-enum PermissionLevel { VIEW EDIT MANAGE }
-enum TripStatus { PLANNING PENDING DEPARTING COMPLETED CANCELLED }
-enum RecipeStatus { DRAFT PUBLISHED ARCHIVED }
-enum MealStatus { DRAFT CONFIRMED COOKING COMPLETED CANCELLED }
-enum ShoppingItemStatus { WISHLIST NEXT_TRIP REPLENISH PURCHASED }
-enum InventoryTransactionType { STOCK_IN CONSUME ADJUST EXPIRE }
+enum MemberStatus {
+  PENDING
+  ACTIVE
+  DISABLED
+  LEFT
+}
+
+enum PermissionLevel {
+  VIEW
+  EDIT
+  MANAGE
+}
+
+enum TripStatus {
+  PLANNING
+  PENDING
+  DEPARTING
+  COMPLETED
+  CANCELLED
+}
+
+enum RecipeStatus {
+  DRAFT
+  PUBLISHED
+  ARCHIVED
+}
+
+enum MealStatus {
+  DRAFT
+  CONFIRMED
+  COOKING
+  COMPLETED
+  CANCELLED
+}
+
+enum ShoppingItemStatus {
+  WISHLIST
+  NEXT_TRIP
+  REPLENISH
+  PURCHASED
+}
+
+enum InventoryTransactionType {
+  STOCK_IN
+  CONSUME
+  ADJUST
+  EXPIRE
+}
 
 model User {
   id        String   @id @default(cuid())
