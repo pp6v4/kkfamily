@@ -8,7 +8,7 @@ services:
       - letsencrypt:/etc/letsencrypt:ro
     restart: unless-stopped
     depends_on: [api]
-    networks: [internal]
+    networks: [internal, edge]
 
   certbot:
     image: certbot/certbot:latest
@@ -63,6 +63,7 @@ services:
 networks:
   internal:
     internal: true
+  edge: {}
 
 volumes:
   postgres_data:
