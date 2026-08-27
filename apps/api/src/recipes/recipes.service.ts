@@ -1,0 +1,57 @@
+import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { PrismaService } from '../prisma/prisma.service';
+import { CreateCategoryDto } from './dto/create-category.dto';
+import { CreateRecipeDto } from './dto/create-recipe.dto';
+
+@Injectable()
+export class RecipesService {
+  constructor(private readonly prisma: PrismaService) {}
+
+  async listCategories(userId: string, householdId: string) {
+    await this.requireMember(userId, householdId);
+    return { data: await this.prisma.recipeCategory.findMany({ where: { householdId }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }) };
+  }
+
+  async createCategory(userId: string, householdId: string, dto: CreateCategoryDto) {
+    await this.requireChef(userId, householdId);
+    return { data: await this.prisma.recipeCategory.create({ data: { householdId, name: dto.name.trim(), sortOrder: dto.sortOrder ?? 0 } }) };
+  }
+
+  async createRecipe(userId: string, householdId: string, dto: CreateRecipeDto) {
+    const membership = await this.requireChef(userId, householdId);
+    if (dto.categoryId) {
+      const category = await this.prisma.recipeCategory.findFirst({ where: { id: dto.categoryId, householdId } });
+      if (!category) throw new NotFoundException('Recipe category was not found');
+    }
+    const recipe = await this.prisma.$transaction(async (tx) => {
+      const ingredients = await Promise.all(dto.ingredients.map((item) => tx.ingredient.upsert({
+        where: { householdId_name: { householdId, name: item.name.trim() } },
+        update: { defaultUnit: item.unit },
+        create: { householdId, name: item.name.trim(), defaultUnit: item.unit },
+      })));
+      return tx.recipe.create({
+        data: {
+          householdId, categoryId: dto.categoryId, name: dto.name.trim(), coverObjectKey: dto.coverObjectKey,
+          steps: dto.steps.map((step) => step.trim()), createdById: membership.id,
+          ingredients: { create: dto.ingredients.map((item, index) => ({ ingredientId: ingredients[index].id, quantity: item.quantity, unit: item.unit, optional: item.optional ?? false })) },
+          seasonings: { create: [...new Set(dto.seasonings.map((item) => item.trim()).filter(Boolean))].map((name) => ({ name })) },
+        },
+        include: { category: true, ingredients: { include: { ingredient: true } }, seasonings: true },
+      });
+    });
+    return { data: recipe };
+  }
+
+  private async requireMember(userId: string, householdId: string) {
+    const membership = await this.prisma.membership.findFirst({ where: { householdId, userId, status: 'ACTIVE' }, include: { roles: { include: { role: true } } } });
+    if (!membership) throw new ForbiddenException('No access to this household');
+    return membership;
+  }
+
+  private async requireChef(userId: string, householdId: string) {
+    const membership = await this.requireMember(userId, householdId);
+    const codes = membership.roles.map((entry) => entry.role.code);
+    if (!codes.includes('ADMIN') && !codes.includes('CHEF')) throw new ForbiddenException('Chef permission is required');
+    return membership;
+  }
+}

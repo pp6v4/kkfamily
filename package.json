@@ -1,0 +1,13 @@
+{
+  "name": "family-life",
+  "private": true,
+  "packageManager": "pnpm@10.12.1",
+  "scripts": {
+    "dev:api": "pnpm --filter @family-life/api dev",
+    "dev:client": "pnpm --filter @family-life/client dev:mp-weixin",
+    "build": "pnpm -r build",
+    "lint": "pnpm -r lint",
+    "test": "pnpm -r test"
+  }
+}
+

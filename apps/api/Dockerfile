@@ -1,0 +1,25 @@
+FROM node:22-alpine AS build
+WORKDIR /workspace
+ENV DATABASE_URL=postgresql://build:build@localhost:5432/build?schema=public
+
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/api/package.json ./apps/api/package.json
+COPY apps/client/package.json ./apps/client/package.json
+COPY packages/contracts/package.json ./packages/contracts/package.json
+RUN corepack enable && pnpm install --filter @family-life/api... --no-frozen-lockfile
+
+COPY apps/api ./apps/api
+COPY packages/contracts ./packages/contracts
+RUN pnpm --filter @family-life/api prisma:generate && pnpm --filter @family-life/api build
+
+FROM node:22-alpine AS runtime
+WORKDIR /app
+ENV NODE_ENV=production
+COPY --from=build /workspace/apps/api/dist ./dist
+COPY --from=build /workspace/node_modules ./node_modules
+COPY --from=build /workspace/apps/api/node_modules ./apps/api/node_modules
+COPY --from=build /workspace/node_modules/.pnpm ./node_modules/.pnpm
+COPY --from=build /workspace/apps/api/package.json ./package.json
+COPY --from=build /workspace/apps/api/prisma ./prisma
+EXPOSE 3000
+CMD ["sh", "-c", "npx prisma migrate deploy && node dist/main.js"]
