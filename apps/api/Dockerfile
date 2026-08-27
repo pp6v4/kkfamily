@@ -14,14 +14,11 @@ COPY packages/contracts ./packages/contracts
 RUN pnpm --filter @family-life/api prisma:generate && pnpm --filter @family-life/api build
 
 FROM node:22-bookworm-slim AS runtime
-WORKDIR /app
+WORKDIR /workspace
 RUN apt-get update && apt-get install -y --no-install-recommends openssl && rm -rf /var/lib/apt/lists/*
 ENV NODE_ENV=production
-COPY --from=build /workspace/apps/api/dist ./dist
 COPY --from=build /workspace/node_modules ./node_modules
-COPY --from=build /workspace/apps/api/node_modules ./apps/api/node_modules
-COPY --from=build /workspace/node_modules/.pnpm ./node_modules/.pnpm
-COPY --from=build /workspace/apps/api/package.json ./package.json
-COPY --from=build /workspace/apps/api/prisma ./prisma
+COPY --from=build /workspace/apps/api ./apps/api
+WORKDIR /workspace/apps/api
 EXPOSE 3000
-CMD ["sh", "-c", "./apps/api/node_modules/.bin/prisma migrate deploy --schema=/app/prisma/schema.prisma && node dist/main.js"]
+CMD ["sh", "-c", "./node_modules/.bin/prisma migrate deploy && node dist/main.js"]
