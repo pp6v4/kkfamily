@@ -1,0 +1,15 @@
+{
+  "name": "扣扣的家",
+  "appid": "wxd7ff83eda505dd31",
+  "description": "扣住小日子，家里有欢喜。",
+  "versionName": "0.1.0",
+  "versionCode": "100",
+  "mp-weixin": {
+    "appid": "wxd7ff83eda505dd31",
+    "setting": {
+      "urlCheck": true,
+      "es6": true,
+      "minified": true
+    }
+  }
+}
