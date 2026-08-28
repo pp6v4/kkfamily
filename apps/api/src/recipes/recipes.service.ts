@@ -1,4 +1,5 @@
 import { ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
+import { RecipeStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { CreateRecipeDto } from './dto/create-recipe.dto';
@@ -40,6 +41,24 @@ export class RecipesService {
       });
     });
     return { data: recipe };
+  }
+
+  async listRecipes(userId: string, householdId: string) {
+    const membership = await this.requireMember(userId, householdId);
+    const roleCodes = membership.roles.map((entry) => entry.role.code);
+    const canManageRecipes = roleCodes.includes('ADMIN') || roleCodes.includes('CHEF');
+    return { data: await this.prisma.recipe.findMany({
+      where: { householdId, ...(canManageRecipes ? {} : { status: RecipeStatus.PUBLISHED }) },
+      include: { category: true, ingredients: { include: { ingredient: true } }, seasonings: true },
+      orderBy: [{ status: 'asc' }, { updatedAt: 'desc' }],
+    }) };
+  }
+
+  async updateStatus(userId: string, householdId: string, recipeId: string, status: RecipeStatus) {
+    await this.requireChef(userId, householdId);
+    const recipe = await this.prisma.recipe.findFirst({ where: { id: recipeId, householdId } });
+    if (!recipe) throw new NotFoundException('Recipe was not found');
+    return { data: await this.prisma.recipe.update({ where: { id: recipeId }, data: { status } }) };
   }
 
   private async requireMember(userId: string, householdId: string) {

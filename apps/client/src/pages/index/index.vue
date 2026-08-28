@@ -28,10 +28,10 @@ function selectDay(key: string) { selected.value = key; uni.navigateTo({ url: `/
 
 <template>
   <view class="page">
-    <view class="top"><view><text class="eyebrow">扣扣的家</text><text class="headline">把小日子，盖成纪念</text></view><view class="avatar">🏡</view></view>
+    <view class="top"><view><text class="eyebrow">扣扣的家</text><text class="headline">家庭日历</text></view><view class="avatar">🏡</view></view>
     <view class="calendar-card"><view class="month"><text class="arrow" @tap="changeMonth(-1)">‹</text><text class="month-title">{{ title }}</text><text class="arrow" @tap="changeMonth(1)">›</text></view><view class="weekdays"><text v-for="day in weekdays" :key="day">{{ day }}</text></view><view class="days"><view v-for="item in days" :key="item.key" class="day" :class="{ muted: !item.isCurrent, today: item.key === today, selected: item.key === selected }" @tap="selectDay(item.key)"><text class="date">{{ item.day }}</text><view class="stamps"><text v-for="event in item.events.slice(0, 3)" :key="event.id" class="stamp" :class="event.kind">{{ eventStamps[event.kind] }}</text><text v-if="item.events.length > 3" class="more">+{{ item.events.length - 3 }}</text></view></view></view></view>
     <view class="legend"><view><text class="legend-stamp anniversary">❤</text><text>纪念日</text></view><view><text class="legend-stamp meal">🍲</text><text>吃什么</text></view><view><text class="legend-stamp camping">⛺</text><text>去露营</text></view><view><text class="legend-stamp task">✓</text><text>待办</text></view></view>
-    <view class="tip" @tap="selectDay(selected)"><text>今日安排</text><text class="tip-copy">点日期查看或添加安排 ›</text></view>
+    <view class="tip" @tap="selectDay(selected)"><text>当天安排</text><text class="tip-copy">查看或添加事件 ›</text></view>
   </view>
 </template>
 

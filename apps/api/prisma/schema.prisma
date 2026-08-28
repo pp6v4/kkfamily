@@ -56,6 +56,13 @@ enum InventoryTransactionType {
   EXPIRE
 }
 
+enum CalendarEventType {
+  ANNIVERSARY
+  MEAL
+  TRIP
+  TASK
+}
+
 model User {
   id        String   @id @default(cuid())
   openId    String   @unique
@@ -78,6 +85,24 @@ model Household {
   inventoryItems InventoryItem[]
   meals Meal[]
   shoppingLists ShoppingList[]
+  calendarEvents CalendarEvent[]
+}
+
+model CalendarEvent {
+  id          String            @id @default(cuid())
+  householdId String
+  type        CalendarEventType
+  title       String
+  startsAt    DateTime
+  endsAt      DateTime?
+  sourceType  String?
+  sourceId    String?
+  createdById String
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  household   Household         @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  @@index([householdId, startsAt])
+  @@index([householdId, sourceType, sourceId])
 }
 
 model Membership {

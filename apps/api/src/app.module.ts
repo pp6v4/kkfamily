@@ -6,6 +6,8 @@ import { HouseholdsModule } from './households/households.module';
 import { RecipesModule } from './recipes/recipes.module';
 import { HealthController } from './health.controller';
 import { PrismaModule } from './prisma/prisma.module';
+import { CalendarModule } from './calendar/calendar.module';
+import { MealsModule } from './meals/meals.module';
 
 @Module({
   imports: [
@@ -23,6 +25,8 @@ import { PrismaModule } from './prisma/prisma.module';
     AuthModule,
     HouseholdsModule,
     RecipesModule,
+    CalendarModule,
+    MealsModule,
   ],
   controllers: [HealthController],
 })
