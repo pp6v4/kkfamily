@@ -11,7 +11,11 @@ export interface ShoppingItem { id: string; name: string; quantity: string | num
 export interface ShoppingList { id: string; name: string; items: ShoppingItem[] }
 export interface InventoryItem { id: string; quantity: string | number; unit: string; location: string | null; ingredient: { id: string; name: string } }
 export interface CalendarEvent { id: string; type: 'ANNIVERSARY' | 'MEAL' | 'TRIP' | 'TASK'; title: string; startsAt: string; endsAt: string | null; sourceType: string | null; sourceId: string | null }
-export interface Trip { id: string; title: string; status: 'PLANNING' | 'PENDING' | 'DEPARTING' | 'COMPLETED' | 'CANCELLED'; startsAt: string; endsAt: string | null; destination: string | null; members: Array<{ membershipId: string; canEdit: boolean }> }
+export interface TripMember { membershipId: string; canEdit: boolean; membership: { id: string; user: { id: string; nickname: string | null; avatarUrl: string | null } } }
+export interface Trip { id: string; title: string; status: 'PLANNING' | 'PENDING' | 'DEPARTING' | 'COMPLETED' | 'CANCELLED'; startsAt: string; endsAt: string | null; destination: string | null; members: TripMember[]; _count?: { packingItems: number } }
+export interface PackingTemplateItem { id: string; name: string; defaultQuantity: string | number | null; unit: string | null; note: string | null; sortOrder: number }
+export interface PackingTemplate { id: string; name: string; description: string | null; archived: boolean; items: PackingTemplateItem[] }
+export interface TripPackingItem { id: string; name: string; quantity: string | number | null; unit: string | null; note: string | null; status: 'PENDING' | 'PACKED'; responsibleMembershipId: string | null; sourceTemplate: { id: string; name: string } | null; responsibleMembership: { id: string; user: { id: string; nickname: string | null; avatarUrl: string | null } } | null }
 
 async function request<T>(path: string, method: UniApp.RequestOptions['method'] = 'GET', data?: unknown): Promise<T> {
   const session = await ensureSession();
@@ -43,3 +47,11 @@ export function listCalendarEvents(from: string, to: string) { return request<Ca
 export function createCalendarEvent(input: { type: CalendarEvent['type']; title: string; startsAt: string; endsAt?: string; sourceType?: string; sourceId?: string }) { return request<CalendarEvent>('/calendar/events', 'POST', input); }
 export function listTrips() { return request<Trip[]>('/trips'); }
 export function createTrip(input: { title: string; startsAt: string; endsAt?: string; destination?: string }) { return request<Trip>('/trips', 'POST', input); }
+export function listPackingTemplates() { return request<PackingTemplate[]>('/packing-templates'); }
+export function createPackingTemplate(input: { name: string; description?: string; items: Array<{ name: string; quantity?: number; unit?: string; note?: string; sortOrder?: number }> }) { return request<PackingTemplate>('/packing-templates', 'POST', input); }
+export function updatePackingTemplate(templateId: string, input: { name?: string; description?: string; archived?: boolean; items?: Array<{ id?: string; name: string; quantity?: number; unit?: string; note?: string; sortOrder?: number }> }) { return request<PackingTemplate>(`/packing-templates/${templateId}`, 'PATCH', input); }
+export function listTripPackingItems(tripId: string) { return request<TripPackingItem[]>(`/trips/${tripId}/packing-items`); }
+export function applyPackingTemplate(tripId: string, templateId: string) { return request<{ templateId: string; addedCount: number; skippedCount: number; items: TripPackingItem[] }>(`/trips/${tripId}/packing-items/apply-template`, 'POST', { templateId }); }
+export function createTripPackingItem(tripId: string, input: { name: string; quantity?: number; unit?: string; note?: string; responsibleMembershipId?: string }) { return request<TripPackingItem>(`/trips/${tripId}/packing-items`, 'POST', input); }
+export function updateTripPackingItem(tripId: string, itemId: string, input: { name?: string; quantity?: number; unit?: string; note?: string; status?: TripPackingItem['status']; responsibleMembershipId?: string }) { return request<TripPackingItem>(`/trips/${tripId}/packing-items/${itemId}`, 'PATCH', input); }
+export function removeTripPackingItem(tripId: string, itemId: string) { return request<{ removed: boolean }>(`/trips/${tripId}/packing-items/${itemId}`, 'DELETE'); }

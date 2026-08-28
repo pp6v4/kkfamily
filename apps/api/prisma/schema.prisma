@@ -63,6 +63,11 @@ enum CalendarEventType {
   TASK
 }
 
+enum PackingItemStatus {
+  PENDING
+  PACKED
+}
+
 model User {
   id        String   @id @default(cuid())
   openId    String   @unique
@@ -86,6 +91,7 @@ model Household {
   meals Meal[]
   shoppingLists ShoppingList[]
   calendarEvents CalendarEvent[]
+  packingTemplates PackingTemplate[]
 }
 
 model CalendarEvent {
@@ -116,6 +122,8 @@ model Membership {
   roles       MemberRole[]
   permissions ModulePermission[]
   tripMembers TripMember[]
+  createdPackingTemplates PackingTemplate[] @relation("PackingTemplateCreator")
+  responsiblePackingItems TripPackingItem[] @relation("PackingItemResponsible")
   @@unique([householdId, userId])
 }
 
@@ -154,6 +162,7 @@ model Trip {
   createdAt   DateTime   @default(now())
   household   Household  @relation(fields: [householdId], references: [id])
   members     TripMember[]
+  packingItems TripPackingItem[]
 }
 
 model TripMember {
@@ -164,6 +173,58 @@ model TripMember {
   trip         Trip       @relation(fields: [tripId], references: [id], onDelete: Cascade)
   membership   Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
   @@id([tripId, membershipId])
+}
+
+model PackingTemplate {
+  id          String   @id @default(cuid())
+  householdId String
+  name        String
+  description String?
+  createdById String
+  archived    Boolean  @default(false)
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+  household   Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  createdBy   Membership @relation("PackingTemplateCreator", fields: [createdById], references: [id])
+  items       PackingTemplateItem[]
+  tripPackingItems TripPackingItem[]
+  @@unique([householdId, name])
+  @@index([householdId, archived])
+}
+
+model PackingTemplateItem {
+  id              String   @id @default(cuid())
+  templateId      String
+  name            String
+  defaultQuantity Decimal? @db.Decimal(12, 3)
+  unit            String?
+  note            String?
+  sortOrder       Int      @default(0)
+  template        PackingTemplate @relation(fields: [templateId], references: [id], onDelete: Cascade)
+  tripPackingItems TripPackingItem[]
+  @@index([templateId, sortOrder])
+}
+
+model TripPackingItem {
+  id                      String            @id @default(cuid())
+  tripId                  String
+  sourceTemplateId        String?
+  sourceTemplateItemId    String?
+  name                    String
+  quantity                Decimal?          @db.Decimal(12, 3)
+  unit                    String?
+  note                    String?
+  status                  PackingItemStatus @default(PENDING)
+  responsibleMembershipId String?
+  createdAt               DateTime          @default(now())
+  updatedAt               DateTime          @updatedAt
+  trip                    Trip @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  sourceTemplate          PackingTemplate? @relation(fields: [sourceTemplateId], references: [id], onDelete: SetNull)
+  sourceTemplateItem      PackingTemplateItem? @relation(fields: [sourceTemplateItemId], references: [id], onDelete: SetNull)
+  responsibleMembership   Membership? @relation("PackingItemResponsible", fields: [responsibleMembershipId], references: [id], onDelete: SetNull)
+  @@unique([tripId, sourceTemplateItemId])
+  @@index([tripId, status])
+  @@index([responsibleMembershipId])
 }
 
 model RecipeCategory {

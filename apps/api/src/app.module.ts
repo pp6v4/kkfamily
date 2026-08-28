@@ -11,6 +11,7 @@ import { MealsModule } from './meals/meals.module';
 import { ShoppingModule } from './shopping/shopping.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { TripsModule } from './trips/trips.module';
+import { PackingModule } from './packing/packing.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { TripsModule } from './trips/trips.module';
     ShoppingModule,
     InventoryModule,
     TripsModule,
+    PackingModule,
   ],
   controllers: [HealthController],
 })

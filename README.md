@@ -20,7 +20,11 @@
 
 ## 当前状态
 
-已完成单仓库骨架、API 健康检查、微信登录/JWT 会话、家庭创建及管理员初始授权、菜谱分类和厨师录菜接口，以及客户端首页骨架。餐点、库存和购物清单为下一开发阶段。域名备案完成后再配置生产 DNS、HTTPS 和微信合法域名。
+已完成单仓库骨架、API 健康检查、微信登录/JWT 会话、家庭创建及管理员初始授权、菜谱、餐点、库存、购物清单、家庭日历、露营行程基础、自定义行李模板及行程行李协作。客户端已接入对应数据库 API，Docker Compose 中间件和 Nginx `/api/` 反向代理已部署。
+
+自定义行李模板没有任何系统内置的“烧烤模块”。“烧烤”只可能是用户自己填写的模板名称；模板物品完全自定义，套用到行程后复制为独立快照，不随模板后续修改。
+
+下一阶段重点是成员邀请与权限管理、露营地图/路线/住宿/交通/照片、家庭待办、收藏、家庭档案、非财务数据看板和订阅消息。完整设计状态见 [`docs/design-baseline.md`](docs/design-baseline.md)。
 
 ## 当前 API
 
@@ -28,8 +32,13 @@
 - `POST /v1/auth/wechat/login`
 - `GET /v1/auth/me`
 - `POST /v1/households`
-- `GET /v1/recipes/categories`
-- `POST /v1/recipes/categories`
-- `POST /v1/recipes`
+- `/v1/recipes/**`：分类、菜谱录入和状态管理
+- `/v1/meals/**`：餐点创建、选菜、缺料计算和完成
+- `/v1/inventory/**`：库存查询和数量调整
+- `/v1/shopping/**`：购物项、缺料导入和状态管理
+- `/v1/calendar/**`：家庭日历事件
+- `/v1/trips/**`：行程基础与成员可见性
+- `/v1/packing-templates/**`：自定义行李模板
+- `/v1/trips/:tripId/packing-items/**`：行程行李快照、负责人和准备状态
 
-除登录和健康检查外，接口均使用 Bearer Token；餐饮接口另需要 `X-Household-Id`。
+除登录和健康检查外，接口均使用 Bearer Token；家庭业务接口另需要 `X-Household-Id`。生产入口为 `https://pp6v4.com/api/v1`，Nginx 将 `/api/` 转发到后端 `/v1`。

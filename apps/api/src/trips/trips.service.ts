@@ -10,7 +10,7 @@ export class TripsService {
     const membership = await this.requireMember(userId, householdId);
     return { data: await this.prisma.trip.findMany({
       where: { householdId, members: { some: { membershipId: membership.id } } },
-      include: { members: true }, orderBy: { startsAt: 'desc' },
+      include: { members: { include: { membership: { include: { user: { select: { id: true, nickname: true, avatarUrl: true } } } } } }, _count: { select: { packingItems: true } } }, orderBy: { startsAt: 'desc' },
     }) };
   }
 
@@ -20,7 +20,7 @@ export class TripsService {
     const endsAt = dto.endsAt ? new Date(dto.endsAt) : undefined;
     if (Number.isNaN(startsAt.valueOf()) || (endsAt && (Number.isNaN(endsAt.valueOf()) || endsAt < startsAt))) throw new BadRequestException('Invalid trip time range');
     const trip = await this.prisma.$transaction(async (tx) => {
-      const created = await tx.trip.create({ data: { householdId, title: dto.title.trim(), startsAt, endsAt, destination: dto.destination?.trim(), members: { create: { membershipId: membership.id, canEdit: true } } }, include: { members: true } });
+      const created = await tx.trip.create({ data: { householdId, title: dto.title.trim(), startsAt, endsAt, destination: dto.destination?.trim(), members: { create: { membershipId: membership.id, canEdit: true } } }, include: { members: { include: { membership: { include: { user: { select: { id: true, nickname: true, avatarUrl: true } } } } } }, _count: { select: { packingItems: true } } } });
       await tx.calendarEvent.create({ data: { householdId, type: 'TRIP', title: created.title, startsAt, endsAt, sourceType: 'TRIP', sourceId: created.id, createdById: userId } });
       return created;
     });
