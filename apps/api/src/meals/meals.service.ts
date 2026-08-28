@@ -43,6 +43,15 @@ export class MealsService {
     }) };
   }
 
+  async removeItem(userId: string, householdId: string, mealId: string, recipeId: string) {
+    const membership = await this.requireMember(userId, householdId);
+    const meal = await this.prisma.meal.findFirst({ where: { id: mealId, householdId } });
+    if (!meal) throw new NotFoundException('Meal was not found');
+    if (meal.status !== MealStatus.DRAFT) throw new BadRequestException('Only draft meals can be changed');
+    await this.prisma.mealItem.deleteMany({ where: { mealId, recipeId, addedById: membership.id } });
+    return { data: { removed: true } };
+  }
+
   async recalculate(userId: string, householdId: string, mealId: string) {
     await this.requireMember(userId, householdId);
     const meal = await this.prisma.meal.findFirst({
@@ -74,6 +83,40 @@ export class MealsService {
         return { ingredientId: item.ingredientId, name: ingredient?.name ?? 'Unknown', unit: item.unit, required: item.hasUnknownQuantity ? null : item.required, onHand: onHand ?? null, shortage: item.hasUnknownQuantity || onHand === undefined ? null : Math.max(item.required - onHand, 0), status };
       })),
     };
+  }
+
+  async complete(userId: string, householdId: string, mealId: string, deductInventory: boolean) {
+    await this.requireMember(userId, householdId);
+    const meal = await this.prisma.meal.findFirst({
+      where: { id: mealId, householdId },
+      include: { items: { include: { recipe: { include: { ingredients: true } } } } },
+    });
+    if (!meal) throw new NotFoundException('Meal was not found');
+    if (meal.status === MealStatus.COMPLETED) return { data: meal };
+    if (deductInventory) {
+      const required = new Map<string, { ingredientId: string; unit: string; quantity: number }>();
+      for (const mealItem of meal.items) for (const item of mealItem.recipe.ingredients) {
+        if (item.quantity === null) continue;
+        const key = `${item.ingredientId}:${item.unit}`;
+        const current = required.get(key) ?? { ingredientId: item.ingredientId, unit: item.unit, quantity: 0 };
+        current.quantity += Number(item.quantity);
+        required.set(key, current);
+      }
+      await this.prisma.$transaction(async (tx) => {
+        for (const item of required.values()) {
+          const inventory = await tx.inventoryItem.findFirst({ where: { householdId, ingredientId: item.ingredientId, unit: item.unit }, orderBy: { quantity: 'desc' } });
+          if (!inventory) continue;
+          const deduction = Math.min(Number(inventory.quantity), item.quantity);
+          if (deduction <= 0) continue;
+          await tx.inventoryItem.update({ where: { id: inventory.id }, data: { quantity: { decrement: deduction } } });
+          await tx.inventoryTransaction.create({ data: { inventoryItemId: inventory.id, type: 'CONSUME', quantityDelta: -deduction, reason: `餐单 ${meal.id} 完成` } });
+        }
+        await tx.meal.update({ where: { id: meal.id }, data: { status: MealStatus.COMPLETED } });
+      });
+    } else {
+      await this.prisma.meal.update({ where: { id: meal.id }, data: { status: MealStatus.COMPLETED } });
+    }
+    return { data: await this.prisma.meal.findUnique({ where: { id: meal.id }, include: { items: { include: { recipe: true } } } }) };
   }
 
   private async requireMember(userId: string, householdId: string) {

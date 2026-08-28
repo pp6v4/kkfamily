@@ -8,6 +8,9 @@ import { HealthController } from './health.controller';
 import { PrismaModule } from './prisma/prisma.module';
 import { CalendarModule } from './calendar/calendar.module';
 import { MealsModule } from './meals/meals.module';
+import { ShoppingModule } from './shopping/shopping.module';
+import { InventoryModule } from './inventory/inventory.module';
+import { TripsModule } from './trips/trips.module';
 
 @Module({
   imports: [
@@ -27,6 +30,9 @@ import { MealsModule } from './meals/meals.module';
     RecipesModule,
     CalendarModule,
     MealsModule,
+    ShoppingModule,
+    InventoryModule,
+    TripsModule,
   ],
   controllers: [HealthController],
 })

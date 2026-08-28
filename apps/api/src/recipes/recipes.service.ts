@@ -10,6 +10,13 @@ export class RecipesService {
 
   async listCategories(userId: string, householdId: string) {
     await this.requireMember(userId, householdId);
+    const existing = await this.prisma.recipeCategory.count({ where: { householdId } });
+    if (existing === 0) {
+      await this.prisma.recipeCategory.createMany({
+        data: ['主食', '炒菜', '炖菜', '海鲜', '汤羹', '其他'].map((name, index) => ({ householdId, name, sortOrder: index })),
+        skipDuplicates: true,
+      });
+    }
     return { data: await this.prisma.recipeCategory.findMany({ where: { householdId }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }) };
   }
 

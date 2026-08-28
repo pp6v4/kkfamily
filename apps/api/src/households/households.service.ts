@@ -11,6 +11,13 @@ export class HouseholdsService {
       const membership = await tx.membership.create({ data: { householdId: household.id, userId, status: 'ACTIVE' } });
       const admin = await tx.role.upsert({ where: { code: 'ADMIN' }, update: { name: '管理员' }, create: { code: 'ADMIN', name: '管理员' } });
       await tx.memberRole.create({ data: { membershipId: membership.id, roleId: admin.id } });
+      await tx.recipeCategory.createMany({
+        data: ['主食', '炒菜', '炖菜', '海鲜', '汤羹', '其他'].map((categoryName, index) => ({
+          householdId: household.id,
+          name: categoryName,
+          sortOrder: index,
+        })),
+      });
       return { ...household, membershipId: membership.id };
     });
     return { data: household };
