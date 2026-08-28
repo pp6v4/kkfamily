@@ -1,0 +1,2 @@
+<template><view class="page"><text class="emoji">🗓️</text><text class="title">家庭日历</text><text class="intro">把餐点、纪念日、露营行程和家庭待办放在同一张日历里。</text><view class="notice">家庭日历功能正在接入中</view></view></template>
+<style scoped>.page{padding:80rpx 48rpx;text-align:center}.emoji{display:block;font-size:112rpx}.title,.intro{display:block}.title{margin-top:32rpx;font-size:46rpx;font-weight:700}.intro{margin-top:20rpx;color:#718096;line-height:1.8}.notice{margin-top:50rpx;padding:26rpx;border-radius:24rpx;background:#fff0f4;color:#a94d6d}</style>
