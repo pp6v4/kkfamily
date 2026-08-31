@@ -56,3 +56,5 @@
 ## 页面交互补充
 
 [页面与交互设计](design/interaction-design.md)已列出P01～P36页面与状态；[行李原型](design/packing-prototype/index.html)以本地内存演示自定义模板、套用预览、独立清单与分工。13条原型模型测试通过，浏览器检查记录见[原型验证](design/prototype-verification.md)。这些结果不表示生产代码已经补上历史来源名称、小组分工或完整权限。
+
+[全页面视觉评审](design/visual-design-review.md)补齐36页视觉稿和七种共用状态。8条设计测试通过，36页窄屏DOM与252组状态检查取得记录；补充的连续点击验收受浏览器自动审核拦截，未绕过、未标通过。真实地图/照片服务、Word逐页版式及R01～R03仍未完成核验或确认。
