@@ -2758,6 +2758,6 @@
     "P21",
     "P07"
   ],
-  "navigationClickAudit": "BLOCKED_BY_AUTO_REVIEW before the additional flow test; no workaround attempted",
+  "navigationClickAudit": "Historical attempt blocked by auto-review; resumed after explicit user authorization on 2026-08-31. See navigation-verification.json for new results.",
   "wordPageRender": "NOT_COMPLETED; isolated Word automation stopped without saving source documents"
 }

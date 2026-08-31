@@ -114,7 +114,7 @@ E：缺料导入输入mealId、snapshotVersion和selectedRequirementIds，后端
 
 Trip的创建者自动为tripRole=OWNER、canEdit=true；其余成员必须显式邀请入行程。OWNER可管理该行程，家庭ADMIN未加入时不获得内容读取特权。列表、详情、日历投影、照片、模板来源、看板计数均先按TripMember过滤后分页，不能只保护详情而从日历泄露标题、地点和出发日期。
 
-E：TripMember增加tripRole=OWNER/MEMBER、status=ACTIVE/HISTORY/REVOKED、leftAt、version。完成行程时保留参与关系；历史账号仍在本家庭有效且为ACTIVE或HISTORY时可读并上传本人照片。REVOKED为主动撤销，不保留读取权；家庭停用优先拒绝。主动移除与历史访问冲突的产品选择见未决项R02，当前不得擅自认为“只要曾参加永远可见”。
+E：TripMember增加tripRole=OWNER/MEMBER、status=ACTIVE/HISTORY/REVOKED、leftAt、version。完成行程时保留参与关系；历史账号仍在本家庭有效且为ACTIVE或HISTORY时可读并上传本人照片。REVOKED为主动撤销，不保留读取权；家庭停用优先拒绝。R02已确认：正常完成保留历史访问，主动撤销后停止访问；不得认为“只要曾参加永远可见”。
 
 U08需要“不同家庭准备不同东西”，不能只做一个人负责人。E：每次行程创建准备小组TripPreparationGroup，例如“我们家”“朋友A家”；小组只包含该行程成员，不读取朋友真实家庭档案，也不要求朋友先创建另一个完整家庭系统。行李项可以分配groupId及该组的responsibleMembershipId，组为承担方、人为联系人。按组和按人筛选未准备物品。移出成员前显示其未完成责任并要求重分配或显式置空，不能无声丢失责任。
 
@@ -188,7 +188,7 @@ E：纪念日一期公历年度重复，2月29日非闰年默认2月28日、可�
 
 收藏字段type(TEXT/IMAGE/LINK)、title、text?、sourceUrl?、assetIds[]、tags[]、visibility(PRIVATE/HOUSEHOLD)、createdById、version。E：一期不自动抓取网页，不绕过网站限制；手工粘贴链接与封面即可，复杂度来自转换而非收藏本身。未来抓取须防SSRF（阻止内网IP、重定向内网、异常协议）。POST /favorites/:id/convert输入targetType和用户确认字段，返回targetId/status=DRAFT；幂等键防止重试建多份。转换为菜谱时不凭一条收藏自动补造食材或做法；来源收藏仍保留。
 
-档案采用可配置字段，key、label、valueType(TEXT/DATE/CONTACT/ADDRESS)、sensitive、visibility(MANAGERS/MEMBERS/SELECTED)、allowedMembershipIds、valueCiphertext、keyVersion、updatedById、version。默认仅管理者可读写，新成员和朋友不默认继承。敏感值应用层AES-GCM加密，随机nonce、认证标签，密钥不进数据库/镜像/Git；搜索不支持密文模糊查询。普通列表不返回敏感值，读/改有审计。第一批字段见评审项R03，不自作主张收身份证或银行卡信息。
+档案采用可配置字段，key、label、valueType(TEXT/DATE/CONTACT/ADDRESS)、sensitive、visibility(MANAGERS/MEMBERS/SELECTED)、allowedMembershipIds、valueCiphertext、keyVersion、updatedById、version。默认仅管理者可读写，新成员和朋友不默认继承。敏感值应用层AES-GCM加密，随机nonce、认证标签，密钥不进数据库/镜像/Git；搜索不支持密文模糊查询。普通列表不返回敏感值，读/改有审计。第一批字段见已确认项R03，不自作主张收身份证或银行卡信息。
 
 | 看板指标 | 口径 | 权限与范围 |
 | --- | --- | --- |
@@ -217,14 +217,14 @@ GET /inbox、PATCH /inbox/:id/read、GET/PATCH /notification-preferences、POST 
 
 源码发布门槛：缺X-Household-Id必须失败；所有聚合入口包括日历和看板均通过资源权限；Docker构建排除.env、.git、私钥与本地依赖；API须有受控外网出口才能调用微信/COS，而不是只接internal:true网络；生产数据库/Redis仍不映射公网端口。上述是从源码发现的待开发或待验证项，本次不把它们写成已经解决。
 
-## D15 待用户评审的产品选择
+## D15 产品决定与外部联调项
 
-R01：确认餐点后如何改单。建议确认前本人撤回，确认后厨师或餐点管理者修改并保存新快照。
+R01（2026-08-31已确认，U）：确认前本人可撤回；确认后由厨师或餐点管理者改单并保存变更记录和新快照，不覆盖旧快照。
 
-R02：主动移除成员与历史访问如何取舍。建议完成时保留历史参与关系；安全性主动撤销优先停止访问。用户原话确认了历史成员可看，但没明确撤销例外，仍待评审。
+R02（2026-08-31已确认，U）：正常完成行程保留历史参与关系；主动撤销访问后停止访问，历史参与不绕过撤权。媒体新签名、日历、看板和消息同样按当前权限过滤。
 
-R03：家庭档案首批字段和工单用途。建议地址、联系人、自定义非高敏字段；工单暂作为请求型待办，不默认收集身份证等信息。
+R03（2026-08-31已确认，U）：首批档案为地址、联系人、自定义非高敏字段；工单作为家庭请求型待办，不默认作为软件反馈系统，不默认收集身份证等信息。
 
 R04：微信订阅模板和地图Key等外部配置。配置未提供不妨碍本稿接口设计，但会阻塞对应平台联调，不能将其标为已验收。
 
-这四项不是让项目停止：与它们无关的模板、页面、接口与数据结构继续开发；涉及不可逆隐私/历史权限的动作，在评审前不对真实成员执行。
+确认来源及限定范围见[产品规则确认记录](decisions-20260831.md)。本次仅授权虚构数据的本地预览，不执行真实权限变更。R04和农历生日一期范围不在此次确认内；对应真实功能验收仍须单独完成。

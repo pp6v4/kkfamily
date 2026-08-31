@@ -46,7 +46,7 @@
 | 模型 | 字段与约束 | 索引/校验 |
 | --- | --- | --- |
 | Trip（扩展） | createdById?,version:I,updatedAt:T,completedAt:T?,archivedAt:T? | CHECK(endsAt为空或endsAt>=startsAt)；按成员过滤列表 |
-| TripMember（扩展） | tripRole:OWNER/MEMBER,status:ACTIVE/HISTORY/REVOKED,photoAdd:B=false,leftAt:T?,version:I | PK(tripId,membershipId)不变；历史规则R02待确认 |
+| TripMember（扩展） | tripRole:OWNER/MEMBER,status:ACTIVE/HISTORY/REVOKED,photoAdd:B=false,leftAt:T?,version:I | PK(tripId,membershipId)不变；R02已确认：正常完成保留历史访问，REVOKED停止访问 |
 | TripPreparationGroup（新增） | id,tripId,name:S,sortOrder:I,version:I,archivedAt:T? | UNIQUE(tripId,name)；“谁家准备”只在本行程有效 |
 | TripPreparationGroupMember（新增） | groupId,tripId,membershipId | PK(groupId,membershipId)；FK(tripId,membershipId)到TripMember |
 | TripStop（新增） | id,tripId,title:S,stopType:S,latitude:Decimal(9,6),longitude:Decimal(9,6),coordSystem:S,arriveAt:T?,leaveAt:T?,sortOrder:I,note:S?,version:I,archivedAt:T? | CHECK纬度[-90,90]/经度[-180,180]；INDEX(tripId,sortOrder,id) |

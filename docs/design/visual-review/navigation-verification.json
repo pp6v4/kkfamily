@@ -1,0 +1,103 @@
+{
+  "checkedAt": "2026-08-31",
+  "scope": "Local static design navigation; no production writes",
+  "authorization": "User confirmed R01-R03 and authorized local fictional-data preview",
+  "origin": "http://127.0.0.1:8767",
+  "mealFlow": [
+    {
+      "from": "P02",
+      "action": "安排一餐",
+      "actual": "P03",
+      "expected": "P03"
+    },
+    {
+      "from": "P03",
+      "action": "看看待做菜单",
+      "actual": "P08",
+      "expected": "P08"
+    },
+    {
+      "from": "P08",
+      "action": "确认并看备菜清单",
+      "actual": "P09",
+      "expected": "P09"
+    },
+    {
+      "from": "P09",
+      "action": "所选缺料加入购物",
+      "actual": "P11",
+      "expected": "P11"
+    }
+  ],
+  "mainTabs": [
+    {
+      "action": "日历",
+      "expected": "P02",
+      "actual": "P02"
+    },
+    {
+      "action": "吃什么",
+      "expected": "P05",
+      "actual": "P05"
+    },
+    {
+      "action": "去露营",
+      "expected": "P13",
+      "actual": "P13"
+    },
+    {
+      "action": "买东西",
+      "expected": "P11",
+      "actual": "P11"
+    },
+    {
+      "action": "我的家",
+      "expected": "P26",
+      "actual": "P26"
+    }
+  ],
+  "myHome": [
+    {
+      "from": "P26",
+      "action": "家人和权限 邀请家人朋友，按需开放功能",
+      "expected": "P28",
+      "actual": "P28"
+    },
+    {
+      "from": "P26",
+      "action": "家庭待办 需要谁做，什么时候提醒",
+      "expected": "P29",
+      "actual": "P29"
+    },
+    {
+      "from": "P26",
+      "action": "收藏与灵感 喜欢的菜、地点和生活点子",
+      "expected": "P31",
+      "actual": "P31"
+    },
+    {
+      "from": "P26",
+      "action": "家庭档案 仅向获准成员展示",
+      "expected": "P33",
+      "actual": "P33"
+    },
+    {
+      "from": "P26",
+      "action": "生活小看板 看看日常，不比较谁更辛苦",
+      "expected": "P35",
+      "actual": "P35"
+    },
+    {
+      "from": "P26",
+      "action": "消息与提醒 站内消息和微信订阅设置",
+      "expected": "P36",
+      "actual": "P36"
+    }
+  ],
+  "passedTargets": 15,
+  "totalTargets": 15,
+  "homeReturnsVerified": 6,
+  "consoleWarningsAndErrors": [],
+  "businessAcceptance": "NOT_RUN",
+  "history": "Previous attempt was blocked; resumed after explicit user authorization on same local origin"
+}
