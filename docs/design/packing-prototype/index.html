@@ -1,0 +1,153 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>扣扣的家 · 自定义行李交互评审</title>
+  <style>
+    :root{color-scheme:light;--ink:#283d32;--muted:#586a60;--green:#387650;--wash:#e7efe1;--cream:#fffdf7;--line:#d7dfd2;--warn:#8a4b1a}
+    *{box-sizing:border-box}body{margin:0;background:#edf0e7;color:var(--ink);font:16px/1.6 "Microsoft YaHei",sans-serif}button,input,select,textarea{font:inherit;color:inherit}button,a,input,select,textarea{touch-action:manipulation}button{cursor:pointer;border:1px solid var(--line);border-radius:14px;background:var(--cream);padding:10px 16px;min-height:44px;font-weight:600}button:hover{background:var(--wash)}button:disabled{cursor:default;opacity:.55}button:focus-visible,input:focus-visible,select:focus-visible,textarea:focus-visible,a:focus-visible{outline:3px solid #327ea4;outline-offset:3px}.primary{background:var(--green);border-color:var(--green);color:white}.primary:hover{background:#2b613f}.quiet{background:transparent}.danger{color:#974d35}.wide{width:100%}input:not([type=checkbox]),select,textarea{display:block;width:100%;min-width:0;border:1px solid #a7b5a8;border-radius:12px;background:white;padding:10px 12px;min-height:44px}input[type=checkbox]{width:22px;height:22px;accent-color:var(--green);flex-shrink:0}label{display:block;font-size:14px;font-weight:600}label input,label select,label textarea{margin-top:6px}h1,h2,h3,p{margin:0}h1{font-size:27px;line-height:1.3}h2{font-size:20px;line-height:1.4}h3{font-size:17px}small,.muted{color:var(--muted);font-size:14px}small{display:block}a{color:#326449}p+ p{margin-top:10px}.review{max-width:980px;margin:28px auto;display:grid;grid-template-columns:minmax(0,440px) minmax(0,300px);gap:36px;justify-content:center;padding:0 20px}.phone{background:#f7f3e8;border:1px solid #ced8c7;border-radius:30px;overflow:hidden;box-shadow:0 12px 50px #29493613;min-width:0}.ribbon{padding:9px 16px;background:#e5ecdc;font-size:12px;text-align:center;color:#425841}.top{padding:28px 22px 16px;background:linear-gradient(150deg,#f9f5e8,#e7efd9)}.brand{font-size:13px;letter-spacing:2px;color:#536b50;margin-bottom:12px}.welcome{display:flex;align-items:center;gap:12px;justify-content:space-between}.sprout{width:56px;height:56px;flex-shrink:0}.subtitle{margin-top:10px;font-size:14px;color:var(--muted)}.tabs{display:flex;margin:18px 20px 0;padding:5px;border-radius:18px;background:#e3e9da;gap:5px}.tabs button{flex:1;background:transparent;border-color:transparent;padding:9px 5px;font-size:15px}.tabs button[aria-pressed=true]{background:var(--cream);box-shadow:0 2px 8px #1e492712}.content{padding:20px}.card{padding:18px;margin-bottom:14px;border-radius:20px;background:var(--cream);border:1px solid #e3e7db;overflow-wrap:anywhere}.card .row+.row{margin-top:10px}.row{display:flex;gap:10px;justify-content:space-between;align-items:center;flex-wrap:wrap}.stack{display:grid;gap:12px}.chips{display:flex;gap:7px;flex-wrap:wrap;margin:14px 0}.chip{font-size:13px;padding:3px 10px;background:var(--wash);border-radius:20px;overflow-wrap:anywhere}.empty{padding:32px 12px;text-align:center}.empty p{margin:10px 0 20px}.empty .seed{font-size:36px}.actions{display:flex;gap:8px;flex-wrap:wrap;margin-top:12px}.actions button{flex:1;min-width:110px;font-size:14px}.notice{border-radius:14px;background:#f4ebcb;padding:12px 14px;font-size:14px;color:#6c5521;margin:0 0 14px}.status{padding:0 20px 14px;font-size:14px;color:#285d39;min-height:26px}.progress{height:7px;border-radius:9px;background:#e0e7d8;margin-top:13px;overflow:hidden}.progress>span{height:100%;display:block;background:#579966}.checkline{display:flex;align-items:center;gap:10px;min-height:44px;font-size:16px;overflow-wrap:anywhere}.checkline span{flex:1}.packed .item-name{text-decoration:line-through;color:#566d5b}.source{font-size:13px;color:var(--muted);margin:4px 0 9px}.assign{display:grid;grid-template-columns:1fr 1fr;gap:10px}.aside{padding-top:26px;font-size:14px}.aside h2{font-size:23px;margin-bottom:15px}.aside h3{margin:24px 0 8px}.aside ol{padding-left:20px}.aside li{margin:10px 0}.aside label{margin:16px 0}.aside .notice{margin-top:18px}.version{margin-top:24px;font-size:12px;color:var(--muted)}.state-panel{padding:36px 8px;text-align:center}.state-panel p{margin:14px 0}.state-panel button{margin-top:8px}.state-panel[aria-busy=true]::before{content:"";display:block;height:90px;border-radius:16px;background:linear-gradient(90deg,#e1e7d9,#f0f4e9,#e1e7d9);margin-bottom:20px}dialog{width:min(520px,calc(100% - 24px));max-height:90vh;border:1px solid #c7d4bd;border-radius:24px;background:var(--cream);color:var(--ink);padding:22px;box-shadow:0 20px 70px #203b3340}dialog::backdrop{background:#243c325c}dialog h2{padding-bottom:10px}dialog .subtitle{margin-bottom:14px}form>.stack{margin-top:14px}.formrow{border:1px solid var(--line);background:#f3f5ec;padding:14px;border-radius:16px}.formrow legend{padding:0 7px;font-size:14px}.formrow label{margin-bottom:9px}.pair{display:grid;grid-template-columns:1fr 1fr;gap:10px}.error{color:#9a351f;background:#fff0e8;border-radius:12px;padding:10px 12px;margin-top:12px;font-size:14px}.error:empty{display:none}.modal-actions{display:flex;gap:10px;margin-top:18px;flex-wrap:wrap}.modal-actions button{flex:1}.template-select{display:flex;align-items:center;gap:12px;margin-bottom:10px;padding:12px;border:1px solid var(--line);border-radius:14px}.template-select span{min-width:0;overflow-wrap:anywhere}.preview{font-size:14px;background:var(--wash);padding:12px;border-radius:12px;margin-top:12px}.excluded{margin-top:18px}summary{cursor:pointer;min-height:44px;padding:10px 0;font-size:14px}.excluded .card{background:#f1f0e6}.readonly{background:#e5ecf1;color:#405768}.screen-title{margin-bottom:15px}.sr{position:absolute;width:1px;height:1px;overflow:hidden;clip-path:inset(50%)}
+    @media(max-width:720px){.review{display:block;padding:12px;margin:0 auto;max-width:464px}.aside{padding:26px 12px}.phone{border-radius:24px}.top{padding:22px 18px 14px}.content{padding:16px}.tabs{margin-left:16px;margin-right:16px}}
+    @media(max-width:360px){.assign,.pair{grid-template-columns:1fr}.review{padding:8px}.content{padding:12px}.card{padding:14px}.actions button{min-width:100px}.top{padding:18px 14px}.tabs{margin-left:12px;margin-right:12px}dialog{padding:16px}}
+  </style>
+</head>
+<body>
+<div class="review">
+  <main class="phone" aria-label="行李交互原型">
+    <div class="ribbon">交互评审原型 · 虚构示例行程 · 数据不保存</div>
+    <header class="top"><div class="brand">扣扣的家 / 去露营</div><div class="welcome"><h1>把小日子，<br>装进行李里。</h1><svg class="sprout" viewBox="0 0 64 64" aria-hidden="true"><rect x="10" y="26" width="44" height="32" rx="12" fill="#d7e5bd"/><path d="M24 27v-7a8 8 0 0 1 16 0v7" fill="none" stroke="#688750" stroke-width="4"/><path d="M31 20C14 21 15 7 15 7s17-1 16 13m1 0c0-15 17-13 17-13s-1 14-17 13" fill="#71965b"/><path d="M21 39h22M25 47h14" stroke="#fafbef" stroke-width="3" stroke-linecap="round"/></svg></div><p class="subtitle">常带的东西存成模板，每趟出发独立准备。</p></header>
+    <nav class="tabs" aria-label="行李页面"><button type="button" data-view="templates" aria-pressed="true">行李模板</button><button type="button" data-view="trip" aria-pressed="false">本次行李</button></nav>
+    <div id="content" class="content"></div>
+    <div id="status" class="status" role="status" aria-live="polite"></div>
+  </main>
+  <aside class="aside" aria-label="评审说明">
+    <h2>你的模板，你来命名。</h2>
+    <p>名称不决定内容。写“烧烤”，也只会保存你亲手填的物品；不自动添加桌子、烤炉或炭。</p>
+    <h3>可以这样试一遍</h3><ol><li>新建模板，命名“烧烤”，只填1、2、3。</li><li>打开本次行李，预览并套用模板。</li><li>再次套用，检查不会重复增加。</li><li>改模板名称，再看本次行李的来源名称仍保留旧值。</li><li>分配示例小组和负责人，勾选已准备。</li></ol>
+    <h3>评审工具（非产品设置）</h3>
+    <label>页面状态<select id="review-state"><option value="ready">正常</option><option value="loading">加载中</option><option value="error">读取失败</option><option value="denied">无权访问</option></select></label>
+    <label class="checkline"><input id="review-readonly" type="checkbox"><span>只读成员演示</span></label>
+    <div class="notice">只在当前页面演示，不登录、不联网、不保存数据。刷新会清空本次演示。</div>
+    <p>“我们家 / 朋友家”和成员甲乙丙是虚构分工示例，不是读取了你的账号。</p>
+    <p class="version">P18–P22 · 2026-08-31<br>小组创建、真实权限、数据库与真机验收不在本原型内。</p>
+  </aside>
+</div>
+<dialog id="editor" aria-labelledby="dialog-title"></dialog>
+<script src="packing-model.js"></script>
+<script>
+'use strict';
+const model = PackingDesign.createModel();
+const content = document.getElementById('content'), dialog = document.getElementById('editor');
+let view = 'templates', pageState = 'ready', dirty = false;
+const html = value => String(value ?? '').replace(/[&<>"']/g, ch => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[ch]));
+const btn = (action, label, key = '', extra = '') => `<button type="button" data-action="${action}" data-id="${html(key)}" ${extra}>${label}</button>`;
+function notify(text) { document.getElementById('status').textContent = text; }
+function safe(action) { try { action(); } catch (error) { if (dialog.open) dialog.querySelector('.error').textContent = error.message; else notify(error.message); } }
+function finish(text) { dirty = false; dialog.close(); render(); notify(text); }
+function closeEditor() {
+  if (!dirty) { dialog.close(); return; }
+  if (dialog.querySelector('[data-discard]')) return;
+  const panel=document.createElement('div'); panel.className='notice'; panel.setAttribute('role','alert');
+  panel.innerHTML='<p>有未保存的修改，是否放弃本次修改？</p><div class="actions"><button type="button" data-keep>继续编辑</button><button type="button" data-discard>放弃本次修改</button></div>';
+  dialog.append(panel);
+  panel.querySelector('[data-keep]').onclick=()=>panel.remove();
+  panel.querySelector('[data-discard]').onclick=()=>{dirty=false;dialog.close();};
+  panel.querySelector('[data-keep]').focus();
+}
+dialog.addEventListener('cancel', event => { event.preventDefault(); closeEditor(); });
+dialog.addEventListener('input', event => { if(event.target.closest('#template-form, #item-form')) dirty = true; });
+function showDialog(title, body) {
+  dirty = false;
+  dialog.innerHTML = `<h2 id="dialog-title">${title}</h2>${body}<div class="error" role="alert"></div>`;
+  dialog.querySelectorAll('[data-close]').forEach(button => button.addEventListener('click', closeEditor));
+  dialog.showModal();
+}
+function render() {
+  const state = model.snapshot();
+  document.querySelectorAll('[data-view]').forEach(button => button.setAttribute('aria-pressed', String(button.dataset.view === view)));
+  if (pageState === 'denied') { content.innerHTML = '<section class="state-panel"><h2>暂时无法访问</h2><p>请联系行程管理员确认权限。</p><small>评审模拟：不展示行程标题、成员或行李。</small></section>'; return; }
+  if (pageState === 'loading') { content.innerHTML = '<section class="state-panel" aria-busy="true"><h2>正在加载</h2><p>等待数据返回，不填充假记录。</p></section>'; return; }
+  let out = pageState === 'error' ? '<div class="notice" role="alert">读取失败，下面保留的是未更新的演示数据。'+btn('retry','重试')+'</div>' : '';
+  if (state.readOnly) out += '<div class="notice readonly">只读成员：可以查看，不能修改、套用或勾选。负责人身份不会自动授予编辑权。</div>';
+  if (view === 'templates') {
+    const rows = state.templates.filter(t => !t.archived);
+    if (!rows.length) out += `<section class="empty"><div class="seed" aria-hidden="true">🌱</div><h2>还没有自定义模板</h2><p class="muted">先写下你们经常带的东西。<br>模板名字和每一件物品都由你决定。</p>${state.readOnly ? '' : btn('new-template','＋ 新建自定义模板','','class="primary"')}</section>`;
+    else {
+      out += '<h2 class="screen-title">常带的东西</h2>';
+      out += rows.map(t => `<article class="card" data-template-id="${t.id}"><div class="row"><h3>${html(t.name)}</h3><small>${t.items.length}件物品</small></div><div class="chips">${t.items.map(i => `<span class="chip">${html(i.name)}</span>`).join('')}</div><small>修改模板不会改变已套用的行程清单。</small>${state.readOnly ? '' : `<div class="actions">${btn('edit-template','编辑模板',t.id)}${btn('archive-template','归档模板',t.id,'class="quiet"')}</div>`}</article>`).join('');
+      if (!state.readOnly) out += btn('new-template','＋ 新建自定义模板','','class="primary wide"');
+    }
+  } else {
+    const active = state.items.filter(i => !i.excluded), packed = active.filter(i => i.packed).length;
+    out += `<section class="card"><small>示例行程</small><h2>周末出行</h2><div class="row"><span>已准备 ${packed} / ${active.length}</span><small>${active.length ? `还有${active.length-packed}项待准备` : '清单还是空的'}</small></div><div class="progress" role="progressbar" aria-label="行李准备" aria-valuemin="0" aria-valuemax="${Math.max(active.length,1)}" aria-valuenow="${packed}"><span style="width:${active.length ? packed/active.length*100 : 0}%"></span></div></section>`;
+    if (!state.readOnly) out += `<div class="actions" style="margin-bottom:16px">${btn('apply','套用模板','','class="primary" aria-label="套用自定义模板"')}${btn('add-item','手工加一项')}</div>`;
+    if (!active.length) out += '<div class="empty"><h3>这次准备带些什么？</h3><p class="muted">从你自己的模板选择，<br>或者仅为这次行程手工添加。</p></div>';
+    out += active.map(i => `<article class="card ${i.packed?'packed':''}" data-item-id="${i.id}"><label class="checkline"><input type="checkbox" data-packed="${i.id}" ${i.packed?'checked':''} ${state.readOnly?'disabled':''} aria-label="${html(i.name)}：${i.packed?'改为待准备':'标记已准备'}"><span class="item-name">${html(i.name)}${i.quantity ? ` · ${html(i.quantity)} ${html(i.unit)}` : ''}</span></label><div class="source">${i.packed?'已准备':'待准备'} · ${i.sourceItemId ? `来自模板：${html(i.sourceName)}` : '本次手工添加'}</div>${i.note?`<p class="muted">${html(i.note)}</p>`:''}<div class="assign"><label>责任小组<select data-group="${i.id}" ${state.readOnly?'disabled':''}><option value="">未分组</option>${state.groups.map(g => `<option value="${g.id}" ${i.groupId===g.id?'selected':''}>${html(g.name)}</option>`).join('')}</select></label><label>负责人<select data-member="${i.id}" ${state.readOnly?'disabled':''}><option value="">未分配</option>${state.members.filter(m => !i.groupId || m.groupId===i.groupId).map(m => `<option value="${m.id}" ${i.memberId===m.id?'selected':''}>${html(m.name)}</option>`).join('')}</select></label></div>${state.readOnly?'':`<div class="actions">${btn('edit-item','编辑本次物品',i.id)}${btn('exclude','从本次移除',i.id,'class="quiet danger"')}</div>`}</article>`).join('');
+    const excluded = state.items.filter(i => i.excluded);
+    if (excluded.length) out += `<details class="excluded"><summary>已移除 ${excluded.length} 项（重复套用不恢复）</summary>${excluded.map(i=>`<div class="card"><h3>${html(i.name)}</h3><small>${html(i.sourceName || '本次手工添加')}</small>${state.readOnly?'':btn('restore','重新加入',i.id)}</div>`).join('')}</details>`;
+  }
+  content.innerHTML = out;
+}
+function rowEditor(row, index) {
+  return `<fieldset class="formrow" data-row-id="${html(row.id || '')}"><legend>物品 ${index+1}</legend><label>物品名称<input name="item-name" value="${html(row.name)}" maxlength="80" required placeholder="你要带的东西"></label><div class="pair"><label>数量（可选）<input name="quantity" value="${html(row.quantity)}" inputmode="decimal" placeholder="不确定可留空"></label><label>单位（可选）<input name="unit" value="${html(row.unit)}" maxlength="20" placeholder="件 / 个 / 份"></label></div><label>备注（可选）<input name="note" value="${html(row.note)}" maxlength="200"></label><button type="button" data-remove-row class="quiet danger">移除这一行</button></fieldset>`;
+}
+function readRows() { return [...dialog.querySelectorAll('.formrow')].map(row => ({ id:row.dataset.rowId || undefined, name:row.querySelector('[name=item-name]').value, quantity:row.querySelector('[name=quantity]').value, unit:row.querySelector('[name=unit]').value, note:row.querySelector('[name=note]').value })); }
+function bindRowRemoval() {
+  dialog.querySelectorAll('[data-remove-row]').forEach(button => { button.onclick = () => {
+    const row = button.closest('.formrow');
+    const remove=()=>{row.remove();dirty=true;dialog.querySelectorAll('.formrow legend').forEach((legend,index)=>legend.textContent=`物品 ${index+1}`);};
+    if (!row.querySelector('[name=item-name]').value.trim()) { remove(); return; }
+    if(row.querySelector('[data-row-confirm]'))return;
+    const panel=document.createElement('div');panel.className='notice';panel.setAttribute('data-row-confirm','');
+    panel.innerHTML='<p>移除这一行？保存前不会改变模板，历史行程不受影响。</p><div class="actions"><button type="button" data-row-keep>保留</button><button type="button" data-row-remove>确认移除这一行</button></div>';
+    row.append(panel);panel.querySelector('[data-row-keep]').onclick=()=>panel.remove();panel.querySelector('[data-row-remove]').onclick=remove;
+  }; });
+}
+function editTemplate(key) {
+  const t = model.snapshot().templates.find(t => t.id === key) || { name:'', items:[{name:'',quantity:'',unit:'',note:''}] };
+  showDialog(key?'编辑自定义模板':'新建自定义模板', `<p class="subtitle">只保存你填写的物品，套用行程是下一步。</p><form id="template-form"><label>模板名称<input id="template-name" value="${html(t.name)}" maxlength="80" required placeholder="自己起个名字，例如：烧烤"></label><div class="stack" id="template-rows">${t.items.map(rowEditor).join('')}</div><div class="actions"><button type="button" id="add-row">＋ 添加物品</button></div><div class="modal-actions"><button type="button" data-close>取消</button><button type="submit" class="primary">保存模板</button></div></form>`);
+  bindRowRemoval();
+  document.getElementById('add-row').onclick = () => { document.getElementById('template-rows').insertAdjacentHTML('beforeend',rowEditor({},dialog.querySelectorAll('.formrow').length)); dirty=true; bindRowRemoval(); };
+  document.getElementById('template-form').onsubmit = event => { event.preventDefault(); safe(()=>{ model.saveTemplate(key,document.getElementById('template-name').value,readRows()); finish('模板已保存到本次演示，尚未套用任何行程。'); }); };
+}
+function editItem(key) {
+  const row = model.snapshot().items.find(i => i.id===key) || {};
+  showDialog(key?'编辑本次物品':'手工加一项', `<p class="subtitle">仅修改本次行程，不会修改或自动建立模板。</p><form id="item-form">${rowEditor(row,0)}<div class="modal-actions"><button type="button" data-close>取消</button><button type="submit" class="primary">保存本次物品</button></div></form>`);
+  dialog.querySelector('[data-remove-row]').remove();
+  document.getElementById('item-form').onsubmit = event => { event.preventDefault(); safe(()=>{ const values=readRows()[0]; if(key) model.editItem(key,values); else model.addItem(values); finish('已保存本次物品，模板未改变。'); }); };
+}
+function applyDialog() {
+  const templates = model.snapshot().templates.filter(t=>!t.archived);
+  if (!templates.length) { view='templates'; render(); notify('还没有可套用的模板，请先新建一个。'); return; }
+  showDialog('套用自定义模板', `<p class="subtitle">选择后先看新增数量。已存在或明确移除的来源项会跳过。</p><form id="apply-form">${templates.map(t=>`<label class="template-select"><input type="checkbox" name="template-choice" value="${t.id}"><span>${html(t.name)}<small>${t.items.length}件物品</small></span></label>`).join('')}<div id="apply-preview" class="preview" role="status">请选择一个或多个模板</div><div class="modal-actions"><button type="button" data-close>取消</button><button type="submit" id="confirm-apply" class="primary" disabled>加入本次行程</button></div></form>`);
+  const keys=()=>[...dialog.querySelectorAll('[name=template-choice]:checked')].map(input=>input.value);
+  document.getElementById('apply-form').onchange=()=>safe(()=>{ const result=model.preview(keys()); document.getElementById('apply-preview').textContent=keys().length ? `预计新增 ${result.added} 项，跳过 ${result.skipped} 项` : '请选择一个或多个模板'; document.getElementById('confirm-apply').disabled=!result.added; });
+  document.getElementById('apply-form').onsubmit=event=>{ event.preventDefault(); safe(()=>{ const result=model.apply(keys()); finish(`已加入 ${result.added} 项，跳过 ${result.skipped} 项；清单与模板相互独立。`); }); };
+}
+function confirmAction(title,text,action,feedback) { showDialog(title,`<p>${html(text)}</p><div class="modal-actions"><button type="button" data-close>取消</button><button type="button" id="confirm-action" class="primary">确认</button></div>`); document.getElementById('confirm-action').onclick=()=>safe(()=>{action();finish(feedback);}); }
+content.addEventListener('click',event=>{ const button=event.target.closest('[data-action]'); if(!button)return; const key=button.dataset.id; safe(()=>{
+  switch(button.dataset.action){
+    case 'new-template':editTemplate('');break;
+    case 'edit-template':editTemplate(key);break;
+    case 'archive-template':{const t=model.snapshot().templates.find(t=>t.id===key);confirmAction('归档模板',`归档“${t.name}”？以后不再显示于可套用模板，已生成的行程清单和历史来源名称不变。`,()=>model.archiveTemplate(key),'模板已归档，本次行李保留。');break;}
+    case 'apply':applyDialog();break;
+    case 'add-item':editItem('');break;
+    case 'edit-item':editItem(key);break;
+    case 'exclude':{const i=model.snapshot().items.find(i=>i.id===key);confirmAction('从本次移除',`移除“${i.name}”？不会改模板，再次套用不会自动恢复，可在已移除中重新加入。`,()=>model.exclude(key),'已从本次移除，模板未改变。');break;}
+    case 'restore':model.restore(key);render();notify('已重新加入，状态为待准备。');break;
+    case 'retry':pageState='ready';document.getElementById('review-state').value='ready';render();notify('评审模拟：已恢复正常显示；未发送网络请求。');break;
+  }
+});});
+content.addEventListener('change',event=>safe(()=>{ const input=event.target, state=model.snapshot();
+  if(input.dataset.packed){model.setPacked(input.dataset.packed,input.checked);notify(input.checked?'已标记准备完成。':'已改为待准备。');}
+  if(input.dataset.group){const row=state.items.find(i=>i.id===input.dataset.group);const person=state.members.find(m=>m.id===row.memberId);const memberId=person&&(!input.value||person.groupId===input.value)?row.memberId:'';model.assign(row.id,input.value,memberId);notify(memberId!==row.memberId?'小组已更新，原负责人不在新组，已清空个人分配。':'责任小组已更新。');}
+  if(input.dataset.member){const row=state.items.find(i=>i.id===input.dataset.member);model.assign(row.id,row.groupId,input.value);notify('负责人已更新。');}
+  render();
+}));
+document.querySelectorAll('[data-view]').forEach(button=>button.onclick=()=>{view=button.dataset.view;notify('');render();});
+document.getElementById('review-state').onchange=event=>{pageState=event.target.value;notify('');render();};
+document.getElementById('review-readonly').onchange=event=>{model.setReadOnly(event.target.checked);notify('');render();};
+render();
+</script>
+</body>
+</html>
