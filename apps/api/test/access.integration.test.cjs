@@ -173,7 +173,7 @@ test('A11/A12/A13/A15: two votes count one dish; distinct dishes aggregate 500g/
   async function recipe(name,tomato,eggs) {
     const created=await call(who,'POST','/recipes',{name,ingredients:[{name:'番茄',quantity:tomato,unit:'g'},{name:'鸡蛋',quantity:eggs,unit:'个'}],seasonings:['生抽'],steps:['做熟']});
     assert.equal(created.status,201,JSON.stringify(created.body));
-    await call(who,'PATCH',`/recipes/${created.body.data.id}/status`,{status:'PUBLISHED'}); return created.body.data.id;
+    await call(who,'PATCH',`/recipes/${created.body.data.id}/status`,{status:'PUBLISHED',expectedVersion:created.body.data.version}); return created.body.data.id;
   }
   const dish=await recipe('番茄炒蛋',300,2),soup=await recipe('番茄蛋汤',200,1);
   const meal=(await call(who,'POST','/meals',{scheduledAt:'2026-08-31T18:00:00+08:00',mealType:'晚餐'})).body.data;
@@ -201,6 +201,22 @@ test('A10: trim precedes validation; empty names and negative recipe quantities 
   ]) assert.equal((await call(who,'POST',path,body)).status,400,path);
   assert.equal(await db.recipe.count({where:{householdId:who.householdId}}),0);
 });
+
+test('D04: recipe detail respects draft visibility and stale edits never overwrite newer content', async () => {
+  const who=await owner(),viewer=await join(who,['GUEST'],[{module:'recipes',level:'VIEW',effect:'ALLOW'}]);
+  const created=await call(who,'POST','/recipes',{name:'初版菜名',ingredients:[{name:'土豆',quantity:2,unit:'个'}],seasonings:['盐'],steps:['蒸熟']});
+  assert.equal(created.status,201,JSON.stringify(created.body));const recipe=created.body.data;
+  assert.equal(recipe.version,1);assert.equal((await call(viewer,'GET',`/recipes/${recipe.id}`)).status,404);
+  const edit={expectedVersion:1,name:'新版菜名',ingredients:[{name:'土豆',quantity:3,unit:'个'}],seasonings:['盐','胡椒'],steps:['蒸熟','压泥']};
+  const updated=await call(who,'PATCH',`/recipes/${recipe.id}`,edit);
+  assert.equal(updated.status,200,JSON.stringify(updated.body));assert.equal(updated.body.data.version,2);assert.equal(updated.body.data.name,'新版菜名');
+  const stale=await call(who,'PATCH',`/recipes/${recipe.id}`,{...edit,name:'过期覆盖'});
+  assert.equal(stale.status,409);const detail=await call(who,'GET',`/recipes/${recipe.id}`);
+  assert.equal(detail.body.data.name,'新版菜名');assert.equal(detail.body.data.ingredients[0].quantity,'3');
+  assert.equal((await call(who,'PATCH',`/recipes/${recipe.id}/status`,{status:'PUBLISHED',expectedVersion:1})).status,409);
+  const published=await call(who,'PATCH',`/recipes/${recipe.id}/status`,{status:'PUBLISHED',expectedVersion:2});
+  assert.equal(published.status,200);assert.equal(published.body.data.version,3);assert.equal((await call(viewer,'GET',`/recipes/${recipe.id}`)).status,200);
+});
 test('A24/A25/A29: arbitrary template items stay exact, repeat apply skips, assignee remains read-only', async () => {
   const who=await owner(), member=await join(who,['CAMPER']);
   const trip=(await call(who,'POST','/trips',{title:'虚构验证出行',startsAt:'2026-09-01T09:00:00+08:00'})).body.data;
@@ -221,7 +237,7 @@ async function mealFixture({quantity=300,unit='g',seasonings=['生抽','醋','�
   const who=await owner();
   const created=await call(who,'POST','/recipes',{name:'番茄炒蛋',ingredients:[{name:'番茄',quantity,unit}],seasonings,steps:['测试步骤']});
   assert.equal(created.status,201,JSON.stringify(created.body));const recipe=created.body.data;
-  assert.equal((await call(who,'PATCH',`/recipes/${recipe.id}/status`,{status:'PUBLISHED'})).status,200);
+  assert.equal((await call(who,'PATCH',`/recipes/${recipe.id}/status`,{status:'PUBLISHED',expectedVersion:recipe.version})).status,200);
   const meal=(await call(who,'POST','/meals',{scheduledAt:'2026-09-01T18:00:00+08:00',mealType:'晚餐'})).body.data;
   assert.equal((await call(who,'POST',`/meals/${meal.id}/items`,{recipeId:recipe.id})).status,201);
   return {who,recipe,meal:await currentMeal(who,meal.id)};
@@ -240,8 +256,9 @@ test('Same local day and normalized meal type share one meal under concurrent cr
 test('A17/R01: confirmed snapshot freezes names/quantities, reopening retains versions and manager audit',async()=>{
   const f=await confirmFixture(await mealFixture()),member=await join(f.who);
   const before=await db.mealSnapshot.findFirst({where:{mealId:f.meal.id}});
-  // Mutate source records directly to prove historical isolation independently of recipe editor implementation.
-  await db.recipe.update({where:{id:f.recipe.id},data:{name:'后来改的菜名',ingredients:{update:{where:{recipeId_ingredientId:{recipeId:f.recipe.id,ingredientId:f.recipe.ingredients[0].ingredientId}},data:{quantity:999}}}}});
+  const current=(await call(f.who,'GET',`/recipes/${f.recipe.id}`)).body.data;
+  const edit=await call(f.who,'PATCH',`/recipes/${f.recipe.id}`,{expectedVersion:current.version,name:'后来改的菜名',ingredients:[{name:'番茄',quantity:999,unit:'g'}],seasonings:current.seasonings.map(s=>s.name),steps:['修改后的步骤']});
+  assert.equal(edit.status,200,JSON.stringify(edit.body));
   const frozen=await currentMeal(f.who,f.meal.id);assert.equal(frozen.menu[0].recipe.name,'番茄炒蛋');assert.equal(frozen.menu[0].recipe.ingredients[0].quantity,'300.000');
   const c=(await call(f.who,'POST',`/meals/${f.meal.id}/recalculate`)).body.data.find(i=>i.kind==='FOOD');assert.equal(c.required,'300.000');
   assert.equal((await call(member,'POST',`/meals/${f.meal.id}/reopen`,{expectedVersion:f.meal.version,reason:'想改菜'})).status,403);
@@ -256,7 +273,7 @@ test('A17/R01: confirmed snapshot freezes names/quantities, reopening retains ve
 test('Servings are explicit and decimal aggregation rounds only after summation',async()=>{
   const f=await mealFixture({quantity:0.001,seasonings:[]});
   const r2=(await call(f.who,'POST','/recipes',{name:'第二道',ingredients:[{name:'番茄',quantity:0.001,unit:'g'}],seasonings:[],steps:['做熟']})).body.data;
-  await call(f.who,'PATCH',`/recipes/${r2.id}/status`,{status:'PUBLISHED'});await call(f.who,'POST',`/meals/${f.meal.id}/items`,{recipeId:r2.id});
+  await call(f.who,'PATCH',`/recipes/${r2.id}/status`,{status:'PUBLISHED',expectedVersion:r2.version});await call(f.who,'POST',`/meals/${f.meal.id}/items`,{recipeId:r2.id});
   for(const id of [f.recipe.id,r2.id]){f.meal=await currentMeal(f.who,f.meal.id);const r=await call(f.who,'PATCH',`/meals/${f.meal.id}/dishes/${id}`,{expectedVersion:f.meal.version,cookMultiplier:0.5});assert.equal(r.status,200);}
   assert.equal((await call(f.who,'POST',`/meals/${f.meal.id}/recalculate`)).body.data[0].required,'0.001');
 });

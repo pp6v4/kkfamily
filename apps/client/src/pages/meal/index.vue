@@ -66,7 +66,8 @@ async function toggleRecipe(recipeId:string) {
   } catch(error){fail(error);} finally{loading.value=false;}
 }
 function addRecipe() { uni.navigateTo({url:'/pages/recipe-editor/index'}); }
-async function publish(id:string) { if(loading.value)return;loading.value=true;try{await updateRecipeStatus(id,'PUBLISHED');recipes.value=await listRecipes();}catch(error){fail(error);}finally{loading.value=false;} }
+function editRecipe(id:string) { uni.navigateTo({url:'/pages/recipe-editor/index?id='+encodeURIComponent(id)}); }
+async function publish(recipe:Recipe) { if(loading.value)return;loading.value=true;try{await updateRecipeStatus(recipe,'PUBLISHED');recipes.value=await listRecipes();}catch(error){fail(error);}finally{loading.value=false;} }
 async function saveServings(recipeId:string) {
   if(!meal.value||loading.value)return;loading.value=true;errorText.value='';
   try { meal.value=await updateMealDish(meal.value,recipeId,Number(servings.value[recipeId]));await loadMealFromDatabase(); }
@@ -115,7 +116,7 @@ onShow(loadPage);
     </view>
     <view v-else-if="active==='recipes'">
       <view v-if="canAccess(session,'recipes','EDIT')" class="primary" @tap="addRecipe">＋ 添加菜谱</view>
-      <view v-for="recipe in recipes" :key="recipe.id" class="recipe-card"><view class="recipe-info"><text class="recipe-name">{{recipe.name}}</text><text class="recipe-meta">{{recipe.ingredients.length}}种食材 · {{recipe.seasonings.length}}种调料</text></view><text v-if="recipe.status==='DRAFT' && canAccess(session,'recipes','EDIT')" class="publish" @tap="publish(recipe.id)">发布</text><text v-else class="status">{{recipe.status==='PUBLISHED'?'已发布':'已归档'}}</text></view>
+      <view v-for="recipe in recipes" :key="recipe.id" class="recipe-card"><view class="recipe-info" @tap="canAccess(session,'recipes','EDIT')&&editRecipe(recipe.id)"><text class="recipe-name">{{recipe.name}}</text><text class="recipe-meta">{{recipe.ingredients.length}}种食材 · {{recipe.seasonings.length}}种调料 · 第{{recipe.version}}版</text></view><text v-if="recipe.status==='DRAFT' && canAccess(session,'recipes','EDIT')" class="publish" @tap="publish(recipe)">发布</text><text v-else class="status">{{recipe.status==='PUBLISHED'?'已发布':'已归档'}}</text></view>
     </view>
     <view v-else>
       <view class="meal-summary"><text>{{date}} {{mealType}} {{slotKey}}</text><text>{{meal?statusLabels[meal.status]:'尚未点菜'}}</text></view>
@@ -131,7 +132,7 @@ onShow(loadPage);
       <view v-if="meal && canAccess(session,'meals','MANAGE')">
         <view v-if="meal.status==='DRAFT' && mealItems.length" class="primary" @tap="confirmAction('confirm')">确认已保存的份数和菜单</view>
         <view v-if="meal.status==='CONFIRMED'" class="form-box"><view class="primary" @tap="confirmAction('start')">开始烹饪</view><input v-model="reopenReason" class="entry" placeholder="改单原因" /><view class="secondary" @tap="confirmAction('reopen')">重新打开并保留旧快照</view></view>
-        <view v-if="['CONFIRMED','COOKING'].includes(meal.status)" class="secondary" @tap="finishCooking">完成用餐，核对实际消耗</view>
+        <view v-if="['CONFIRMED','COOKING'].includes(meal.status)" class="secondary" @tap="finishCooking">完成用餐（库存不自动变化）</view>
         <view v-if="!['COMPLETED','CANCELLED'].includes(meal.status)" class="small-action" @tap="confirmAction('cancel')">取消这顿餐点</view>
       </view>
       <view v-if="meal?.snapshotVersion" class="secondary" @tap="showHistory">查看历史菜单快照（{{meal.snapshotVersion}}版）</view><view v-for="entry in history" :key="entry.version" class="form-box"><text>版本{{entry.version}} · {{entry.createdAt}}</text><view v-for="dish in entry.data.dishes" :key="dish.recipeId" class="history-row"><text>{{dish.recipe.name}} × {{Number(dish.cookMultiplier)}}份</text><text class="material">{{dish.recipe.ingredients.map(i=>i.ingredient.name+' '+formatQuantity(i.quantity)+' '+i.unit).join('、')}}</text><text class="material">调料：{{dish.recipe.seasonings.map(s=>s.name).join('、')}}</text></view></view>

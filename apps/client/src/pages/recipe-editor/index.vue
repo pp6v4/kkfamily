@@ -1,8 +1,11 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onLoad } from '@dcloudio/uni-app';
-import { createRecipe, listRecipeCategories, type RecipeCategory } from '../../services/family-api';
+import { createRecipe, getRecipe, listRecipeCategories, updateRecipe, type Recipe, type RecipeCategory } from '../../services/family-api';
 
+const recipeId = ref('');
+const recipeVersion = ref(0);
+const recipeStatus = ref<Recipe['status']>('DRAFT');
 const name = ref('');
 const categories = ref<RecipeCategory[]>([]);
 const categoryIndex = ref(0);
@@ -19,8 +22,20 @@ function addSeasoning() { seasonings.value.push(''); }
 function addStep() { steps.value.push(''); }
 function removeStep(index: number) { if (steps.value.length > 1) steps.value.splice(index, 1); }
 
-async function loadCategories() {
-  try { categories.value = await listRecipeCategories(); }
+async function loadPage(query?: Record<string, string | undefined>) {
+  recipeId.value = query?.id ?? '';
+  try {
+    categories.value = await listRecipeCategories();
+    if (recipeId.value) {
+      const recipe = await getRecipe(recipeId.value);
+      recipeVersion.value = recipe.version; recipeStatus.value = recipe.status; name.value = recipe.name;
+      ingredients.value = recipe.ingredients.map(item => ({ name: item.ingredient.name, quantity: item.quantity === null ? '' : String(Number(item.quantity)), unit: item.unit }));
+      seasonings.value = recipe.seasonings.length ? recipe.seasonings.map(item => item.name) : [''];
+      steps.value = recipe.steps.length ? [...recipe.steps] : [''];
+      const index = categories.value.findIndex(item => item.id === recipe.category?.id); categoryIndex.value = index < 0 ? 0 : index;
+      uni.setNavigationBarTitle({ title: '编辑菜谱' });
+    }
+  }
   catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
 }
 
@@ -32,20 +47,26 @@ async function save() {
   }
   saving.value = true;
   try {
-    await createRecipe({
+    const input = {
       name: name.value.trim(),
       categoryId: categories.value[categoryIndex.value].id,
       ingredients: cleanIngredients.map((item) => ({ name: item.name.trim(), quantity: item.quantity === '' ? undefined : Number(item.quantity), unit: item.unit.trim() })),
       seasonings: seasonings.value.map((item) => item.trim()).filter(Boolean),
       steps: cleanSteps,
-    });
-    uni.showToast({ title: '菜谱草稿已保存', icon: 'success' });
+    };
+    if (recipeId.value) {
+      const updated = await updateRecipe(recipeId.value, { ...input, expectedVersion: recipeVersion.value });
+      recipeVersion.value = updated.version;
+    } else {
+      const created = await createRecipe(input); recipeId.value = created.id; recipeVersion.value = created.version;
+    }
+    uni.showToast({ title: recipeStatus.value === 'DRAFT' ? '菜谱草稿已保存' : '菜谱已更新', icon: 'success' });
     setTimeout(() => uni.navigateBack(), 500);
   } catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
   finally { saving.value = false; }
 }
 
-onLoad(loadCategories);
+onLoad(loadPage);
 </script>
 
 <template>
@@ -54,7 +75,7 @@ onLoad(loadCategories);
     <view class="section"><text class="title">食材</text><view v-for="(item,index) in ingredients" :key="index" class="row"><input v-model="item.name" class="input short" placeholder="食材" /><input v-model="item.quantity" type="digit" class="input amount" placeholder="数量" /><input v-model="item.unit" class="input unit" placeholder="单位" /><text class="remove" @tap="removeIngredient(index)">×</text></view><text class="add" @tap="addIngredient">＋ 添加食材</text></view>
     <view class="section"><text class="title">调料（不填用量）</text><input v-for="(_,index) in seasonings" :key="index" v-model="seasonings[index]" class="input" placeholder="调料名称" /><text class="add" @tap="addSeasoning">＋ 添加调料</text></view>
     <view class="section"><text class="title">做法</text><view v-for="(_,index) in steps" :key="index" class="step"><textarea v-model="steps[index]" class="textarea" :placeholder="'步骤 ' + (index + 1)" /><text class="remove step-remove" @tap="removeStep(index)">×</text></view><text class="add" @tap="addStep">＋ 添加步骤</text></view>
-    <view class="save" :class="{ disabled: saving }" @tap="save">{{ saving ? '保存中…' : '保存草稿' }}</view>
+    <view class="save" :class="{ disabled: saving }" @tap="save">{{ saving ? '保存中…' : recipeId ? '保存修改' : '保存草稿' }}</view>
   </view>
 </template>
 

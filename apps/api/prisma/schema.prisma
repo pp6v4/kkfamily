@@ -319,6 +319,7 @@ model Recipe {
   categoryId  String?
   name        String
   status      RecipeStatus @default(DRAFT)
+  version     Int          @default(1)
   coverObjectKey String?
   steps       Json
   createdById String

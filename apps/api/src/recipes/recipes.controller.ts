@@ -3,6 +3,7 @@ import { AccessTokenGuard } from '../auth/access-token.guard';
 import { CurrentUser, RequestUser } from '../auth/current-user.decorator';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { CreateRecipeDto } from './dto/create-recipe.dto';
+import { UpdateRecipeDto } from './dto/update-recipe.dto';
 import { UpdateRecipeStatusDto } from './dto/update-recipe-status.dto';
 import { RecipesService } from './recipes.service';
 
@@ -31,9 +32,19 @@ export class RecipesController {
     return this.recipesService.listRecipes(user.userId, householdId);
   }
 
+  @Get(':id')
+  detail(@CurrentUser() user: RequestUser, @Headers('x-household-id') householdId: string, @Param('id') recipeId: string) {
+    return this.recipesService.detail(user.userId, householdId, recipeId);
+  }
+
+  @Patch(':id')
+  update(@CurrentUser() user: RequestUser, @Headers('x-household-id') householdId: string, @Param('id') recipeId: string, @Body() dto: UpdateRecipeDto) {
+    return this.recipesService.update(user.userId, householdId, recipeId, dto);
+  }
+
   @Patch(':id/status')
   updateStatus(@CurrentUser() user: RequestUser, @Headers('x-household-id') householdId: string, @Param('id') recipeId: string, @Body() dto: UpdateRecipeStatusDto) {
-    return this.recipesService.updateStatus(user.userId, householdId, recipeId, dto.status);
+    return this.recipesService.updateStatus(user.userId, householdId, recipeId, dto);
   }
 }
 

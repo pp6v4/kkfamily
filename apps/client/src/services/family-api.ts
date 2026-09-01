@@ -3,7 +3,7 @@ import { ApiError, rawRequest } from './transport';
 
 export interface RecipeCategory { id: string; name: string; sortOrder: number }
 export interface RecipeIngredient { ingredientId: string; quantity: string | number | null; unit: string; optional: boolean; ingredient: { id: string; name: string } }
-export interface Recipe { id: string; name: string; status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'; category?: RecipeCategory | null; ingredients: RecipeIngredient[]; seasonings: Array<{ id: string; name: string }>; steps: string[] }
+export interface Recipe { id: string; version: number; name: string; status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'; category?: RecipeCategory | null; ingredients: RecipeIngredient[]; seasonings: Array<{ id: string; name: string }>; steps: string[] }
 export interface MealItem { id: string; addedById: string; recipeId: string; recipe: Recipe }
 export interface MealDish { recipeId: string; recipe: Recipe; cookMultiplier: string; wantedBy: Array<{ membershipId: string; nickname: string | null }> }
 export interface Meal { id: string; version: number; snapshotVersion: number; localDate: string; slotKey: string; legacyWithoutSnapshot: boolean; scheduledAt: string; mealType: string; status: 'DRAFT' | 'CONFIRMED' | 'COOKING' | 'COMPLETED' | 'CANCELLED'; items: MealItem[]; menu: MealDish[] }
@@ -30,8 +30,10 @@ async function request<T>(path: string, method: UniApp.RequestOptions['method'] 
 
 export function listRecipeCategories() { return request<RecipeCategory[]>('/recipes/categories'); }
 export function listRecipes() { return request<Recipe[]>('/recipes'); }
+export function getRecipe(recipeId: string) { return request<Recipe>(`/recipes/${recipeId}`); }
 export function createRecipe(input: { name: string; categoryId?: string; ingredients: Array<{ name: string; quantity?: number; unit: string; optional?: boolean }>; seasonings: string[]; steps: string[] }) { return request<Recipe>('/recipes', 'POST', input); }
-export function updateRecipeStatus(recipeId: string, status: Recipe['status']) { return request<Recipe>(`/recipes/${recipeId}/status`, 'PATCH', { status }); }
+export function updateRecipe(recipeId: string, input: { expectedVersion: number; name: string; categoryId?: string; ingredients: Array<{ name: string; quantity?: number; unit: string; optional?: boolean }>; seasonings: string[]; steps: string[] }) { return request<Recipe>(`/recipes/${recipeId}`, 'PATCH', input); }
+export function updateRecipeStatus(recipe: Recipe, status: Recipe['status']) { return request<Recipe>(`/recipes/${recipe.id}/status`, 'PATCH', { status, expectedVersion: recipe.version }); }
 export function listMeals(from: string, to: string) { return request<Meal[]>(`/meals?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`); }
 export const mealTypeCodes: Record<string, string> = { 早餐: 'BREAKFAST', 午餐: 'LUNCH', 晚餐: 'DINNER', 加餐: 'OTHER' };
 export function mealTypeLabel(code: string) { return Object.keys(mealTypeCodes).find(k => mealTypeCodes[k] === code) ?? code; }
