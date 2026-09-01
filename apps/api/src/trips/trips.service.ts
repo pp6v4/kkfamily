@@ -1,10 +1,12 @@
+import { AccessService } from '../access/access.service';
+import { Level, permits } from '../access/permission-policy';
 import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateTripDto } from './dto/create-trip.dto';
 
 @Injectable()
 export class TripsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly access: AccessService) {}
 
   async list(userId: string, householdId: string) {
     const membership = await this.requireMember(userId, householdId);
@@ -15,7 +17,7 @@ export class TripsService {
   }
 
   async create(userId: string, householdId: string, dto: CreateTripDto) {
-    const membership = await this.requireMember(userId, householdId);
+    const membership = await this.requireMember(userId, householdId, 'EDIT');
     const startsAt = new Date(dto.startsAt);
     const endsAt = dto.endsAt ? new Date(dto.endsAt) : undefined;
     if (Number.isNaN(startsAt.valueOf()) || (endsAt && (Number.isNaN(endsAt.valueOf()) || endsAt < startsAt))) throw new BadRequestException('Invalid trip time range');
@@ -27,9 +29,7 @@ export class TripsService {
     return { data: trip };
   }
 
-  private async requireMember(userId: string, householdId: string) {
-    const membership = await this.prisma.membership.findFirst({ where: { householdId, userId, status: 'ACTIVE' } });
-    if (!membership) throw new ForbiddenException('No access to this household');
-    return membership;
+  private async requireMember(userId: string, householdId: string, level: Level = 'VIEW') {
+    return this.access.require(userId, householdId, 'trips', level);
   }
 }

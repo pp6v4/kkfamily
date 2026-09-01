@@ -31,7 +31,8 @@ services:
         condition: service_healthy
       redis:
         condition: service_healthy
-    networks: [internal]
+    # API needs outbound HTTPS for WeChat/COS; no host API port is published.
+    networks: [internal, edge]
 
   postgres:
     image: postgres:17-alpine

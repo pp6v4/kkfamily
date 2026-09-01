@@ -1,6 +1,3 @@
-import { IsBoolean } from 'class-validator';
+import { MealVersionDto } from './meal-workflow.dto';
 
-export class CompleteMealDto {
-  @IsBoolean()
-  deductInventory!: boolean;
-}
+export class CompleteMealDto extends MealVersionDto {}

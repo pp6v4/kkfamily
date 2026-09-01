@@ -2,6 +2,7 @@
 import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { listCalendarEvents, type CalendarEvent } from '../../services/family-api';
+import { refreshAccess } from '../../services/session';
 
 const now = new Date();
 const current = ref(new Date(now.getFullYear(), now.getMonth(), 1));
@@ -16,17 +17,23 @@ const pad = (value: number) => String(value).padStart(2, '0');
 function format(date: Date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
 function localDate(iso: string) { const value = new Date(iso); return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`; }
 function message(error: unknown) { return error instanceof Error ? error.message : '日历加载失败'; }
+function overlapsDay(event: CalendarEvent, day: string) {
+  const start = new Date(`${day}T00:00:00+08:00`).getTime(), end = start + 86400_000;
+  const eventStart = new Date(event.startsAt).getTime(), eventEnd = event.endsAt ? new Date(event.endsAt).getTime() : eventStart;
+  return eventStart < end && (eventEnd > eventStart ? eventEnd > start : eventStart >= start);
+}
 
 const title = computed(() => `${current.value.getFullYear()} 年 ${current.value.getMonth() + 1} 月`);
 const days = computed(() => {
   const year = current.value.getFullYear(); const month = current.value.getMonth(); const firstDay = new Date(year, month, 1); const first = new Date(year, month, 1 - firstDay.getDay());
-  return Array.from({ length: 42 }, (_, index) => { const date = new Date(first); date.setDate(first.getDate() + index); const key = format(date); return { key, day: date.getDate(), isCurrent: date.getMonth() === month, events: events.value.filter((event) => localDate(event.startsAt) === key) }; });
+  return Array.from({ length: 42 }, (_, index) => { const date = new Date(first); date.setDate(first.getDate() + index); const key = format(date); return { key, day: date.getDate(), isCurrent: date.getMonth() === month, events: events.value.filter((event) => overlapsDay(event,key)) }; });
 });
 async function loadMonth() {
   loading.value = true;
   const year = current.value.getFullYear(); const month = current.value.getMonth(); const from = new Date(year, month, 1); const to = new Date(year, month + 1, 1);
-  try { events.value = await listCalendarEvents(from.toISOString(), to.toISOString()); }
-  catch (error) { uni.showToast({ title: message(error), icon: 'none', duration: 3000 }); }
+  events.value = [];
+  try { await refreshAccess(); events.value = await listCalendarEvents(from.toISOString(), to.toISOString()); }
+  catch (error) { events.value=[]; uni.showToast({ title: message(error), icon: 'none', duration: 3000 }); }
   finally { loading.value = false; }
 }
 async function changeMonth(delta: number) { current.value = new Date(current.value.getFullYear(), current.value.getMonth() + delta, 1); await loadMonth(); }

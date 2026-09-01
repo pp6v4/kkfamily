@@ -1,7 +1,8 @@
+import { TrimText } from '../../common/trim-text';
 import { IsString, Length } from 'class-validator';
 
 export class CreateHouseholdDto {
-  @IsString()
+  @TrimText() @IsString()
   @Length(1, 40)
   name!: string;
 }

@@ -1,4 +1,4 @@
-import { Body, Controller, Delete, Get, Headers, Param, Post, Query, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AccessTokenGuard } from '../auth/access-token.guard';
 import { CurrentUser, RequestUser } from '../auth/current-user.decorator';
 import { AddMealItemDto } from './dto/add-meal-item.dto';
@@ -6,6 +6,7 @@ import { CreateMealDto } from './dto/create-meal.dto';
 import { CompleteMealDto } from './dto/complete-meal.dto';
 import { ListMealsDto } from './dto/list-meals.dto';
 import { MealsService } from './meals.service';
+import { MealVersionDto, RecalculateMealDto, ReopenMealDto, UpdateDishDto } from './dto/meal-workflow.dto';
 
 @Controller('meals')
 @UseGuards(AccessTokenGuard)
@@ -33,12 +34,37 @@ export class MealsController {
   }
 
   @Post(':id/recalculate')
-  recalculate(@CurrentUser() user: RequestUser, @Headers('x-household-id') householdId: string, @Param('id') mealId: string) {
-    return this.mealsService.recalculate(user.userId, householdId, mealId);
+  recalculate(@CurrentUser() user: RequestUser, @Headers('x-household-id') householdId: string, @Param('id') mealId: string, @Body() dto: RecalculateMealDto) {
+    return this.mealsService.recalculate(user.userId, householdId, mealId, dto?.snapshotVersion);
   }
 
   @Post(':id/complete')
   complete(@CurrentUser() user: RequestUser, @Headers('x-household-id') householdId: string, @Param('id') mealId: string, @Body() dto: CompleteMealDto) {
-    return this.mealsService.complete(user.userId, householdId, mealId, dto.deductInventory);
+    return this.mealsService.complete(user.userId, householdId, mealId, dto);
+  }
+
+  @Patch(':id/dishes/:recipeId')
+  dish(@CurrentUser() user: RequestUser, @Headers('x-household-id') house: string, @Param('id') id: string, @Param('recipeId') recipeId: string, @Body() dto: UpdateDishDto) {
+    return this.mealsService.updateDish(user.userId, house, id, recipeId, dto);
+  }
+  @Get(':id/snapshots')
+  snapshots(@CurrentUser() user: RequestUser, @Headers('x-household-id') house: string, @Param('id') id: string) {
+    return this.mealsService.snapshots(user.userId, house, id);
+  }
+  @Post(':id/confirm')
+  confirm(@CurrentUser() user: RequestUser, @Headers('x-household-id') house: string, @Param('id') id: string, @Body() dto: MealVersionDto) {
+    return this.mealsService.transition(user.userId, house, id, 'confirm', dto);
+  }
+  @Post(':id/reopen')
+  reopen(@CurrentUser() user: RequestUser, @Headers('x-household-id') house: string, @Param('id') id: string, @Body() dto: ReopenMealDto) {
+    return this.mealsService.transition(user.userId, house, id, 'reopen', dto);
+  }
+  @Post(':id/start')
+  start(@CurrentUser() user: RequestUser, @Headers('x-household-id') house: string, @Param('id') id: string, @Body() dto: MealVersionDto) {
+    return this.mealsService.transition(user.userId, house, id, 'start', dto);
+  }
+  @Post(':id/cancel')
+  cancel(@CurrentUser() user: RequestUser, @Headers('x-household-id') house: string, @Param('id') id: string, @Body() dto: MealVersionDto) {
+    return this.mealsService.transition(user.userId, house, id, 'cancel', dto);
   }
 }

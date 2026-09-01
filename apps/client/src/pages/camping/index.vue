@@ -1,11 +1,14 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
+import { canAccess, refreshAccess, type HouseholdContext } from '../../services/session';
+import { takeCalendarTarget } from '../../services/calendar-navigation';
 import { applyPackingTemplate, createPackingTemplate, createTrip, createTripPackingItem, listPackingTemplates, listTripPackingItems, listTrips, removeTripPackingItem, updatePackingTemplate, updateTripPackingItem, type PackingTemplate, type Trip, type TripPackingItem } from '../../services/family-api';
 
 type ViewName = 'trips' | 'templates';
 interface TemplateItemForm { id?: string; name: string; quantity: string; unit: string; note: string }
 const active = ref<ViewName>('trips');
+const session = ref<HouseholdContext>();
 const trips = ref<Trip[]>([]);
 const templates = ref<PackingTemplate[]>([]);
 const selectedTripId = ref('');
@@ -19,6 +22,8 @@ const templateForm = ref<{ name: string; description: string; items: TemplateIte
 const itemForm = ref({ name: '', quantity: '', unit: '', note: '' });
 
 const selectedTrip = computed(() => trips.value.find((trip) => trip.id === selectedTripId.value));
+const canEditTrip = computed(() => canAccess(session.value,'trips','EDIT') && Boolean(selectedTrip.value?.members.find(m=>m.membershipId===session.value?.membershipId)?.canEdit));
+function canEditTemplate(template: PackingTemplate) { return canAccess(session.value,'packing_templates','EDIT') && (template.createdById===session.value?.membershipId || canAccess(session.value,'packing_templates','MANAGE')); }
 const memberNames = computed(() => (selectedTrip.value?.members ?? []).map((entry, index) => entry.membership.user.nickname || `成员${index + 1}`));
 const packedCount = computed(() => packingItems.value.filter((item) => item.status === 'PACKED').length);
 
@@ -29,12 +34,16 @@ function quantityText(quantity: string | number | null, unit: string | null) { r
 function responsibleName(item: TripPackingItem) { return item.responsibleMembership?.user.nickname || (item.responsibleMembership ? '家庭成员' : '未分配'); }
 
 async function loadData() {
+  const target=takeCalendarTarget('TRIP');
+  if (target) { active.value='trips'; if (target.sourceId) selectedTripId.value=target.sourceId; else { creatingTrip.value=true; tripForm.value.startsAt=target.date; } }
+  trips.value=[]; templates.value=[]; packingItems.value=[]; session.value=undefined;
   try {
-    const [tripRows, templateRows] = await Promise.all([listTrips(), listPackingTemplates()]);
+    session.value=await refreshAccess();
+    const [tripRows, templateRows] = await Promise.all([canAccess(session.value,'trips') ? listTrips() : Promise.resolve([]), canAccess(session.value,'packing_templates') ? listPackingTemplates() : Promise.resolve([])]);
     trips.value = tripRows; templates.value = templateRows;
     if (selectedTripId.value && !tripRows.some((trip) => trip.id === selectedTripId.value)) selectedTripId.value = '';
     if (selectedTripId.value) packingItems.value = await listTripPackingItems(selectedTripId.value);
-  } catch (error) { uni.showToast({ title: message(error), icon: 'none', duration: 3000 }); }
+  } catch (error) { trips.value=[]; templates.value=[]; packingItems.value=[]; uni.showToast({ title: message(error), icon: 'none', duration: 3000 }); }
 }
 async function openTrip(tripId: string) {
   selectedTripId.value = tripId;
@@ -117,32 +126,32 @@ onShow(loadData);
 <template>
   <view class="page">
     <view class="heading"><text class="label">去露营</text><text class="title">{{ active === 'trips' ? '我的行程' : '行李模板' }}</text><text class="subtitle">{{ active === 'trips' ? '只有行程成员可以查看和协作' : '模板名称和物品都由你自己定义' }}</text></view>
-    <view class="tabs"><view class="tab" :class="{ chosen: active === 'trips' }" @tap="active = 'trips'">行程</view><view class="tab" :class="{ chosen: active === 'templates' }" @tap="active = 'templates'">行李模板</view></view>
+    <view class="tabs"><view class="tab" :class="{ chosen: active === 'trips' }" @tap="active = 'trips'">行程</view><view v-if="canAccess(session,'packing_templates')" class="tab" :class="{ chosen: active === 'templates' }" @tap="active = 'templates'">行李模板</view></view>
 
     <view v-if="active === 'trips' && !selectedTrip">
       <view class="map"><text class="map-icon">🗺️</text><text>中国行程地图</text><text class="map-note">路线绘制将在行程详情中继续完善</text></view>
-      <view v-if="!trips.length" class="empty">还没有可查看的行程</view>
+      <view v-if="!trips.length" class="empty">{{canAccess(session,'trips')?'尚未加入任何行程；拥有露营角色不自动加入行程':'尚未获得露营功能权限'}}</view>
       <view v-for="trip in trips" :key="trip.id" class="trip" @tap="openTrip(trip.id)"><view class="pin">📍</view><view class="trip-info"><text class="trip-title">{{ trip.title }}</text><text class="trip-sub">{{ trip.destination || '未填写目的地' }} · {{ dateText(trip.startsAt) }}{{ trip.endsAt ? ` 至 ${dateText(trip.endsAt)}` : '' }}</text><text class="trip-sub">行李 {{ trip._count?.packingItems || 0 }} 项</text></view><text class="state">{{ statusText(trip.status) }}</text></view>
-      <view v-if="creatingTrip" class="editor"><input v-model="tripForm.title" class="input" placeholder="行程名称" /><input v-model="tripForm.destination" class="input" placeholder="目的地" /><view class="date-row"><picker mode="date" @change="tripForm.startsAt = $event.detail.value"><view class="input">{{ tripForm.startsAt || '出发日期' }}</view></picker><picker mode="date" @change="tripForm.endsAt = $event.detail.value"><view class="input">{{ tripForm.endsAt || '结束日期' }}</view></picker></view><view class="button" @tap="saveTrip">保存行程</view></view>
-      <view v-else class="button" @tap="creatingTrip = true">＋ 创建露营行程</view>
+      <view v-if="creatingTrip && canAccess(session,'trips','EDIT')" class="editor"><input v-model="tripForm.title" class="input" placeholder="行程名称" /><input v-model="tripForm.destination" class="input" placeholder="目的地" /><view class="date-row"><picker mode="date" @change="tripForm.startsAt = $event.detail.value"><view class="input">{{ tripForm.startsAt || '出发日期' }}</view></picker><picker mode="date" @change="tripForm.endsAt = $event.detail.value"><view class="input">{{ tripForm.endsAt || '结束日期' }}</view></picker></view><view class="button" @tap="saveTrip">保存行程</view></view>
+      <view v-else-if="canAccess(session,'trips','EDIT')" class="button" @tap="creatingTrip = true">＋ 创建露营行程</view>
     </view>
 
     <view v-else-if="active === 'trips' && selectedTrip">
       <view class="back" @tap="closeTrip">‹ 返回行程</view>
       <view class="trip-head"><text class="trip-title">{{ selectedTrip.title }}</text><text class="trip-sub">{{ selectedTrip.destination || '未填写目的地' }} · 已准备 {{ packedCount }}/{{ packingItems.length }}</text></view>
-      <view class="packing-actions"><picker v-if="templates.length" :range="templates" range-key="name" @change="applyTemplateByIndex"><view class="action">套用自定义模板</view></picker><view class="action" @tap="showingItemForm = !showingItemForm">手工加一项</view></view>
-      <view v-if="!templates.length" class="notice" @tap="active = 'templates'">还没有行李模板，先去创建一个 ›</view>
+      <view v-if="canEditTrip" class="packing-actions"><picker v-if="templates.length" :range="templates" range-key="name" @change="applyTemplateByIndex"><view class="action">套用自定义模板</view></picker><view class="action" @tap="showingItemForm = !showingItemForm">手工加一项</view></view>
+      <view v-if="canAccess(session,'packing_templates','EDIT') && !templates.length" class="notice" @tap="active = 'templates'">还没有行李模板，先去创建一个 ›</view>
       <view v-if="showingItemForm" class="editor"><input v-model="itemForm.name" class="input" placeholder="本次要带什么" /><view class="item-inputs"><input v-model="itemForm.quantity" type="digit" class="input" placeholder="数量" /><input v-model="itemForm.unit" class="input" placeholder="单位" /></view><input v-model="itemForm.note" class="input" placeholder="备注（可选）" /><view class="button small" @tap="saveTripItem">加入本次行程</view></view>
       <view v-if="!packingItems.length" class="empty">本次行程还没有行李项</view>
-      <view v-for="item in packingItems" :key="item.id" class="packing-item" :class="{ packed: item.status === 'PACKED' }"><text class="check" @tap="togglePacked(item)">{{ item.status === 'PACKED' ? '✓' : '' }}</text><view class="packing-info"><text class="packing-name">{{ item.name }}<text v-if="quantityText(item.quantity,item.unit)" class="quantity"> · {{ quantityText(item.quantity,item.unit) }}</text></text><text class="packing-meta">{{ item.sourceTemplate ? `来自模板：${item.sourceTemplate.name}` : '本次手工添加' }}{{ item.note ? ` · ${item.note}` : '' }}</text><picker v-if="memberNames.length" :range="memberNames" @change="assign(item, Number($event.detail.value))"><text class="responsible">负责人：{{ responsibleName(item) }} ›</text></picker></view><text class="remove" @tap="removeItem(item)">×</text></view>
+      <view v-for="item in packingItems" :key="item.id" class="packing-item" :class="{ packed: item.status === 'PACKED' }"><text class="check" @tap="canEditTrip && togglePacked(item)">{{ item.status === 'PACKED' ? '✓' : '' }}</text><view class="packing-info"><text class="packing-name">{{ item.name }}<text v-if="quantityText(item.quantity,item.unit)" class="quantity"> · {{ quantityText(item.quantity,item.unit) }}</text></text><text class="packing-meta">{{ item.sourceTemplate ? `来自模板：${item.sourceTemplate.name}` : '本次手工添加' }}{{ item.note ? ` · ${item.note}` : '' }}</text><text v-if="!canEditTrip" class="responsible">负责人：{{ responsibleName(item) }} · 只读</text><picker v-if="canEditTrip && memberNames.length" :range="memberNames" @change="assign(item, Number($event.detail.value))"><text class="responsible">负责人：{{ responsibleName(item) }} ›</text></picker></view><text v-if="canEditTrip" class="remove" @tap="removeItem(item)">×</text></view>
     </view>
 
     <view v-else>
       <view class="template-explain">模板名称和物品均由家庭成员自定义。套用到行程后会生成独立清单，不会反向修改模板。</view>
       <view v-if="!templates.length && !showingTemplateForm" class="empty">还没有自定义模板</view>
-      <view v-for="template in templates" :key="template.id" class="template-card"><view class="template-top"><view><text class="template-name">{{ template.name }}</text><text class="template-description">{{ template.description || `${template.items.length} 件物品` }}</text></view><text class="edit" @tap="editTemplate(template)">编辑</text></view><view class="chips"><text v-for="item in template.items.slice(0,6)" :key="item.id" class="chip">{{ item.name }}</text><text v-if="template.items.length > 6" class="chip">+{{ template.items.length - 6 }}</text></view><text class="archive" @tap="archiveTemplate(template)">归档模板</text></view>
+      <view v-for="template in templates" :key="template.id" class="template-card"><view class="template-top"><view><text class="template-name">{{ template.name }}</text><text class="template-description">{{ template.description || `${template.items.length} 件物品` }}</text></view><text v-if="canEditTemplate(template)" class="edit" @tap="editTemplate(template)">编辑</text></view><view class="chips"><text v-for="item in template.items.slice(0,6)" :key="item.id" class="chip">{{ item.name }}</text><text v-if="template.items.length > 6" class="chip">+{{ template.items.length - 6 }}</text></view><text v-if="canEditTemplate(template)" class="archive" @tap="archiveTemplate(template)">归档模板</text></view>
       <view v-if="showingTemplateForm" class="editor template-editor"><text class="editor-title">{{ editingTemplateId ? '编辑模板' : '新建自定义模板' }}</text><input v-model="templateForm.name" class="input" placeholder="模板名称，例如：烧烤" /><input v-model="templateForm.description" class="input" placeholder="说明（可选）" /><view v-for="(item,index) in templateForm.items" :key="index" class="template-row"><input v-model="item.name" class="input template-item-name" placeholder="物品名称" /><input v-model="item.quantity" type="digit" class="input template-amount" placeholder="数量" /><input v-model="item.unit" class="input template-unit" placeholder="单位" /><text class="remove" @tap="removeTemplateItem(index)">×</text><input v-model="item.note" class="input template-note" placeholder="备注（可选）" /></view><text class="add-row" @tap="addTemplateItem">＋ 添加模板物品</text><view class="button small" @tap="saveTemplate">{{ editingTemplateId ? '保存修改' : '创建模板' }}</view><view class="cancel" @tap="showingTemplateForm = false">取消</view></view>
-      <view v-else class="button" @tap="newTemplate">＋ 新建自定义模板</view>
+      <view v-else-if="canAccess(session,'packing_templates','EDIT')" class="button" @tap="newTemplate">＋ 新建自定义模板</view>
     </view>
   </view>
 </template>

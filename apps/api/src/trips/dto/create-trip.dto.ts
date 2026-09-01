@@ -1,7 +1,8 @@
+import { TrimText } from '../../common/trim-text';
 import { IsDateString, IsOptional, IsString, Length } from 'class-validator';
 
 export class CreateTripDto {
-  @IsString() @Length(1, 80)
+  @TrimText() @IsString() @Length(1, 80)
   title!: string;
 
   @IsDateString()
@@ -10,6 +11,6 @@ export class CreateTripDto {
   @IsOptional() @IsDateString()
   endsAt?: string;
 
-  @IsOptional() @IsString() @Length(1, 120)
+  @IsOptional() @TrimText() @IsString() @Length(1, 120)
   destination?: string;
 }

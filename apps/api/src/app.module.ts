@@ -12,6 +12,8 @@ import { ShoppingModule } from './shopping/shopping.module';
 import { InventoryModule } from './inventory/inventory.module';
 import { TripsModule } from './trips/trips.module';
 import { PackingModule } from './packing/packing.module';
+import { AccessModule } from './access/access.module';
+import { MembersModule } from './members/members.module';
 
 @Module({
   imports: [
@@ -26,6 +28,8 @@ import { PackingModule } from './packing/packing.module';
       }),
     }),
     PrismaModule,
+    AccessModule,
+    MembersModule,
     AuthModule,
     HouseholdsModule,
     RecipesModule,

@@ -1,0 +1,16 @@
+**/.env
+**/.env.*
+**/*private*
+**/*.pem
+**/*.key
+**/id_rsa*
+**/id_ed25519*
+**/.ssh
+.git
+**/node_modules
+**/dist
+**/*.tsbuildinfo
+outputs
+work
+NUL
+docs

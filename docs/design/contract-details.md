@@ -73,6 +73,8 @@ E：保存为DRAFT时允许缺封面；发布PUBLISHED前要求食材、做法�
 
 ## D05 同餐点菜、需求快照与库存比对
 
+> 2026-09-01 范围更新：以 `decisions-20260901.md` 的 U14 为准。一期完成做饭只记录餐点状态，不自动扣库存；下文实际消耗扣减接口保留为未来设计，不属于一期实现。
+
 E：同家庭同日期同餐别默认一张餐点；目标增加localDate(YYYY-MM-DD)及mealType=BREAKFAST/LUNCH/DINNER/OTHER，唯一(householdId,localDate,mealType)。OTHER另设可选slotKey避免多顿加餐冲突。scheduledAt用于提醒，不当作同餐唯一键。
 
 各成员选择表示“想吃”，不是默认每人做一份。同一道菜多人选择只生成一道待做菜；cookMultiplier由厨师确定，默认1。需求量=菜谱默认量×cookMultiplier，不乘投票人数。可查看每道菜有哪些人想吃。确认餐点时保存菜谱名称、材料名、数量、单位、调料快照，之后编辑菜谱不改历史。
@@ -98,9 +100,11 @@ E：quantity使用Decimal运算并按3位小数返回字符串；不做g/kg、�
 | PATCH /meals/:id/dishes/:recipeId | cookMultiplier, version | 厨师调整实际份数 |
 | POST /meals/:id/confirm | expectedVersion | 锁定快照并写日历投影 |
 | POST /meals/:id/recalculate | snapshotVersion | 全部材料、状态、缺口和匹配原因，不修改库存 |
-| POST /meals/:id/complete | deductInventory, confirmedDeductions[], expectedVersion | 完成及人工确认的扣减，同事务防止重复扣库存 |
+| POST /meals/:id/complete | expectedVersion | 一期仅幂等完成餐点，不修改库存；自动扣减为未来设计 |
 
 ## D06 库存与下次超市清单
+
+> 2026-09-01 范围更新：一期购物勾选不自动增加库存；库存由家人按需手工核实。购买后入库关联保留为未来设计。
 
 库存：Ingredient增加kind=FOOD/SEASONING；InventoryItem为批次/存放位置，food需明确quantity或unknown标志；seasoning可仅availability，不强迫填0.001。调料和菜谱调料用同一标准名称ID匹配，名称相近但不同不得自动合并。STOCK_IN/CONSUME/ADJUST/EXPIRE流水记录actorMembershipId、sourceType、sourceId、before/after、quantityDelta、操作时间。手工修改是绝对值调整，流水存差值。
 

@@ -1,3 +1,4 @@
+import { TrimText } from '../../common/trim-text';
 import { IsDateString, IsEnum, IsOptional, IsString, Length } from 'class-validator';
 import { CalendarEventType } from '@prisma/client';
 
@@ -5,7 +6,7 @@ export class CreateCalendarEventDto {
   @IsEnum(CalendarEventType)
   type!: CalendarEventType;
 
-  @IsString() @Length(1, 80)
+  @TrimText() @IsString() @Length(1, 80)
   title!: string;
 
   @IsDateString()
@@ -14,9 +15,9 @@ export class CreateCalendarEventDto {
   @IsOptional() @IsDateString()
   endsAt?: string;
 
-  @IsOptional() @IsString() @Length(1, 40)
+  @IsOptional() @TrimText() @IsString() @Length(1, 40)
   sourceType?: string;
 
-  @IsOptional() @IsString() @Length(1, 80)
+  @IsOptional() @TrimText() @IsString() @Length(1, 80)
   sourceId?: string;
 }

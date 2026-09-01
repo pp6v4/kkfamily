@@ -13,6 +13,7 @@ export class AccessTokenGuard implements CanActivate {
     if (!token) throw new UnauthorizedException('Missing access token');
     try {
       const payload = await this.jwt.verifyAsync<{ sub: string; openId: string }>(token);
+      if (typeof payload.sub !== 'string' || !payload.sub.trim()) throw new UnauthorizedException('Invalid token subject');
       request.user = { userId: payload.sub, openId: payload.openId };
       return true;
     } catch {

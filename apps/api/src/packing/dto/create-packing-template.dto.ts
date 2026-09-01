@@ -1,20 +1,21 @@
+import { TrimText } from '../../common/trim-text';
 import { Type } from 'class-transformer';
 import { ArrayMaxSize, ArrayMinSize, IsArray, IsInt, IsNumber, IsOptional, IsString, Length, Min, ValidateNested } from 'class-validator';
 
 export class PackingTemplateItemInput {
-  @IsOptional() @IsString() @Length(1, 80)
+  @IsOptional() @TrimText() @IsString() @Length(1, 80)
   id?: string;
 
-  @IsString() @Length(1, 80)
+  @TrimText() @IsString() @Length(1, 80)
   name!: string;
 
   @IsOptional() @IsNumber() @Min(0.001)
   quantity?: number;
 
-  @IsOptional() @IsString() @Length(1, 20)
+  @IsOptional() @TrimText() @IsString() @Length(1, 20)
   unit?: string;
 
-  @IsOptional() @IsString() @Length(1, 200)
+  @IsOptional() @TrimText() @IsString() @Length(1, 200)
   note?: string;
 
   @IsOptional() @IsInt() @Min(0)
@@ -22,10 +23,10 @@ export class PackingTemplateItemInput {
 }
 
 export class CreatePackingTemplateDto {
-  @IsString() @Length(1, 80)
+  @TrimText() @IsString() @Length(1, 80)
   name!: string;
 
-  @IsOptional() @IsString() @Length(1, 300)
+  @IsOptional() @TrimText() @IsString() @Length(1, 300)
   description?: string;
 
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(100)

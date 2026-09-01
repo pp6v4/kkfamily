@@ -1,12 +1,14 @@
-import { IsNumber, IsOptional, IsString, Length, Min } from 'class-validator';
+import { TrimText } from '../../common/trim-text';
+import { IsIn, IsNumber, IsOptional, IsString, Length, Max, Min } from 'class-validator';
 
 export class CreateShoppingItemDto {
-  @IsString() @Length(1, 80)
+  @TrimText() @IsString() @Length(1, 80)
   name!: string;
 
-  @IsOptional() @IsNumber() @Min(0.001)
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 3 }) @Min(0.001) @Max(999999999.999)
   quantity?: number;
 
-  @IsOptional() @IsString() @Length(1, 12)
+  @IsOptional() @TrimText() @IsString() @Length(1, 12)
   unit?: string;
+  @IsOptional() @IsIn(['WISHLIST', 'NEXT_TRIP', 'REPLENISH']) status?: 'WISHLIST' | 'NEXT_TRIP' | 'REPLENISH';
 }

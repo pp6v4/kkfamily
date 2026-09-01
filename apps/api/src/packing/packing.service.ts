@@ -1,3 +1,5 @@
+import { AccessService } from '../access/access.service';
+import { Level, permits } from '../access/permission-policy';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { PackingItemStatus, Prisma } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
@@ -9,7 +11,7 @@ import { UpdateTripPackingItemDto } from './dto/update-trip-packing-item.dto';
 
 @Injectable()
 export class PackingService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(private readonly prisma: PrismaService, private readonly access: AccessService) {}
 
   async listTemplates(userId: string, householdId: string) {
     await this.requireMember(userId, householdId);
@@ -19,7 +21,7 @@ export class PackingService {
   }
 
   async createTemplate(userId: string, householdId: string, dto: CreatePackingTemplateDto) {
-    const membership = await this.requireMember(userId, householdId);
+    const membership = await this.requireMember(userId, householdId, 'EDIT');
     await this.ensureTemplateNameAvailable(householdId, dto.name);
     return { data: await this.prisma.packingTemplate.create({
       data: {
@@ -31,10 +33,10 @@ export class PackingService {
   }
 
   async updateTemplate(userId: string, householdId: string, templateId: string, dto: UpdatePackingTemplateDto) {
-    const membership = await this.requireMember(userId, householdId);
+    const membership = await this.requireMember(userId, householdId, 'EDIT');
     const template = await this.prisma.packingTemplate.findFirst({ where: { id: templateId, householdId } });
     if (!template) throw new NotFoundException('Packing template was not found');
-    const isAdmin = membership.roles.some((entry) => entry.role.code === 'ADMIN');
+    const isAdmin = permits(membership.effectivePermissions, 'packing_templates', 'MANAGE');
     if (template.createdById !== membership.id && !isAdmin) throw new ForbiddenException('Only the template creator or an administrator can edit it');
     if (dto.name && dto.name.trim() !== template.name) await this.ensureTemplateNameAvailable(householdId, dto.name);
     const updated = await this.prisma.$transaction(async (tx) => {
@@ -68,6 +70,7 @@ export class PackingService {
 
   async applyTemplate(userId: string, householdId: string, tripId: string, dto: ApplyPackingTemplateDto) {
     await this.requireTripAccess(userId, householdId, tripId, true);
+    await this.requireMember(userId, householdId);
     const template = await this.prisma.packingTemplate.findFirst({ where: { id: dto.templateId, householdId, archived: false }, include: { items: { orderBy: { sortOrder: 'asc' } } } });
     if (!template) throw new NotFoundException('Packing template was not found');
     const result = await this.prisma.tripPackingItem.createMany({
@@ -128,14 +131,12 @@ export class PackingService {
     if (duplicate) throw new ConflictException('A packing template with this name already exists');
   }
 
-  private async requireMember(userId: string, householdId: string) {
-    const membership = await this.prisma.membership.findFirst({ where: { householdId, userId, status: 'ACTIVE' }, include: { roles: { include: { role: true } } } });
-    if (!membership) throw new ForbiddenException('No access to this household');
-    return membership;
+  private async requireMember(userId: string, householdId: string, level: Level = 'VIEW') {
+    return this.access.require(userId, householdId, 'packing_templates', level);
   }
 
   private async requireTripAccess(userId: string, householdId: string, tripId: string, edit: boolean) {
-    const membership = await this.requireMember(userId, householdId);
+    const membership = await this.access.require(userId, householdId, 'trips', edit ? 'EDIT' : 'VIEW');
     const tripMember = await this.prisma.tripMember.findFirst({ where: { tripId, membershipId: membership.id, trip: { householdId } } });
     if (!tripMember) throw new ForbiddenException('No access to this trip');
     if (edit && !tripMember.canEdit) throw new ForbiddenException('This trip is read-only for the current member');
@@ -144,6 +145,6 @@ export class PackingService {
 
   private async requireResponsibleTripMember(tripId: string, membershipId: string) {
     const member = await this.prisma.tripMember.findUnique({ where: { tripId_membershipId: { tripId, membershipId } } });
-    if (!member) throw new BadRequestException('The responsible member must belong to this trip');
+    if (!member || !(await this.prisma.membership.findFirst({ where: { id: membershipId, status: 'ACTIVE' } }))) throw new BadRequestException('The responsible member must be active and belong to this trip');
   }
 }
