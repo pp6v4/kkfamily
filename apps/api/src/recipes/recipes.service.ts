@@ -47,7 +47,7 @@ export class RecipesService {
       })));
       return tx.recipe.create({
         data: {
-          householdId, categoryId: dto.categoryId, name: dto.name.trim(), coverObjectKey: dto.coverObjectKey,
+          householdId, categoryId: dto.categoryId, name: dto.name.trim(),
           steps: dto.steps.map((step) => step.trim()), createdById: membership.id,
           ingredients: { create: dto.ingredients.map((item, index) => ({ ingredientId: ingredients[index].id, quantity: item.quantity, unit: item.unit, optional: item.optional ?? false })) },
           seasonings: { create: seasonings.map(s => ({ name: s.name, ingredientId: s.id })) },
@@ -92,7 +92,7 @@ export class RecipesService {
         where: { householdId_name_kind: { householdId, name, kind: 'SEASONING' } }, update: {}, create: { householdId, name, kind: 'SEASONING', defaultUnit: '' },
       })));
       const changed = await tx.recipe.updateMany({ where: { id: recipeId, householdId, version: dto.expectedVersion }, data: {
-        name: dto.name, categoryId: dto.categoryId, coverObjectKey: dto.coverObjectKey, steps: dto.steps, version: { increment: 1 },
+        name: dto.name, categoryId: dto.categoryId, steps: dto.steps, version: { increment: 1 },
       } });
       if (changed.count !== 1) throw new ConflictException('菜谱已被其他人修改，请刷新后重试');
       await tx.recipeIngredient.deleteMany({ where: { recipeId } });
@@ -114,6 +114,9 @@ export class RecipesService {
         throw new ConflictException('菜谱已被其他人修改，请刷新后重试');
       }
       if (recipe.status === dto.status) return { data: await tx.recipe.findUniqueOrThrow({ where: { id: recipeId }, include: recipeInclude }) };
+      if (dto.status === RecipeStatus.PUBLISHED) {
+        if (!recipe.coverAssetId || !await tx.mediaAsset.findFirst({ where: { id: recipe.coverAssetId, householdId, status: 'READY' } })) throw new ConflictException('发布菜谱前请先上传并确认成品图片');
+      }
       const updated = await tx.recipe.update({ where: { id: recipeId }, data: { status: dto.status, version: { increment: 1 } }, include: recipeInclude });
       await tx.auditLog.create({ data: { householdId, actorMembershipId: membership.id, action: 'RECIPE_STATUS', targetId: recipeId, details: { from: recipe.status, to: dto.status, fromVersion: recipe.version, toVersion: updated.version } } });
       return { data: updated };

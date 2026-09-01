@@ -14,6 +14,7 @@ import { TripsModule } from './trips/trips.module';
 import { PackingModule } from './packing/packing.module';
 import { AccessModule } from './access/access.module';
 import { MembersModule } from './members/members.module';
+import { MediaModule } from './media/media.module';
 
 @Module({
   imports: [
@@ -25,6 +26,12 @@ import { MembersModule } from './members/members.module';
         JWT_ACCESS_SECRET: Joi.string().min(32).required(),
         WECHAT_APP_ID: Joi.string().allow(''),
         WECHAT_APP_SECRET: Joi.string().allow(''),
+        NODE_ENV: Joi.string().valid('development', 'test', 'production').default('development'),
+        MEDIA_DRIVER: Joi.string().valid('disabled', 'memory', 'cos').default('disabled'),
+        COS_BUCKET: Joi.string().default('family-life-pp6v4-1303887403'),
+        COS_REGION: Joi.string().default('ap-beijing'),
+        COS_SECRET_ID: Joi.string().when('MEDIA_DRIVER', { is: 'cos', then: Joi.required(), otherwise: Joi.allow('') }),
+        COS_SECRET_KEY: Joi.string().when('MEDIA_DRIVER', { is: 'cos', then: Joi.required(), otherwise: Joi.allow('') }),
       }),
     }),
     PrismaModule,
@@ -39,6 +46,7 @@ import { MembersModule } from './members/members.module';
     InventoryModule,
     TripsModule,
     PackingModule,
+    MediaModule,
   ],
   controllers: [HealthController],
 })

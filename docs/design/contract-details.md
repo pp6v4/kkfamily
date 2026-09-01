@@ -168,11 +168,11 @@ TripStop字段：id、title、stopType(MEETING/WAYPOINT/CAMPSITE/ATTRACTION/HOTE
 
 E：照片一期只允许JPEG/PNG/WebP，单张不大于10MiB，一批最多9张；这些是可配置工程上限，非平台限制。用户选择后可压缩，失败允许原图在上限内重试；不主动采集位置，EXIF GPS默认剥离，拍摄地点由用户选择。允许进行中与已完成行程的有效/历史成员添加本人照片。只读成员可有独立photoAdd=true能力，不因此获得行程编辑权。
 
-POST /media/upload-intents输入ownerType(RECIPE/TRIP/FAVORITE/ARCHIVE)、ownerId、filename、mime、size、stopId?，先按所属资源鉴权，后创建intent和随机objectKey。返回intentId、限对象权限的上传凭证、expiresAt、允许大小与类型。客户端直传COS后POST /media/assets/confirm仅提交intentId、objectKey、checksum，后端HEAD核验大小/MIME/键归属并处理图像校验，PENDING→PROCESSING→READY，异常REJECTED。上传意图过期后拒绝确认，孤儿对象24小时后由受限后台清理，不扫描删除任意桶路径。
+POST /media/upload-intents输入ownerType、ownerId、expectedOwnerVersion、mimeType和byteSize，先按所属资源鉴权，后创建intent和随机objectKey。2026-09-01一期工程调整为同域API代理：返回intentId、API uploadPath和expiresAt，不向客户端返回objectKey或COS凭证。PUT uploadPath后由API写私有COS；POST /media/assets/confirm仅提交intentId和checksum，后端HEAD核验大小、MIME、校验值和键归属后READY。上传意图过期后拒绝确认，孤儿对象由后续受限任务按明确前缀清理，不扫描删除任意桶路径。当前先开放RECIPE，TRIP须等行程成员状态闭环后启用。
 
 图片访问先通过业务权限换取短时读地址。有效预签名URL持有者可直接读取，这是能力链接而非每次业务鉴权；撤权后已签发URL不能承诺立刻失效。E：普通行程图URL有效期60秒，客户端登出清缓存；家庭档案敏感附件经鉴权代理读取、不发直链。需更强撤销时使用每次鉴权代理并评估3Mbps带宽，不以私有桶等同完全防转发。[腾讯云预签名说明](https://intl.cloud.tencent.com/zh/document/product/436/45228)。
 
-业务api走pp6v4.com/api/；COS直传/下载实际使用桶域名，必须独立登记小程序对应uploadFile/downloadFile域名。后续Web浏览器默认域名预览限制、CORS及受控代理需另验证，不增加购买新根域名的要求。[腾讯云小程序预签名文档](https://cloud.tencent.com/document/product/436/36162)。
+业务API及一期图片上传/读取都走 `pp6v4.com/api/`，无需购买新域名；具体权衡、8MB限制和COS服务器配置见[一期私有图片代理方案](decisions-20260901-media-proxy.md)。以后若切COS直传/下载，仍必须登记小程序对应uploadFile/downloadFile域名并验证Web CORS。[腾讯云小程序预签名文档](https://cloud.tencent.com/document/product/436/36162)。
 
 GET /trips/:id/photos支持日期游标和节点筛选；PATCH /photos/:id更新caption、takenAt、stopId，原作者或OWNER可改；DELETE先归档、写审计，异步删除遵守保留期。照片必须重新验证真实业务归属，不接受客户端把他人objectKey绑定到自己行程。
 

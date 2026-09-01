@@ -102,7 +102,14 @@ test('Shopping repeat reuses one request id after failure and status update carr
 });
 test('Family API serializes optimistic shopping version instead of a blind status write',async()=>{
   const uni=mockUni();let sent;
-  const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./transport':{ApiError,rawRequest:async(path,method,data)=>{sent={path,method,data};return data;}}},uni);
+  const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent={path,method,data};return data;}}},uni);
   const item={id:'shopping-a',version:9,status:'NEXT_TRIP'};await api.updateShoppingItem(item,'PURCHASED');
   assert.equal(sent.path,'/shopping-lists/items/shopping-a');assert.equal(sent.method,'PATCH');assert.equal(sent.data.expectedVersion,9);assert.equal(sent.data.status,'PURCHASED');
+});
+test('Media client uploads bytes only through authenticated API path and builds same-domain read URL',async()=>{
+  const uni=mockUni();let binary;
+  const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawRequest:async()=>({}),rawBinaryRequest:async(path,method,data,mime,headers)=>{binary={path,method,data,mime,headers};return{checksumSha256:'a'.repeat(64)};}}},uni);
+  const bytes=new ArrayBuffer(8);await api.uploadMediaContent('/media/upload-intents/i/content',bytes,'image/png');
+  assert.equal(binary.path,'/media/upload-intents/i/content');assert.equal(binary.method,'PUT');assert.equal(binary.data,bytes);assert.equal(binary.mime,'image/png');assert.match(binary.headers.Authorization,/^Bearer /);assert.equal(binary.headers['X-Household-Id'],family.householdId);
+  assert.equal(api.publicMediaUrl('/media/public/token'),'https://example.test/api/v1/media/public/token');
 });
