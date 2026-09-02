@@ -10,6 +10,12 @@
       "urlCheck": true,
       "es6": true,
       "minified": true
-    }
+    },
+    "permission": {
+      "scope.userLocation": {
+        "desc": "用于在露营行程中选择地图地点"
+      }
+    },
+    "requiredPrivateInfos": ["chooseLocation"]
   }
 }

@@ -44,6 +44,32 @@ enum TripMemberStatus {
   REVOKED
 }
 
+enum TripStopType {
+  MEETING
+  WAYPOINT
+  CAMPSITE
+  ATTRACTION
+  HOTEL
+  RETURN
+}
+
+enum TripTransportMode {
+  DRIVING
+  RAIL
+  FLIGHT
+  WALKING
+  OTHER
+}
+
+enum TripRouteKind {
+  PLANNED
+  SCHEMATIC
+}
+
+enum CoordinateSystem {
+  GCJ02
+}
+
 enum RecipeStatus {
   DRAFT
   PUBLISHED
@@ -231,6 +257,9 @@ model Trip {
   members      TripMember[]
   packingItems TripPackingItem[]
   preparationGroups TripPreparationGroup[]
+  stops        TripStop[]
+  legs         TripLeg[]
+  accommodations Accommodation[]
 }
 
 model HouseholdInvitation {
@@ -317,6 +346,77 @@ model TripPreparationGroupMember {
 
   @@id([groupId, membershipId])
   @@index([tripId, membershipId])
+}
+
+model TripStop {
+  id          String           @id @default(cuid())
+  tripId      String
+  title       String
+  stopType    TripStopType
+  latitude    Decimal          @db.Decimal(9, 6)
+  longitude   Decimal          @db.Decimal(9, 6)
+  coordSystem CoordinateSystem @default(GCJ02)
+  arriveAt    DateTime?
+  leaveAt     DateTime?
+  sortOrder   Int              @default(0)
+  note        String?
+  version     Int              @default(1)
+  archivedAt  DateTime?
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+  trip        Trip             @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  fromLegs    TripLeg[]        @relation("TripLegFrom")
+  toLegs      TripLeg[]        @relation("TripLegTo")
+  accommodations Accommodation[]
+
+  @@index([tripId, archivedAt, sortOrder, id])
+}
+
+model TripLeg {
+  id              String            @id @default(cuid())
+  tripId          String
+  fromStopId      String
+  toStopId        String
+  mode            TripTransportMode
+  routeKind       TripRouteKind     @default(SCHEMATIC)
+  geometryJson    Json?
+  coordSystem     CoordinateSystem  @default(GCJ02)
+  provider        String?
+  distanceMeters  Int?
+  durationSeconds Int?
+  staleAt         DateTime?
+  version         Int               @default(1)
+  archivedAt      DateTime?
+  createdAt       DateTime          @default(now())
+  updatedAt       DateTime          @updatedAt
+  trip            Trip              @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  fromStop        TripStop          @relation("TripLegFrom", fields: [fromStopId], references: [id])
+  toStop          TripStop          @relation("TripLegTo", fields: [toStopId], references: [id])
+
+  @@index([tripId, archivedAt, createdAt])
+  @@index([fromStopId])
+  @@index([toStopId])
+}
+
+model Accommodation {
+  id              String    @id @default(cuid())
+  tripId          String
+  stopId          String?
+  name            String
+  address         String?
+  checkInDate     DateTime  @db.Date
+  checkOutDate    DateTime  @db.Date
+  contact         String?
+  reservationNote String?
+  version         Int       @default(1)
+  archivedAt      DateTime?
+  createdAt       DateTime  @default(now())
+  updatedAt       DateTime  @updatedAt
+  trip            Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  stop            TripStop? @relation(fields: [stopId], references: [id], onDelete: SetNull)
+
+  @@index([tripId, archivedAt, checkInDate])
+  @@index([stopId])
 }
 
 model PackingTemplate {

@@ -332,6 +332,52 @@ test('D08: packing assignments honor preparation groups, versions, and soft excl
   assert.equal((await call(who,'GET',path)).body.data.length,0);
   const stored=await db.tripPackingItem.findUnique({where:{id:created.body.data.id}});assert.ok(stored.excludedAt);assert.equal(stored.version,3);
 });
+test('D09: itinerary versions, route staleness and confirmed stop removal preserve linked lodging',async()=>{
+  const who=await owner(),viewer=await join(who,['CAMPER']);
+  const trip=(await call(who,'POST','/trips',{title:'路线闭环验证',startsAt:'2026-09-15T08:00:00+08:00'})).body.data;
+  assert.equal((await call(viewer,'GET',`/trips/${trip.id}/itinerary`)).status,403);
+  assert.equal((await call(who,'POST',`/trips/${trip.id}/stops`,{expectedTripVersion:1,title:'越界点',stopType:'WAYPOINT',latitude:91,longitude:120})).status,400);
+  const first=await call(who,'POST',`/trips/${trip.id}/stops`,{expectedTripVersion:1,title:'集合点',stopType:'MEETING',latitude:39.9042,longitude:116.4074});assert.equal(first.status,201,JSON.stringify(first.body));assert.equal(first.body.data.tripVersion,2);
+  assert.equal((await call(who,'POST',`/trips/${trip.id}/stops`,{expectedTripVersion:1,title:'过期写入',stopType:'WAYPOINT',latitude:40,longitude:117})).status,409);
+  const second=await call(who,'POST',`/trips/${trip.id}/stops`,{expectedTripVersion:2,title:'营地',stopType:'CAMPSITE',latitude:40.12,longitude:117.21});assert.equal(second.body.data.tripVersion,3);
+  assert.equal((await call(who,'POST',`/trips/${trip.id}/stops/reorder`,{expectedTripVersion:3,stopIds:[first.body.data.stop.id]})).status,400);
+  const leg=await call(who,'POST',`/trips/${trip.id}/legs`,{expectedTripVersion:3,fromStopId:first.body.data.stop.id,toStopId:second.body.data.stop.id,mode:'DRIVING',routeKind:'SCHEMATIC'});assert.equal(leg.status,201,JSON.stringify(leg.body));assert.equal(leg.body.data.leg.provider,null);assert.equal(leg.body.data.tripVersion,4);
+  assert.equal((await call(who,'POST',`/trips/${trip.id}/legs`,{expectedTripVersion:4,fromStopId:second.body.data.stop.id,toStopId:first.body.data.stop.id,mode:'DRIVING',routeKind:'PLANNED'})).status,400,'Planned route cannot be invented without geometry/provider');
+  assert.equal((await call(who,'POST',`/trips/${trip.id}/accommodations`,{expectedTripVersion:4,name:'日期错误酒店',checkInDate:'2026-09-16',checkOutDate:'2026-09-16'})).status,400);
+  const lodging=await call(who,'POST',`/trips/${trip.id}/accommodations`,{expectedTripVersion:4,stopId:second.body.data.stop.id,name:'营地附近酒店',address:'虚构地址',checkInDate:'2026-09-16',checkOutDate:'2026-09-17',amount:999});assert.equal(lodging.status,201,JSON.stringify(lodging.body));assert.equal(lodging.body.data.tripVersion,5);assert.equal(lodging.body.data.accommodation.amount,undefined,'Budget fields are not part of lodging');
+  const edited=await call(who,'PATCH',`/trips/${trip.id}/stops/${first.body.data.stop.id}`,{expectedTripVersion:5,expectedVersion:1,title:'新集合点'});assert.equal(edited.status,200);assert.equal(edited.body.data.tripVersion,6);
+  let itinerary=await call(who,'GET',`/trips/${trip.id}/itinerary`);assert.ok(itinerary.body.data.legs[0].staleAt,'Changing a stop marks route stale');
+  const impact=await call(who,'GET',`/trips/${trip.id}/stops/${second.body.data.stop.id}/delete-impact`);assert.deepEqual([impact.body.data.legs.length,impact.body.data.accommodations.length],[1,1]);
+  assert.equal((await call(who,'DELETE',`/trips/${trip.id}/stops/${second.body.data.stop.id}?expectedVersion=1&expectedTripVersion=6`)).status,409);
+  const removed=await call(who,'DELETE',`/trips/${trip.id}/stops/${second.body.data.stop.id}?expectedVersion=1&expectedTripVersion=6&confirm=true`);assert.equal(removed.status,200);assert.equal(removed.body.data.tripVersion,7);
+  itinerary=await call(who,'GET',`/trips/${trip.id}/itinerary`);assert.equal(itinerary.body.data.stops.length,1);assert.equal(itinerary.body.data.legs.length,0);assert.equal(itinerary.body.data.accommodations[0].stopId,null,'Lodging survives as trip-level record');
+});
+test('D09: route endpoints reject stops from another trip',async()=>{
+  const who=await owner();
+  const one=(await call(who,'POST','/trips',{title:'行程甲',startsAt:'2026-09-16T08:00:00+08:00'})).body.data,two=(await call(who,'POST','/trips',{title:'行程乙',startsAt:'2026-09-17T08:00:00+08:00'})).body.data;
+  const a=(await call(who,'POST',`/trips/${one.id}/stops`,{expectedTripVersion:1,title:'甲点',stopType:'MEETING',latitude:31,longitude:121})).body.data.stop;
+  const b=(await call(who,'POST',`/trips/${two.id}/stops`,{expectedTripVersion:1,title:'乙点',stopType:'MEETING',latitude:30,longitude:120})).body.data.stop;
+  assert.equal((await call(who,'POST',`/trips/${one.id}/legs`,{expectedTripVersion:2,fromStopId:a.id,toStopId:b.id,mode:'DRIVING'})).status,400);
+});
+test('D09: stale planned route cannot be revived without freshly planned geometry',async()=>{
+  const who=await owner();
+  const trip=(await call(who,'POST','/trips',{title:'规划路线过期验证',startsAt:'2026-09-17T08:00:00+08:00'})).body.data;
+  const first=(await call(who,'POST',`/trips/${trip.id}/stops`,{expectedTripVersion:1,title:'起点',stopType:'MEETING',latitude:31.1,longitude:121.1})).body.data;
+  const second=(await call(who,'POST',`/trips/${trip.id}/stops`,{expectedTripVersion:2,title:'终点',stopType:'CAMPSITE',latitude:31.2,longitude:121.2})).body.data;
+  const leg=(await call(who,'POST',`/trips/${trip.id}/legs`,{expectedTripVersion:3,fromStopId:first.stop.id,toStopId:second.stop.id,mode:'DRIVING',routeKind:'PLANNED',provider:'TEST',geometry:[[121.1,31.1],[121.2,31.2]]})).body.data;
+  const changed=await call(who,'PATCH',`/trips/${trip.id}/stops/${first.stop.id}`,{expectedTripVersion:4,expectedVersion:1,latitude:31.11});assert.equal(changed.status,200);
+  assert.equal((await call(who,'PATCH',`/trips/${trip.id}/legs/${leg.leg.id}`,{expectedTripVersion:5,expectedVersion:2,mode:'WALKING'})).status,409);
+  const replanned=await call(who,'PATCH',`/trips/${trip.id}/legs/${leg.leg.id}`,{expectedTripVersion:5,expectedVersion:2,mode:'WALKING',geometry:[[121.1,31.11],[121.2,31.2]]});assert.equal(replanned.status,200,JSON.stringify(replanned.body));assert.equal(replanned.body.data.leg.staleAt,null);
+});
+test('D09: completed trip members retain itinerary read access but cannot mutate it',async()=>{
+  const who=await owner(),member=await join(who,['CAMPER']);
+  let trip=(await call(who,'POST','/trips',{title:'历史路线验证',startsAt:'2026-09-18T08:00:00+08:00'})).body.data;
+  trip=(await call(who,'POST',`/trips/${trip.id}/members`,{membershipId:member.memberId})).body.data;
+  const stop=await call(who,'POST',`/trips/${trip.id}/stops`,{expectedTripVersion:trip.version,title:'历史营地',stopType:'CAMPSITE',latitude:39,longitude:116});trip.version=stop.body.data.tripVersion;
+  for(const status of ['PENDING','DEPARTING','COMPLETED']){const changed=await call(who,'PATCH',`/trips/${trip.id}/status`,{expectedVersion:trip.version,status});trip=changed.body.data;}
+  assert.equal((await call(member,'GET',`/trips/${trip.id}/itinerary`)).status,200);
+  assert.equal((await call(member,'POST',`/trips/${trip.id}/stops`,{expectedTripVersion:trip.version,title:'历史篡改',stopType:'WAYPOINT',latitude:40,longitude:117})).status,403);
+});
 
 async function mealFixture({quantity=300,unit='g',seasonings=['生抽','醋','盐']}={}) {
   const who=await owner();

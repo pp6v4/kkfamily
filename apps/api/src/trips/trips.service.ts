@@ -12,6 +12,8 @@ const userSelect = { id: true, nickname: true, avatarUrl: true } as const;
 const tripInclude = {
   members: { where: { status: { in: visibleMemberStatuses } }, include: { membership: { include: { user: { select: userSelect } } } }, orderBy: [{ tripRole: 'asc' }, { joinedAt: 'asc' }] },
   preparationGroups: { include: { members: true }, orderBy: { createdAt: 'asc' } },
+  stops: { where: { archivedAt: null }, orderBy: [{ sortOrder: 'asc' }, { id: 'asc' }] },
+  legs: { where: { archivedAt: null }, include: { fromStop: true, toStop: true }, orderBy: [{ createdAt: 'asc' }, { id: 'asc' }] },
   _count: { select: { packingItems: { where: { excludedAt: null } } } },
 } satisfies Prisma.TripInclude;
 

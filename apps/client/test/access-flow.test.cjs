@@ -114,6 +114,15 @@ test('Camping API carries packing versions for updates and soft removal',async()
   assert.equal(sent[0].path,'/trips/trip-a/packing-items/packing-a');assert.equal(sent[0].method,'PATCH');assert.equal(sent[0].data.expectedVersion,4);assert.equal(sent[0].data.status,'PACKED');
   assert.equal(sent[1].path,'/trips/trip-a/packing-items/packing-a?expectedVersion=4');assert.equal(sent[1].method,'DELETE');
 });
+test('Itinerary API carries trip and item versions, including confirmed stop removal',async()=>{
+  const uni=mockUni(),sent=[];
+  const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent.push({path,method,data});return data||{};}}},uni);
+  const trip={id:'trip-a',version:7},stop={id:'stop-a',version:3};
+  await api.createTripStop(trip,{title:'示例营地',stopType:'CAMPSITE',latitude:40.1,longitude:116.2});
+  await api.removeTripStop(trip,stop,true);
+  assert.equal(sent[0].path,'/trips/trip-a/stops');assert.equal(sent[0].method,'POST');assert.equal(sent[0].data.expectedTripVersion,7);
+  assert.equal(sent[1].path,'/trips/trip-a/stops/stop-a?expectedVersion=3&expectedTripVersion=7&confirm=true');assert.equal(sent[1].method,'DELETE');
+});
 test('Media client uploads bytes only through authenticated API path and builds same-domain read URL',async()=>{
   const uni=mockUni();let binary;
   const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawRequest:async()=>({}),rawBinaryRequest:async(path,method,data,mime,headers)=>{binary={path,method,data,mime,headers};return{checksumSha256:'a'.repeat(64)};}}},uni);

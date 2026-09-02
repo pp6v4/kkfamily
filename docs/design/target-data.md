@@ -39,7 +39,7 @@
 | ShoppingItem（扩展） | ingredientId?,sourceVersion:I?,sourceItemKey:S?,purchasedAt:T?,purchasedById?,previousItemId?,version:I,archivedAt:T? | 来源键以列表+来源+版本+项唯一；新项不覆盖已购买历史 |
 | ShoppingPurchase（新增） | id,itemId,actorMembershipId,purchasedAt:T,quantity:D?,unit:S?,stockInTransactionId? | 用于购买后入库关联，不增加价格/预算字段 |
 
-库存扣减将唯一(sourceType,sourceId,sourceVersion,ingredientId,unit)或DeductionOperation幂等记录作为最终防线；锁定同单位库存批次后核实非负再写流水与汇总。失败全部回滚，不产生已完成餐点但半扣库存。过期、未知和不兼容单位不自动扣减。
+以下自动库存扣减结构只保留为未来方案，不属于一期实现。若未来启用，唯一(sourceType,sourceId,sourceVersion,ingredientId,unit)或DeductionOperation幂等记录作为最终防线；锁定同单位库存批次后核实非负再写流水与汇总。失败全部回滚，不产生已完成餐点但半扣库存。过期、未知和不兼容单位不自动扣减。
 
 ## 行程、成员、小组与节点
 
@@ -119,7 +119,7 @@ M02：行程OWNER/历史、小组、节点/路线/住宿、行李快照字段。
 
 M03：媒体上传意图、照片引用、短时URL和孤儿清理。出口：越权objectKey、超限文件、过期intent、旅后上传、撤权TTL行为。
 
-M04：餐点标准日期、实际菜份数、需求快照、调料库存有无、购物来源幂等。出口：500g番茄/3个鸡蛋样例、同名不同单位、未知库存、重复完成不重复扣库存。
+M04：餐点标准日期、实际菜份数、需求快照、调料库存有无、购物来源幂等。出口：500g番茄/3个鸡蛋样例、同名不同单位、未知库存、重复完成时库存始终不变。
 
 M05：日历重复与跨月、待办、收藏、档案、通知。出口：来源过滤、空分母、字段ACL、任务撤销后不发送、授权拒绝时站内提醒。
 

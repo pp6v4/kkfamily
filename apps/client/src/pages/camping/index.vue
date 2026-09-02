@@ -1,6 +1,7 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
+import { computed, onUnmounted, ref } from 'vue';
+import { onHide, onShow } from '@dcloudio/uni-app';
+import TripItinerary from '../../components/trip-itinerary.vue';
 import { canAccess, refreshAccess, type HouseholdContext } from '../../services/session';
 import { takeCalendarTarget } from '../../services/calendar-navigation';
 import { addTripMember, applyPackingTemplate, createPackingTemplate, createTrip, createTripPackingItem, createTripPreparationGroup, getTrip, listPackingTemplates, listTripCandidates, listTripPackingItems, listTrips, removeTripPackingItem, updatePackingTemplate, updateTripMember, updateTripPackingItem, updateTripStatus, type PackingTemplate, type Trip, type TripPackingItem } from '../../services/family-api';
@@ -33,6 +34,33 @@ function canEditTemplate(template: PackingTemplate) { return canAccess(session.v
 const candidateNames = computed(() => candidates.value.map((entry,index)=>entry.user.nickname||`成员${index+1}`));
 const groupNames = computed(() => (selectedTrip.value?.preparationGroups ?? []).map(group=>group.name));
 const packedCount = computed(() => packingItems.value.filter((item) => item.status === 'PACKED').length);
+const pageVisible = ref(false);
+const overviewPulse = ref(false);
+let overviewTimer: ReturnType<typeof setInterval> | undefined;
+const overviewPoints = computed(() => trips.value.flatMap(trip => (trip.stops || []).map(stop => ({ latitude: Number(stop.latitude), longitude: Number(stop.longitude) }))));
+const overviewCenter = computed(() => overviewPoints.value[0] || { latitude: 35.8617, longitude: 104.1954 });
+const overviewMarkers = computed(() => trips.value.flatMap((trip, tripIndex) => (trip.stops || []).map((stop, stopIndex) => ({
+  id: tripIndex * 1000 + stopIndex + 1,
+  latitude: Number(stop.latitude),
+  longitude: Number(stop.longitude),
+  title: `${trip.title} · ${stop.title}`,
+  label: { content: stopIndex === 0 ? trip.title : `${stopIndex + 1}`, color: '#3f5844', fontSize: 11, borderRadius: 8, bgColor: '#fffdf7', padding: 4 },
+}))));
+const overviewPolylines = computed(() => trips.value.flatMap(trip => {
+  const pending = trip.status === 'PLANNING' || trip.status === 'PENDING';
+  return (trip.legs || []).map(leg => {
+    const planned = leg.routeKind === 'PLANNED' && !leg.staleAt && Array.isArray(leg.geometryJson);
+    const raw = planned ? leg.geometryJson! : [[Number(leg.fromStop.longitude), Number(leg.fromStop.latitude)], [Number(leg.toStop.longitude), Number(leg.toStop.latitude)]];
+    const dotted = pending || Boolean(leg.staleAt);
+    return {
+      points: raw.map(point => ({ longitude: Number(point[0]), latitude: Number(point[1]) })),
+      color: dotted ? (overviewPulse.value ? '#68a476' : '#b8d2ba') : trip.status === 'CANCELLED' ? '#b6b9b4' : '#4f8d66',
+      width: dotted ? 4 : 5,
+      dottedLine: dotted,
+      arrowLine: !dotted && (trip.status === 'DEPARTING' || trip.status === 'COMPLETED'),
+    };
+  });
+}));
 
 function message(error: unknown) { return error instanceof Error ? error.message : '操作失败'; }
 function dateText(value: string) { const date = new Date(value); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
@@ -58,6 +86,13 @@ async function openTrip(tripId: string) {
   catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
 }
 function replaceTrip(trip: Trip) { const index=trips.value.findIndex(row=>row.id===trip.id); if(index>=0) trips.value[index]=trip; else trips.value.unshift(trip); }
+async function itineraryChanged(version: number) {
+  const current=selectedTrip.value;
+  if (!current) return;
+  replaceTrip({ ...current, version });
+  try { replaceTrip(await getTrip(current.id)); }
+  catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
+}
 function closeTrip() { selectedTripId.value = ''; packingItems.value = []; candidates.value=[]; showingItemForm.value = false; }
 async function saveTrip() {
   if (!tripForm.value.title.trim() || !tripForm.value.startsAt) { uni.showToast({ title: '请填写行程名称和出发日期', icon: 'none' }); return; }
@@ -137,7 +172,13 @@ async function advanceStatus(){const trip=selectedTrip.value;if(!trip)return;con
 function groupSelection(event:{detail:{value:string[]}}){groupMemberIds.value=event.detail.value;}
 async function saveGroup(){const trip=selectedTrip.value;if(!trip||!groupName.value.trim()||!groupMemberIds.value.length){uni.showToast({title:'填写小组名并选择成员',icon:'none'});return;}try{await createTripPreparationGroup(trip.id,groupName.value.trim(),groupMemberIds.value);groupName.value='';groupMemberIds.value=[];replaceTrip(await getTrip(trip.id));uni.showToast({title:'准备小组已创建',icon:'success'});}catch(error){uni.showToast({title:message(error),icon:'none'});}}
 
-onShow(loadData);
+function startOverviewPulse() {
+  if (overviewTimer) clearInterval(overviewTimer);
+  overviewTimer=setInterval(() => { overviewPulse.value=!overviewPulse.value; }, 850);
+}
+onShow(() => { pageVisible.value=true; startOverviewPulse(); loadData(); });
+onHide(() => { pageVisible.value=false; if (overviewTimer) { clearInterval(overviewTimer); overviewTimer=undefined; } });
+onUnmounted(() => { if (overviewTimer) clearInterval(overviewTimer); });
 </script>
 
 <template>
@@ -146,7 +187,9 @@ onShow(loadData);
     <view class="tabs"><view class="tab" :class="{ chosen: active === 'trips' }" @tap="active = 'trips'">行程</view><view v-if="canAccess(session,'packing_templates')" class="tab" :class="{ chosen: active === 'templates' }" @tap="active = 'templates'">行李模板</view></view>
 
     <view v-if="active === 'trips' && !selectedTrip">
-      <view class="map"><text class="map-icon">🗺️</text><text>中国行程地图</text><text class="map-note">路线绘制将在行程详情中继续完善</text></view>
+      <map v-if="overviewPoints.length" class="overview-map" :latitude="overviewCenter.latitude" :longitude="overviewCenter.longitude" :scale="4" :markers="overviewMarkers" :polyline="overviewPolylines" :include-points="overviewPoints" show-scale />
+      <view v-else class="map"><text class="map-icon">🗺️</text><text>中国行程地图</text><text class="map-note">进入行程添加地点后，这里会汇总展示路线</text></view>
+      <text v-if="overviewPoints.length" class="map-note overview-note">待出行显示闪烁虚线，旅途中和已完成显示实线箭头。</text>
       <view v-if="!trips.length" class="empty">{{canAccess(session,'trips')?'尚未加入任何行程；拥有露营角色不自动加入行程':'尚未获得露营功能权限'}}</view>
       <view v-for="trip in trips" :key="trip.id" class="trip" @tap="openTrip(trip.id)"><view class="pin">📍</view><view class="trip-info"><text class="trip-title">{{ trip.title }}</text><text class="trip-sub">{{ trip.destination || '未填写目的地' }} · {{ dateText(trip.startsAt) }}{{ trip.endsAt ? ` 至 ${dateText(trip.endsAt)}` : '' }}</text><text class="trip-sub">行李 {{ trip._count?.packingItems || 0 }} 项</text></view><text class="state">{{ statusText(trip.status) }}</text></view>
       <view v-if="creatingTrip && canAccess(session,'trips','EDIT')" class="editor"><input v-model="tripForm.title" class="input" placeholder="行程名称" /><input v-model="tripForm.destination" class="input" placeholder="目的地" /><view class="date-row"><picker mode="date" @change="tripForm.startsAt = $event.detail.value"><view class="input">{{ tripForm.startsAt || '出发日期' }}</view></picker><picker mode="date" @change="tripForm.endsAt = $event.detail.value"><view class="input">{{ tripForm.endsAt || '结束日期' }}</view></picker></view><view class="button" @tap="saveTrip">保存行程</view></view>
@@ -156,6 +199,7 @@ onShow(loadData);
     <view v-else-if="active === 'trips' && selectedTrip">
       <view class="back" @tap="closeTrip">‹ 返回行程</view>
       <view class="trip-head"><text class="trip-title">{{ selectedTrip.title }}</text><text class="trip-sub">{{ selectedTrip.destination || '未填写目的地' }} · 已准备 {{ packedCount }}/{{ packingItems.length }}</text></view>
+      <TripItinerary :trip="selectedTrip" :can-edit="canEditTrip" :active="pageVisible" @changed="itineraryChanged" />
       <view class="collab-summary" @tap="showingCollaboration=!showingCollaboration"><text>同行 {{selectedTrip.members.length}} 人 · 准备小组 {{selectedTrip.preparationGroups.length}} 个</text><text>{{showingCollaboration?'收起':'管理协作'}} ›</text></view>
       <view v-if="showingCollaboration" class="editor collab-panel">
         <view v-for="member in selectedTrip.members" :key="member.membershipId" class="member-row"><view><text class="member-name">{{member.membership.user.nickname||'家庭成员'}}</text><text class="member-role">{{member.tripRole==='OWNER'?'行程负责人':'同行成员'}} · {{member.status==='HISTORY'?'历史可见':member.canEdit?'可协作':'只读'}}</text></view><text v-if="isTripOwner && member.membershipId!==session?.membershipId" class="danger-link" @tap="revokeMember(member)">撤销</text></view>
@@ -184,4 +228,5 @@ onShow(loadData);
 <style scoped>
 .page{min-height:100vh;padding:38rpx 28rpx 70rpx;background:#edf5eb}.heading .label,.heading .title,.heading .subtitle,.trip-title,.trip-sub,.map-note,.packing-name,.packing-meta,.responsible,.template-name,.template-description{display:block}.label{font-size:24rpx;letter-spacing:3rpx;color:#6e9770}.title{margin-top:10rpx;font-size:42rpx;font-weight:700;color:#3f5844}.subtitle{margin-top:11rpx;font-size:23rpx;color:#819183}.tabs{display:flex;margin-top:28rpx;padding:7rpx;border-radius:20rpx;background:#dcebd8}.tab{flex:1;padding:16rpx;border-radius:15rpx;text-align:center;color:#6d886f;font-size:24rpx}.tab.chosen{background:#fff;color:#43704a;font-weight:600}.map{margin-top:20rpx;padding:30rpx;border-radius:28rpx;background:linear-gradient(135deg,#dcefd8,#dbeaf0);color:#4e6b54;text-align:center;font-size:28rpx}.map-icon{display:block;margin-bottom:10rpx;font-size:62rpx}.map-note{margin-top:8rpx;color:#819687;font-size:21rpx}.trip{display:flex;align-items:center;gap:18rpx;margin-top:16rpx;padding:24rpx;border-radius:24rpx;background:#fffdf7}.pin{font-size:39rpx}.trip-info{min-width:0;flex:1}.trip-title{font-size:29rpx;color:#465a49}.trip-sub{margin-top:7rpx;color:#909c91;font-size:21rpx}.state{padding:9rpx 12rpx;border-radius:99rpx;background:#e2f0df;color:#5a8160;font-size:20rpx}.empty{padding:65rpx 0;text-align:center;color:#87988a;font-size:25rpx}.button{margin-top:28rpx;padding:25rpx;border-radius:24rpx;background:#69a778;color:#fff;text-align:center;font-size:27rpx}.button.small{margin-top:18rpx;padding:19rpx;font-size:24rpx}.editor{margin-top:20rpx;padding:22rpx;border-radius:24rpx;background:#fff}.input{box-sizing:border-box;width:100%;margin-top:12rpx;padding:19rpx;border:2rpx solid #e3ebe2;border-radius:15rpx;background:#fff;font-size:24rpx;color:#58675a}.date-row,.item-inputs{display:grid;grid-template-columns:1fr 1fr;gap:12rpx}.back{margin:24rpx 0 14rpx;color:#5e8663;font-size:24rpx}.trip-head{padding:24rpx;border-radius:24rpx;background:#fffdf7}.packing-actions{display:flex;gap:14rpx;margin-top:16rpx}.packing-actions picker,.packing-actions>.action{flex:1}.action{padding:18rpx;border-radius:18rpx;background:#d8ead7;color:#4f7955;text-align:center;font-size:23rpx}.notice,.template-explain{margin-top:16rpx;padding:20rpx;border-radius:18rpx;background:#fff8dc;color:#7a704f;font-size:22rpx;line-height:1.6}.packing-item{display:flex;align-items:center;gap:16rpx;margin-top:14rpx;padding:21rpx;border-radius:22rpx;background:#fffdf7}.packing-item.packed{opacity:.62}.check{display:flex;align-items:center;justify-content:center;width:42rpx;height:42rpx;border:2rpx solid #90b492;border-radius:12rpx;color:#fff}.packed .check{background:#69a778}.packing-info{min-width:0;flex:1}.packing-name{font-size:27rpx;color:#48584a}.packed .packing-name{text-decoration:line-through}.quantity{color:#6f7f71;font-size:22rpx}.packing-meta{margin-top:6rpx;color:#9a9b93;font-size:19rpx}.responsible{margin-top:9rpx;color:#5e8b66;font-size:21rpx}.remove{padding:10rpx;color:#ba8373;font-size:34rpx}.template-card{margin-top:16rpx;padding:23rpx;border-radius:24rpx;background:#fffdf7}.template-top{display:flex;justify-content:space-between}.template-name{font-size:29rpx;color:#435747}.template-description{margin-top:7rpx;color:#92998f;font-size:21rpx}.edit{color:#579064;font-size:23rpx}.chips{display:flex;flex-wrap:wrap;gap:9rpx;margin-top:18rpx}.chip{padding:9rpx 13rpx;border-radius:99rpx;background:#e5f0df;color:#627a62;font-size:20rpx}.archive{display:inline-block;margin-top:18rpx;color:#a09283;font-size:20rpx}.editor-title{display:block;font-size:28rpx;font-weight:600;color:#485b4b}.template-row{display:grid;grid-template-columns:1fr 120rpx 100rpx 50rpx;gap:8rpx;align-items:center}.template-note{grid-column:1/4}.template-row .remove{grid-column:4;grid-row:1}.add-row{display:inline-block;margin-top:18rpx;color:#56855d;font-size:23rpx}.cancel{padding:20rpx;text-align:center;color:#8a958b;font-size:23rpx}
 .collab-summary{display:flex;justify-content:space-between;margin-top:14rpx;padding:19rpx 22rpx;border-radius:20rpx;background:#dcebd8;color:#55765b;font-size:22rpx}.member-row{display:flex;align-items:center;justify-content:space-between;padding:15rpx 0;border-bottom:1rpx solid #edf0e9}.member-name,.member-role{display:block}.member-name{color:#465a49;font-size:25rpx}.member-role{margin-top:5rpx;color:#94a096;font-size:19rpx}.danger-link{color:#b87568;font-size:21rpx}.action.full{margin-top:16rpx}.group-list{display:flex;flex-wrap:wrap;gap:8rpx;margin-top:15rpx}.group-editor{margin-top:15rpx;padding-top:8rpx;border-top:1rpx solid #edf0e9}.check-member{display:inline-flex;align-items:center;margin:14rpx 20rpx 0 0;color:#607163;font-size:22rpx}.check-member checkbox{transform:scale(.8)}
+.overview-map{width:100%;height:430rpx;margin-top:20rpx;border-radius:28rpx;overflow:hidden}.overview-note{display:block;padding:0 6rpx 8rpx}
 </style>
