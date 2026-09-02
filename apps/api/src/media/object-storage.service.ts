@@ -1,6 +1,11 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import COS = require('cos-nodejs-sdk-v5');
+
+interface CosClient {
+  putObject(params: Record<string,unknown>): Promise<{headers?:Record<string,unknown>}>;
+  headObject(params: Record<string,unknown>): Promise<{headers?:Record<string,unknown>}>;
+  getObject(params: Record<string,unknown>): Promise<{Body:Buffer;headers?:Record<string,unknown>}>;
+}
 
 export interface StoredObjectHead { bytes: number; mimeType: string; checksumSha256: string; }
 interface StoredObject extends StoredObjectHead { body: Buffer; }
@@ -10,7 +15,7 @@ export class ObjectStorageService {
   private readonly logger = new Logger(ObjectStorageService.name);
   private readonly driver: string;
   private readonly memory = new Map<string, StoredObject>();
-  private readonly cos?: COS;
+  private readonly cos?: CosClient;
   private readonly bucket?: string;
   private readonly region?: string;
 
@@ -19,7 +24,9 @@ export class ObjectStorageService {
     if (this.driver === 'memory' && config.get<string>('NODE_ENV') !== 'test') throw new Error('MEDIA_DRIVER=memory 仅允许测试环境');
     if (this.driver === 'cos') {
       this.bucket = config.getOrThrow<string>('COS_BUCKET'); this.region = config.getOrThrow<string>('COS_REGION');
-      this.cos = new COS({ SecretId: config.getOrThrow<string>('COS_SECRET_ID'), SecretKey: config.getOrThrow<string>('COS_SECRET_KEY'), UploadCheckContentMd5: true, ForceSignHost: true });
+      // Runtime-only load keeps isolated memory-driver tests independent of COS network packages.
+      const CosSdk=require('cos-nodejs-sdk-v5') as new(options:Record<string,unknown>)=>CosClient;
+      this.cos = new CosSdk({ SecretId: config.getOrThrow<string>('COS_SECRET_ID'), SecretKey: config.getOrThrow<string>('COS_SECRET_KEY'), UploadCheckContentMd5: true, ForceSignHost: true });
     }
   }
 

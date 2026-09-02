@@ -76,7 +76,7 @@ export class MediaService {
     for(const reference of asset.references){if(reference.ownerType!==MediaOwnerType.RECIPE)continue;const recipe=await this.prisma.recipe.findFirst({where:{id:reference.ownerId,householdId}});if(!recipe)continue;const member=await this.access.require(userId,householdId,'recipes',recipe.status===RecipeStatus.PUBLISHED?'VIEW':'EDIT');if(permits(member.effectivePermissions,'recipes',recipe.status===RecipeStatus.PUBLISHED?'VIEW':'EDIT')){allowed=true;break;}}
     if(!allowed)throw new NotFoundException('图片不存在');
     const token=await this.jwt.signAsync({typ:'media',assetId:asset.id,householdId},{expiresIn:60,audience:'media'});
-    return{data:{path:`/media/public/${encodeURIComponent(token)}`,expiresAt:new Date(Date.now()+60_000).toISOString()}};
+    return{data:{path:`/media/public?token=${encodeURIComponent(token)}`,expiresAt:new Date(Date.now()+60_000).toISOString()}};
   }
 
   async readPublic(token:string){

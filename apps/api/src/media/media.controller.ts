@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Headers, Param, Post, Put, Res, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Headers, Param, Post, Put, Query, Res, UseGuards } from '@nestjs/common';
 import { FastifyReply } from 'fastify';
 import { AccessTokenGuard } from '../auth/access-token.guard';
 import { CurrentUser, RequestUser } from '../auth/current-user.decorator';
@@ -22,6 +22,6 @@ export class MediaController {
   @Get('assets/:id/url') @UseGuards(AccessTokenGuard)
   readUrl(@CurrentUser() user:RequestUser,@Headers('x-household-id') householdId:string,@Param('id') id:string){return this.media.issueReadUrl(user.userId,householdId,id);}
 
-  @Get('public/:token')
-  async publicImage(@Param('token') token:string,@Res() reply:FastifyReply){const file=await this.media.readPublic(token);return reply.header('Cache-Control','private, max-age=60').type(file.mimeType).send(file.body);}
+  @Get('public')
+  async publicImage(@Query('token') token:string,@Res() reply:FastifyReply){const file=await this.media.readPublic(token);return reply.header('Cache-Control','private, max-age=60').type(file.mimeType).send(file.body);}
 }

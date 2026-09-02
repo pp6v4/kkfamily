@@ -256,7 +256,7 @@ test('A33/A35: private recipe image validates bytes and ownership; revoked user 
   await call(ownerAccount,'PATCH',`/members/${chef.memberId}/status`,{version:1,status:'DISABLED'});
   assert.equal((await call(chef,'GET',`/media/assets/${confirmed.body.data.asset.id}/url`)).status,403);
   const stillShortLived=await app.inject({method:'GET',url:'/v1'+url.body.data.path});assert.equal(stillShortLived.statusCode,200);
-  const token=url.body.data.path.split('/').pop();assert.equal((await call(ownerAccount,'GET','/recipes',undefined,ownerAccount.householdId)).status,200);assert.equal((await call(ownerAccount,'GET','/recipes',undefined,'not-the-household')).status,403);assert.ok(token.length>20);
+  const token=new URL('http://test'+url.body.data.path).searchParams.get('token');assert.equal((await call(ownerAccount,'GET','/recipes',undefined,ownerAccount.householdId)).status,200);assert.equal((await call(ownerAccount,'GET','/recipes',undefined,'not-the-household')).status,403);assert.ok(token.length>20);
 });
 test('A24/A25/A29: arbitrary template items stay exact, repeat apply skips, assignee remains read-only', async () => {
   const who=await owner(), member=await join(who,['CAMPER']);
