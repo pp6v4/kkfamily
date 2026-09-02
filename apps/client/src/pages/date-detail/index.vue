@@ -26,10 +26,12 @@ function openEvent(event: CalendarEvent) {
   if (event.type==='MEAL' || event.type==='TRIP') {
     setCalendarTarget({type:event.type,date:date.value,sourceId:event.sourceId || undefined,mealType:event.type==='MEAL'?event.title:undefined});
     uni.switchTab({url:event.type==='MEAL'?'/pages/meal/index':'/pages/camping/index'});
-  } else { uni.showModal({title:'纪念日',content:event.title,showCancel:false}); }
+  } else if(event.type==='TASK'){uni.navigateTo({url:`/pages/tasks/index?id=${encodeURIComponent(event.sourceId||'')}`});}
+  else { uni.showModal({title:'纪念日',content:event.title,showCancel:false}); }
 }
 function planMeal() { setCalendarTarget({type:'MEAL',date:date.value}); uni.switchTab({url:'/pages/meal/index'}); }
 function planTrip() { setCalendarTarget({type:'TRIP',date:date.value}); uni.switchTab({url:'/pages/camping/index'}); }
+function planTask(){uni.navigateTo({url:`/pages/tasks/index?date=${encodeURIComponent(date.value)}`});}
 async function saveEvent() {
   if (!title.value.trim()) { uni.showToast({ title: '请输入安排内容', icon: 'none' }); return; }
   try { await createCalendarEvent({ type: eventType.value, title: title.value.trim(), startsAt: `${date.value}T09:00:00+08:00` }); title.value = ''; adding.value = false; await loadEvents(); uni.showToast({ title: '已添加', icon: 'success' }); }
@@ -45,7 +47,7 @@ onShow(loadEvents);
     <view v-else class="empty"><text class="empty-icon">☁</text><text>这一天还没有安排</text></view>
     <view v-if="adding" class="editor"><view class="type-row"><text v-for="item in types" :key="item.value" class="type" :class="{ chosen: eventType === item.value }" @tap="eventType = item.value">{{ item.label }}</text></view><input v-model="title" class="input" placeholder="安排内容" /><view class="save" @tap="saveEvent">保存安排</view></view>
     <view v-else class="add" @tap="adding = true">+ 添加纪念日</view>
-    <view class="add" @tap="planMeal">安排当天餐点</view><view class="add" @tap="planTrip">从这天计划出行</view>
+    <view class="add" @tap="planMeal">安排当天餐点</view><view class="add" @tap="planTrip">从这天计划出行</view><view class="add" @tap="planTask">添加当天待办</view>
   </view>
 </template>
 

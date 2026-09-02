@@ -319,6 +319,24 @@ test('D10: trip photos require trip membership, revoke new reads, and allow hist
   const afterUpload=await callRaw(who,afterIntent.body.data.uploadPath,TEST_PNG);const afterConfirm=await call(who,'POST','/media/assets/confirm',{intentId:afterIntent.body.data.id,checksumSha256:afterUpload.body.data.checksumSha256});assert.equal(afterConfirm.status,201);assert.equal(afterConfirm.body.data.ownerVersion,trip.version+1);
   assert.equal((await call(who,'GET',`/trips/${trip.id}/photos`)).body.data.length,2);
 });
+test('A36/C03: task assignment, versions, history, reopen reason and calendar cancellation form one flow',async()=>{
+  const who=await owner(),member=await join(who,['MEMBER']),viewer=await join(who,['GUEST'],[{module:'tasks',level:'VIEW',effect:'ALLOW'},{module:'calendar',level:'VIEW',effect:'ALLOW'}]);
+  const path='/tasks',dueAt='2026-09-25T18:00:00+08:00';
+  assert.equal((await call(member,'POST',path,{type:'TODO',title:'提醒晚于截止',assigneeMembershipId:member.memberId,dueAt,reminderAt:'2026-09-26T09:00:00+08:00',priority:'NORMAL'})).status,400);
+  const created=await call(who,'POST',path,{type:'REQUEST',title:'清洗空调',description:'联系师傅并确认完成',assigneeMembershipId:member.memberId,dueAt,reminderAt:'2026-09-24T09:00:00+08:00',priority:'HIGH'});assert.equal(created.status,201,JSON.stringify(created.body));let task=created.body.data;assert.equal(task.version,1);assert.equal(task.assigneeMembershipId,member.memberId);
+  assert.equal((await call(viewer,'GET',path)).status,200);assert.equal((await call(viewer,'POST',path,{type:'TODO',title:'越权创建',priority:'LOW'})).status,403);
+  assert.equal((await call(member,'PATCH',`${path}/${task.id}`,{expectedVersion:1,assigneeMembershipId:who.memberId})).status,403,'Only managers reassign');
+  let changed=await call(member,'PATCH',`${path}/${task.id}/status`,{expectedVersion:1,status:'IN_PROGRESS'});assert.equal(changed.status,200);task=changed.body.data;
+  assert.equal((await call(member,'PATCH',`${path}/${task.id}/status`,{expectedVersion:1,status:'COMPLETED'})).status,409);
+  assert.equal((await call(member,'POST',`${path}/${task.id}/comments`,{comment:'已联系师傅'})).status,201);
+  changed=await call(member,'PATCH',`${path}/${task.id}/status`,{expectedVersion:task.version,status:'COMPLETED'});task=changed.body.data;assert.equal(task.status,'COMPLETED');assert.ok(task.completedAt);
+  assert.equal((await call(member,'PATCH',`${path}/${task.id}/status`,{expectedVersion:task.version,status:'PENDING'})).status,400,'Reopen requires reason');
+  changed=await call(member,'PATCH',`${path}/${task.id}/status`,{expectedVersion:task.version,status:'PENDING',reason:'返工复查'});task=changed.body.data;assert.equal(task.status,'PENDING');
+  let calendar=await call(viewer,'GET','/calendar/events?from=2026-09-25T00:00:00%2B08:00&to=2026-09-26T00:00:00%2B08:00');assert.ok(calendar.body.data.some(event=>event.sourceType==='TASK'&&event.sourceId===task.id));
+  changed=await call(member,'PATCH',`${path}/${task.id}/status`,{expectedVersion:task.version,status:'CANCELLED'});task=changed.body.data;
+  calendar=await call(viewer,'GET','/calendar/events?from=2026-09-25T00:00:00%2B08:00&to=2026-09-26T00:00:00%2B08:00');assert.ok(!calendar.body.data.some(event=>event.sourceId===task.id));
+  const detail=await call(who,'GET',`${path}/${task.id}`);assert.ok(detail.body.data.history.length>=6);assert.ok(detail.body.data.history.some(item=>item.comment==='返工复查'));
+});
 test('A24/A25/A29: arbitrary template items stay exact, repeat apply skips, assignee remains read-only', async () => {
   const who=await owner(), member=await join(who,['CAMPER']);
   const trip=(await call(who,'POST','/trips',{title:'虚构验证出行',startsAt:'2026-09-01T09:00:00+08:00'})).body.data;

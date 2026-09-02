@@ -15,6 +15,7 @@ import { PackingModule } from './packing/packing.module';
 import { AccessModule } from './access/access.module';
 import { MembersModule } from './members/members.module';
 import { MediaModule } from './media/media.module';
+import { TasksModule } from './tasks/tasks.module';
 
 @Module({
   imports: [
@@ -47,6 +48,7 @@ import { MediaModule } from './media/media.module';
     TripsModule,
     PackingModule,
     MediaModule,
+    TasksModule,
   ],
   controllers: [HealthController],
 })

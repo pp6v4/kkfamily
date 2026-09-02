@@ -137,3 +137,11 @@ test('Trip photo client binds upload intent and gallery listing to the selected 
   assert.equal(sent[0].path,'/media/upload-intents');assert.equal(sent[0].data.ownerType,'TRIP');assert.equal(sent[0].data.expectedOwnerVersion,8);
   assert.equal(sent[1].path,'/trips/trip-a/photos');assert.equal(sent[1].method,'GET');
 });
+test('Task client sends optimistic version for content and status updates',async()=>{
+  const uni=mockUni(),sent=[];
+  const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent.push({path,method,data});return data||{};}}},uni);
+  const task={id:'task-a',version:6,status:'PENDING'};
+  await api.updateTask(task,{title:'清洗空调'});await api.updateTaskStatus(task,'IN_PROGRESS');
+  assert.equal(sent[0].path,'/tasks/task-a');assert.equal(sent[0].method,'PATCH');assert.equal(sent[0].data.expectedVersion,6);assert.equal(sent[0].data.title,'清洗空调');
+  assert.equal(sent[1].path,'/tasks/task-a/status');assert.equal(sent[1].method,'PATCH');assert.equal(sent[1].data.expectedVersion,6);assert.equal(sent[1].data.status,'IN_PROGRESS');
+});

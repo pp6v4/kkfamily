@@ -186,7 +186,7 @@ E：纪念日一期公历年度重复，2月29日非闰年默认2月28日、可�
 
 待办字段title(1~120)、description(<=2000)、assigneeMembershipId、dueAt?、priority(LOW/NORMAL/HIGH)、status(PENDING/IN_PROGRESS/COMPLETED/CANCELLED)、reminderAt?、createdById、version。示例“清洗空调”是普通待办，不做周期家务排班或积分。E：工单作为待办的一种type=REQUEST，共用处理记录，支持问题描述、附件、受理、处理、完成；若用户期待软件反馈工单，应另评审不混淆。
 
-任务负责人或tasks:MANAGE可推进状态，创建者可改未开始任务；只有管理权限可重新分配。截止日前后提醒不改变完成状态；完成写completedAt/completedBy，重新打开需原因，TaskHistory保留。GET/POST /tasks；GET/PATCH /tasks/:id；PATCH /tasks/:id/status；POST /tasks/:id/comments。删除使用归档并取消待发提醒。
+任务负责人或tasks:MANAGE可推进状态，创建者可改未开始任务；只有管理权限可重新分配。截止日前后提醒不改变完成状态；完成写completedAt/completedBy，重新打开需原因，TaskHistory保留。GET/POST /tasks；GET/PATCH /tasks/:id；PATCH /tasks/:id/status；POST /tasks/:id/comments。删除使用归档并取消待发提醒。当前待办主链路及截止日日历聚合已实现；reminderAt只保存计划，须等D13 Inbox/outbox/worker落地后才视为真正提醒。
 
 ## D12 收藏灵感、档案和看板
 

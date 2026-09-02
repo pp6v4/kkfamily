@@ -23,6 +23,9 @@ export interface Trip { id: string; version: number; title: string; status: 'PLA
 export interface PackingTemplateItem { id: string; name: string; defaultQuantity: string | number | null; unit: string | null; note: string | null; sortOrder: number }
 export interface PackingTemplate { id: string; createdById: string; name: string; description: string | null; archived: boolean; items: PackingTemplateItem[] }
 export interface TripPackingItem { id: string; version: number; name: string; quantity: string | number | null; unit: string | null; note: string | null; status: 'PENDING' | 'PACKED'; responsibleMembershipId: string | null; groupId: string | null; sourceTemplateNameSnapshot: string | null; sourceItemNameSnapshot: string | null; sourceTemplate: { id: string; name: string } | null; group: { id: string; name: string } | null; responsibleMembership: { id: string; user: { id: string; nickname: string | null; avatarUrl: string | null } } | null }
+export interface TaskPerson { id:string; user:{id:string;nickname:string|null;avatarUrl:string|null} }
+export interface TaskHistory { id:string; fromStatus:Task['status']|null; toStatus:Task['status']|null; comment:string|null; createdAt:string; actor:TaskPerson }
+export interface Task { id:string; version:number; type:'TODO'|'REQUEST'; title:string; description:string|null; assigneeMembershipId:string|null; dueAt:string|null; reminderAt:string|null; priority:'LOW'|'NORMAL'|'HIGH'; status:'PENDING'|'IN_PROGRESS'|'COMPLETED'|'CANCELLED'; completedAt:string|null; assignee:TaskPerson|null; createdBy:TaskPerson; completedBy:TaskPerson|null; history?:TaskHistory[] }
 
 async function request<T>(path: string, method: UniApp.RequestOptions['method'] = 'GET', data?: unknown): Promise<T> {
   const session = await ensureSession();
@@ -98,3 +101,10 @@ export function applyPackingTemplate(tripId: string, templateId: string) { retur
 export function createTripPackingItem(tripId: string, input: { name: string; quantity?: number; unit?: string; note?: string; responsibleMembershipId?: string; groupId?: string }) { return request<TripPackingItem>(`/trips/${tripId}/packing-items`, 'POST', input); }
 export function updateTripPackingItem(tripId: string, item: TripPackingItem, input: { name?: string; quantity?: number; unit?: string; note?: string; status?: TripPackingItem['status']; responsibleMembershipId?: string; groupId?: string }) { return request<TripPackingItem>(`/trips/${tripId}/packing-items/${item.id}`, 'PATCH', { expectedVersion: item.version, ...input }); }
 export function removeTripPackingItem(tripId: string, item: TripPackingItem) { return request<{ removed: boolean }>(`/trips/${tripId}/packing-items/${item.id}?expectedVersion=${item.version}`, 'DELETE'); }
+export function listTasks(status?:Task['status']){return request<Task[]>(`/tasks${status?`?status=${status}`:''}`);}
+export function getTask(taskId:string){return request<Task>(`/tasks/${taskId}`);}
+export function listTaskAssignees(){return request<TaskPerson[]>('/tasks/assignees');}
+export function createTask(input:{type:Task['type'];title:string;description?:string;assigneeMembershipId?:string;dueAt?:string;priority:Task['priority'];reminderAt?:string}){return request<Task>('/tasks','POST',input);}
+export function updateTask(task:Task,input:{type?:Task['type'];title?:string;description?:string;assigneeMembershipId?:string|null;dueAt?:string|null;priority?:Task['priority'];reminderAt?:string|null}){return request<Task>(`/tasks/${task.id}`,'PATCH',{expectedVersion:task.version,...input});}
+export function updateTaskStatus(task:Task,status:Task['status'],reason?:string){return request<Task>(`/tasks/${task.id}/status`,'PATCH',{expectedVersion:task.version,status,reason});}
+export function addTaskComment(taskId:string,comment:string){return request<Task>(`/tasks/${taskId}/comments`,'POST',{comment});}

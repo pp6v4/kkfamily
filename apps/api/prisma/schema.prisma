@@ -143,6 +143,24 @@ enum MediaAssetStatus {
   DELETED
 }
 
+enum TaskType {
+  TODO
+  REQUEST
+}
+
+enum TaskPriority {
+  LOW
+  NORMAL
+  HIGH
+}
+
+enum TaskStatus {
+  PENDING
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
 model User {
   id          String       @id @default(cuid())
   openId      String       @unique
@@ -172,6 +190,7 @@ model Household {
   uploadIntents    UploadIntent[]
   mediaAssets      MediaAsset[]
   mediaReferences  MediaReference[]
+  tasks            Task[]
 }
 
 model CalendarEvent {
@@ -210,6 +229,10 @@ model Membership {
   invitationRedemptions   InvitationRedemption[]
   requestedUploads        UploadIntent[]         @relation("UploadRequester")
   createdMediaAssets      MediaAsset[]           @relation("MediaCreator")
+  createdTasks            Task[]                 @relation("TaskCreator")
+  assignedTasks           Task[]                 @relation("TaskAssignee")
+  completedTasks          Task[]                 @relation("TaskCompleter")
+  taskHistory             TaskHistory[]
 
   @@unique([householdId, userId])
 }
@@ -736,4 +759,46 @@ model MediaReference {
 
   @@unique([assetId, ownerType, ownerId])
   @@index([householdId, ownerType, ownerId])
+}
+
+model Task {
+  id                   String       @id @default(cuid())
+  householdId          String
+  type                 TaskType     @default(TODO)
+  title                String
+  description          String?
+  assigneeMembershipId String?
+  dueAt                DateTime?
+  priority             TaskPriority @default(NORMAL)
+  status               TaskStatus   @default(PENDING)
+  reminderAt           DateTime?
+  createdById          String
+  completedById        String?
+  completedAt          DateTime?
+  version              Int          @default(1)
+  archivedAt           DateTime?
+  createdAt            DateTime     @default(now())
+  updatedAt            DateTime     @updatedAt
+  household            Household    @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  assignee              Membership?  @relation("TaskAssignee", fields: [assigneeMembershipId], references: [id], onDelete: SetNull)
+  createdBy             Membership   @relation("TaskCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  completedBy           Membership?  @relation("TaskCompleter", fields: [completedById], references: [id], onDelete: SetNull)
+  history               TaskHistory[]
+
+  @@index([householdId, status, dueAt, id])
+  @@index([assigneeMembershipId, status, dueAt])
+}
+
+model TaskHistory {
+  id                String      @id @default(cuid())
+  taskId            String
+  actorMembershipId String
+  fromStatus        TaskStatus?
+  toStatus          TaskStatus?
+  comment           String?
+  createdAt         DateTime    @default(now())
+  task              Task        @relation(fields: [taskId], references: [id], onDelete: Cascade)
+  actor             Membership  @relation(fields: [actorMembershipId], references: [id], onDelete: Restrict)
+
+  @@index([taskId, createdAt, id])
 }

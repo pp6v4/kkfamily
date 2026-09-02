@@ -16,15 +16,17 @@ export class CalendarService {
     if (Number.isNaN(from.valueOf()) || Number.isNaN(to.valueOf()) || from >= to) throw new BadRequestException('Invalid calendar range');
     if (to.getTime() - from.getTime() > 370 * 86400_000) throw new BadRequestException('查询范围不能超过370天');
     // Derive linked events from authorized source rows, never trust a stale projection.
-    const [anniversaries, meals, trips] = await Promise.all([
+    const [anniversaries, meals, trips, tasks] = await Promise.all([
       this.prisma.calendarEvent.findMany({ where: { householdId, type: 'ANNIVERSARY', sourceId: null, sourceType: null, startsAt: { lt: to }, OR: [{ endsAt: { gt: from } }, { startsAt: { gte: from } }] }, orderBy: { startsAt: 'asc' } }),
       permits(member.effectivePermissions, 'meals') ? this.prisma.meal.findMany({ where: { householdId, scheduledAt: { gte: from, lt: to }, status: { not: 'CANCELLED' } } }) : [],
       permits(member.effectivePermissions, 'trips') ? this.prisma.trip.findMany({ where: { householdId, status: { not: 'CANCELLED' }, members: { some: { membershipId: member.id, status: { in: ['ACTIVE', 'HISTORY'] } } }, startsAt: { lt: to }, OR: [{ endsAt: { gt: from } }, { startsAt: { gte: from } }] } }) : [],
+      permits(member.effectivePermissions, 'tasks') ? this.prisma.task.findMany({ where: { householdId, archivedAt: null, status: { not: 'CANCELLED' }, dueAt: { gte: from, lt: to } } }) : [],
     ]);
     return { data: [
       ...anniversaries,
       ...meals.map(meal => ({ id: `meal:${meal.id}`, type: 'MEAL', title: (({ BREAKFAST: '早餐', LUNCH: '午餐', DINNER: '晚餐', OTHER: '加餐' } as Record<string, string>)[meal.mealType] ?? meal.mealType) + (meal.slotKey ? ` · ${meal.slotKey}` : ''), startsAt: meal.scheduledAt, endsAt: null, sourceType: 'MEAL', sourceId: meal.id })),
       ...trips.map(trip => ({ id: `trip:${trip.id}`, type: 'TRIP', title: trip.title, startsAt: trip.startsAt, endsAt: trip.endsAt, sourceType: 'TRIP', sourceId: trip.id })),
+      ...tasks.map(task => ({ id: `task:${task.id}`, type: 'TASK', title: task.title, startsAt: task.dueAt!, endsAt: null, sourceType: 'TASK', sourceId: task.id })),
     ].sort((a, b) => a.startsAt.getTime() - b.startsAt.getTime() || a.id.localeCompare(b.id)) };
   }
 

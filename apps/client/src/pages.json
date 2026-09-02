@@ -8,7 +8,8 @@
     { "path": "pages/date-detail/index", "style": { "navigationBarTitleText": "当天安排" } },
     { "path": "pages/recipe-editor/index", "style": { "navigationBarTitleText": "添加菜谱" } },
     { "path": "pages/join/index", "style": { "navigationBarTitleText": "欢迎回家" } },
-    { "path": "pages/members/index", "style": { "navigationBarTitleText": "成员与权限" } }
+    { "path": "pages/members/index", "style": { "navigationBarTitleText": "成员与权限" } },
+    { "path": "pages/tasks/index", "style": { "navigationBarTitleText": "家庭待办" } }
   ],
   "globalStyle": { "navigationBarTextStyle": "black", "navigationBarBackgroundColor": "#fffdf7", "backgroundColor": "#f7f3e8" },
   "tabBar": {
