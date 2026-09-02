@@ -1,11 +1,11 @@
-import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Delete, Get, Headers, Param, Patch, Post, Query, UseGuards } from '@nestjs/common';
 import { AccessTokenGuard } from '../auth/access-token.guard';
 import { CurrentUser, RequestUser } from '../auth/current-user.decorator';
 import { ApplyPackingTemplateDto } from './dto/apply-packing-template.dto';
 import { CreatePackingTemplateDto } from './dto/create-packing-template.dto';
 import { CreateTripPackingItemDto } from './dto/create-trip-packing-item.dto';
 import { UpdatePackingTemplateDto } from './dto/update-packing-template.dto';
-import { UpdateTripPackingItemDto } from './dto/update-trip-packing-item.dto';
+import { RemoveTripPackingItemDto, UpdateTripPackingItemDto } from './dto/update-trip-packing-item.dto';
 import { PackingService } from './packing.service';
 
 @Controller()
@@ -35,5 +35,5 @@ export class PackingController {
   updateTripItem(@CurrentUser() user: RequestUser, @Headers('x-household-id') householdId: string, @Param('tripId') tripId: string, @Param('itemId') itemId: string, @Body() dto: UpdateTripPackingItemDto) { return this.packingService.updateTripItem(user.userId, householdId, tripId, itemId, dto); }
 
   @Delete('trips/:tripId/packing-items/:itemId')
-  removeTripItem(@CurrentUser() user: RequestUser, @Headers('x-household-id') householdId: string, @Param('tripId') tripId: string, @Param('itemId') itemId: string) { return this.packingService.removeTripItem(user.userId, householdId, tripId, itemId); }
+  removeTripItem(@CurrentUser() user: RequestUser, @Headers('x-household-id') householdId: string, @Param('tripId') tripId: string, @Param('itemId') itemId: string, @Query() dto: RemoveTripPackingItemDto) { return this.packingService.removeTripItem(user.userId, householdId, tripId, itemId, dto.expectedVersion); }
 }

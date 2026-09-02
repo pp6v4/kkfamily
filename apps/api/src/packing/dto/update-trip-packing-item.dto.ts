@@ -1,8 +1,12 @@
 import { TrimText } from '../../common/trim-text';
 import { PackingItemStatus } from '@prisma/client';
-import { IsEnum, IsNumber, IsOptional, IsString, Length, Min } from 'class-validator';
+import { Type } from 'class-transformer';
+import { IsEnum, IsInt, IsNumber, IsOptional, IsString, Length, Min } from 'class-validator';
 
 export class UpdateTripPackingItemDto {
+  @IsInt() @Min(1)
+  expectedVersion!: number;
+
   @IsOptional() @TrimText() @IsString() @Length(1, 80)
   name?: string;
 
@@ -20,4 +24,12 @@ export class UpdateTripPackingItemDto {
 
   @IsOptional() @TrimText() @IsString() @Length(0, 80)
   responsibleMembershipId?: string;
+
+  @IsOptional() @TrimText() @IsString() @Length(0, 80)
+  groupId?: string;
+}
+
+export class RemoveTripPackingItemDto {
+  @Type(() => Number) @IsInt() @Min(1)
+  expectedVersion!: number;
 }

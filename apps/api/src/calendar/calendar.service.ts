@@ -19,7 +19,7 @@ export class CalendarService {
     const [anniversaries, meals, trips] = await Promise.all([
       this.prisma.calendarEvent.findMany({ where: { householdId, type: 'ANNIVERSARY', sourceId: null, sourceType: null, startsAt: { lt: to }, OR: [{ endsAt: { gt: from } }, { startsAt: { gte: from } }] }, orderBy: { startsAt: 'asc' } }),
       permits(member.effectivePermissions, 'meals') ? this.prisma.meal.findMany({ where: { householdId, scheduledAt: { gte: from, lt: to }, status: { not: 'CANCELLED' } } }) : [],
-      permits(member.effectivePermissions, 'trips') ? this.prisma.trip.findMany({ where: { householdId, status: { not: 'CANCELLED' }, members: { some: { membershipId: member.id } }, startsAt: { lt: to }, OR: [{ endsAt: { gt: from } }, { startsAt: { gte: from } }] } }) : [],
+      permits(member.effectivePermissions, 'trips') ? this.prisma.trip.findMany({ where: { householdId, status: { not: 'CANCELLED' }, members: { some: { membershipId: member.id, status: { in: ['ACTIVE', 'HISTORY'] } } }, startsAt: { lt: to }, OR: [{ endsAt: { gt: from } }, { startsAt: { gte: from } }] } }) : [],
     ]);
     return { data: [
       ...anniversaries,

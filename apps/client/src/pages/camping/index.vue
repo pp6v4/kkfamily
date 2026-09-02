@@ -3,7 +3,7 @@ import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { canAccess, refreshAccess, type HouseholdContext } from '../../services/session';
 import { takeCalendarTarget } from '../../services/calendar-navigation';
-import { applyPackingTemplate, createPackingTemplate, createTrip, createTripPackingItem, listPackingTemplates, listTripPackingItems, listTrips, removeTripPackingItem, updatePackingTemplate, updateTripPackingItem, type PackingTemplate, type Trip, type TripPackingItem } from '../../services/family-api';
+import { addTripMember, applyPackingTemplate, createPackingTemplate, createTrip, createTripPackingItem, createTripPreparationGroup, getTrip, listPackingTemplates, listTripCandidates, listTripPackingItems, listTrips, removeTripPackingItem, updatePackingTemplate, updateTripMember, updateTripPackingItem, updateTripStatus, type PackingTemplate, type Trip, type TripPackingItem } from '../../services/family-api';
 
 type ViewName = 'trips' | 'templates';
 interface TemplateItemForm { id?: string; name: string; quantity: string; unit: string; note: string }
@@ -20,11 +20,18 @@ const showingItemForm = ref(false);
 const tripForm = ref({ title: '', destination: '', startsAt: '', endsAt: '' });
 const templateForm = ref<{ name: string; description: string; items: TemplateItemForm[] }>({ name: '', description: '', items: [{ name: '', quantity: '', unit: '', note: '' }] });
 const itemForm = ref({ name: '', quantity: '', unit: '', note: '' });
+const candidates = ref<Array<{ id: string; user: { id: string; nickname: string | null; avatarUrl: string | null } }>>([]);
+const showingCollaboration = ref(false);
+const groupName = ref('');
+const groupMemberIds = ref<string[]>([]);
 
 const selectedTrip = computed(() => trips.value.find((trip) => trip.id === selectedTripId.value));
-const canEditTrip = computed(() => canAccess(session.value,'trips','EDIT') && Boolean(selectedTrip.value?.members.find(m=>m.membershipId===session.value?.membershipId)?.canEdit));
+const currentTripMember = computed(() => selectedTrip.value?.members.find(m=>m.membershipId===session.value?.membershipId));
+const canEditTrip = computed(() => canAccess(session.value,'trips','EDIT') && currentTripMember.value?.status === 'ACTIVE' && Boolean(currentTripMember.value?.canEdit) && !['COMPLETED','CANCELLED'].includes(selectedTrip.value?.status || ''));
+const isTripOwner = computed(() => canEditTrip.value && currentTripMember.value?.tripRole === 'OWNER');
 function canEditTemplate(template: PackingTemplate) { return canAccess(session.value,'packing_templates','EDIT') && (template.createdById===session.value?.membershipId || canAccess(session.value,'packing_templates','MANAGE')); }
-const memberNames = computed(() => (selectedTrip.value?.members ?? []).map((entry, index) => entry.membership.user.nickname || `成员${index + 1}`));
+const candidateNames = computed(() => candidates.value.map((entry,index)=>entry.user.nickname||`成员${index+1}`));
+const groupNames = computed(() => (selectedTrip.value?.preparationGroups ?? []).map(group=>group.name));
 const packedCount = computed(() => packingItems.value.filter((item) => item.status === 'PACKED').length);
 
 function message(error: unknown) { return error instanceof Error ? error.message : '操作失败'; }
@@ -47,10 +54,11 @@ async function loadData() {
 }
 async function openTrip(tripId: string) {
   selectedTripId.value = tripId;
-  try { packingItems.value = await listTripPackingItems(tripId); }
+  try { const [trip, items] = await Promise.all([getTrip(tripId), listTripPackingItems(tripId)]); replaceTrip(trip); packingItems.value = items; candidates.value = trip.members.some(m=>m.membershipId===session.value?.membershipId && m.tripRole==='OWNER' && m.status==='ACTIVE') ? await listTripCandidates(tripId) : []; }
   catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
 }
-function closeTrip() { selectedTripId.value = ''; packingItems.value = []; showingItemForm.value = false; }
+function replaceTrip(trip: Trip) { const index=trips.value.findIndex(row=>row.id===trip.id); if(index>=0) trips.value[index]=trip; else trips.value.unshift(trip); }
+function closeTrip() { selectedTripId.value = ''; packingItems.value = []; candidates.value=[]; showingItemForm.value = false; }
 async function saveTrip() {
   if (!tripForm.value.title.trim() || !tripForm.value.startsAt) { uni.showToast({ title: '请填写行程名称和出发日期', icon: 'none' }); return; }
   try {
@@ -102,23 +110,32 @@ async function saveTripItem() {
 }
 async function togglePacked(item: TripPackingItem) {
   if (!selectedTrip.value) return;
-  try { await updateTripPackingItem(selectedTrip.value.id, item.id, { status: item.status === 'PACKED' ? 'PENDING' : 'PACKED' }); packingItems.value = await listTripPackingItems(selectedTrip.value.id); }
+  try { await updateTripPackingItem(selectedTrip.value.id, item, { status: item.status === 'PACKED' ? 'PENDING' : 'PACKED' }); packingItems.value = await listTripPackingItems(selectedTrip.value.id); }
   catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
 }
 async function assign(item: TripPackingItem, memberIndex: number) {
-  const trip = selectedTrip.value; const member = trip?.members[memberIndex];
+  const trip = selectedTrip.value; const member = assignableMembers(item)[memberIndex];
   if (!trip || !member) return;
-  try { await updateTripPackingItem(trip.id, item.id, { responsibleMembershipId: member.membershipId }); packingItems.value = await listTripPackingItems(trip.id); }
+  try { await updateTripPackingItem(trip.id, item, { responsibleMembershipId: member.membershipId }); packingItems.value = await listTripPackingItems(trip.id); }
   catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
 }
+function assignableMembers(item:TripPackingItem){const trip=selectedTrip.value;if(!trip)return[];const active=trip.members.filter(member=>member.status==='ACTIVE');if(!item.groupId)return active;const group=trip.preparationGroups.find(entry=>entry.id===item.groupId);return group?active.filter(member=>group.members.some(entry=>entry.membershipId===member.membershipId)):active;}
+function assignableMemberNames(item:TripPackingItem){return assignableMembers(item).map((entry,index)=>entry.membership.user.nickname||`成员${index+1}`);}
+async function assignGroup(item:TripPackingItem,groupIndex:number){const trip=selectedTrip.value,group=trip?.preparationGroups[groupIndex];if(!trip||!group)return;const keepResponsible=item.responsibleMembershipId&&group.members.some(m=>m.membershipId===item.responsibleMembershipId);try{await updateTripPackingItem(trip.id,item,{groupId:group.id,...(keepResponsible?{}:{responsibleMembershipId:''})});packingItems.value=await listTripPackingItems(trip.id);}catch(error){uni.showToast({title:message(error),icon:'none'});}}
 function removeItem(item: TripPackingItem) {
   if (!selectedTrip.value) return;
   uni.showModal({ title: '移除行李', content: `从本次行程移除“${item.name}”？不会影响原模板。`, success: async (result) => {
     if (!result.confirm || !selectedTrip.value) return;
-    try { await removeTripPackingItem(selectedTrip.value.id, item.id); packingItems.value = await listTripPackingItems(selectedTrip.value.id); }
+    try { await removeTripPackingItem(selectedTrip.value.id, item); packingItems.value = await listTripPackingItems(selectedTrip.value.id); }
     catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
   } });
 }
+
+async function addMemberByIndex(event:{detail:{value:string}}){const trip=selectedTrip.value,candidate=candidates.value[Number(event.detail.value)];if(!trip||!candidate)return;try{replaceTrip(await addTripMember(trip.id,candidate.id));candidates.value=await listTripCandidates(trip.id);uni.showToast({title:'已加入行程',icon:'success'});}catch(error){uni.showToast({title:message(error),icon:'none'});}}
+function revokeMember(member: Trip['members'][number]){const trip=selectedTrip.value;if(!trip)return;uni.showModal({title:'撤销行程访问',content:`撤销“${member.membership.user.nickname||'该成员'}”后会立即失去访问，未完成的负责人分配将被清空。`,success:async result=>{if(!result.confirm)return;try{replaceTrip(await updateTripMember(trip.id,member,{status:'REVOKED',clearResponsibilities:true}));packingItems.value=await listTripPackingItems(trip.id);candidates.value=await listTripCandidates(trip.id);}catch(error){uni.showToast({title:message(error),icon:'none'});}}});}
+async function advanceStatus(){const trip=selectedTrip.value;if(!trip)return;const next=({PLANNING:'PENDING',PENDING:'DEPARTING',DEPARTING:'COMPLETED'} as Partial<Record<Trip['status'],Trip['status']>>)[trip.status];if(!next)return;uni.showModal({title:next==='COMPLETED'?'完成行程':'更新行程状态',content:next==='COMPLETED'?'完成后所有成员保留历史查看，但不能继续修改。':`将行程更新为“${statusText(next)}”？`,success:async result=>{if(!result.confirm)return;try{replaceTrip(await updateTripStatus(trip,next));}catch(error){uni.showToast({title:message(error),icon:'none'});}}});}
+function groupSelection(event:{detail:{value:string[]}}){groupMemberIds.value=event.detail.value;}
+async function saveGroup(){const trip=selectedTrip.value;if(!trip||!groupName.value.trim()||!groupMemberIds.value.length){uni.showToast({title:'填写小组名并选择成员',icon:'none'});return;}try{await createTripPreparationGroup(trip.id,groupName.value.trim(),groupMemberIds.value);groupName.value='';groupMemberIds.value=[];replaceTrip(await getTrip(trip.id));uni.showToast({title:'准备小组已创建',icon:'success'});}catch(error){uni.showToast({title:message(error),icon:'none'});}}
 
 onShow(loadData);
 </script>
@@ -139,11 +156,19 @@ onShow(loadData);
     <view v-else-if="active === 'trips' && selectedTrip">
       <view class="back" @tap="closeTrip">‹ 返回行程</view>
       <view class="trip-head"><text class="trip-title">{{ selectedTrip.title }}</text><text class="trip-sub">{{ selectedTrip.destination || '未填写目的地' }} · 已准备 {{ packedCount }}/{{ packingItems.length }}</text></view>
+      <view class="collab-summary" @tap="showingCollaboration=!showingCollaboration"><text>同行 {{selectedTrip.members.length}} 人 · 准备小组 {{selectedTrip.preparationGroups.length}} 个</text><text>{{showingCollaboration?'收起':'管理协作'}} ›</text></view>
+      <view v-if="showingCollaboration" class="editor collab-panel">
+        <view v-for="member in selectedTrip.members" :key="member.membershipId" class="member-row"><view><text class="member-name">{{member.membership.user.nickname||'家庭成员'}}</text><text class="member-role">{{member.tripRole==='OWNER'?'行程负责人':'同行成员'}} · {{member.status==='HISTORY'?'历史可见':member.canEdit?'可协作':'只读'}}</text></view><text v-if="isTripOwner && member.membershipId!==session?.membershipId" class="danger-link" @tap="revokeMember(member)">撤销</text></view>
+        <picker v-if="isTripOwner && candidates.length" :range="candidateNames" @change="addMemberByIndex"><view class="action full">＋ 添加家庭或朋友账号</view></picker>
+        <view v-if="selectedTrip.preparationGroups.length" class="group-list"><text v-for="group in selectedTrip.preparationGroups" :key="group.id" class="chip">{{group.name}} · {{group.members.length}}人</text></view>
+        <view v-if="isTripOwner" class="group-editor"><input v-model="groupName" class="input" placeholder="准备小组，例如：我们家"/><checkbox-group @change="groupSelection"><label v-for="member in selectedTrip.members.filter(m=>m.status==='ACTIVE')" :key="member.membershipId" class="check-member"><checkbox :value="member.membershipId" :checked="groupMemberIds.includes(member.membershipId)" color="#69a778"/>{{member.membership.user.nickname||'家庭成员'}}</label></checkbox-group><view class="button small" @tap="saveGroup">创建准备小组</view></view>
+        <view v-if="isTripOwner && ['PLANNING','PENDING','DEPARTING'].includes(selectedTrip.status)" class="button small" @tap="advanceStatus">{{selectedTrip.status==='DEPARTING'?'完成本次行程':`进入${statusText(selectedTrip.status==='PLANNING'?'PENDING':'DEPARTING')}`}}</view>
+      </view>
       <view v-if="canEditTrip" class="packing-actions"><picker v-if="templates.length" :range="templates" range-key="name" @change="applyTemplateByIndex"><view class="action">套用自定义模板</view></picker><view class="action" @tap="showingItemForm = !showingItemForm">手工加一项</view></view>
       <view v-if="canAccess(session,'packing_templates','EDIT') && !templates.length" class="notice" @tap="active = 'templates'">还没有行李模板，先去创建一个 ›</view>
       <view v-if="showingItemForm" class="editor"><input v-model="itemForm.name" class="input" placeholder="本次要带什么" /><view class="item-inputs"><input v-model="itemForm.quantity" type="digit" class="input" placeholder="数量" /><input v-model="itemForm.unit" class="input" placeholder="单位" /></view><input v-model="itemForm.note" class="input" placeholder="备注（可选）" /><view class="button small" @tap="saveTripItem">加入本次行程</view></view>
       <view v-if="!packingItems.length" class="empty">本次行程还没有行李项</view>
-      <view v-for="item in packingItems" :key="item.id" class="packing-item" :class="{ packed: item.status === 'PACKED' }"><text class="check" @tap="canEditTrip && togglePacked(item)">{{ item.status === 'PACKED' ? '✓' : '' }}</text><view class="packing-info"><text class="packing-name">{{ item.name }}<text v-if="quantityText(item.quantity,item.unit)" class="quantity"> · {{ quantityText(item.quantity,item.unit) }}</text></text><text class="packing-meta">{{ item.sourceTemplate ? `来自模板：${item.sourceTemplate.name}` : '本次手工添加' }}{{ item.note ? ` · ${item.note}` : '' }}</text><text v-if="!canEditTrip" class="responsible">负责人：{{ responsibleName(item) }} · 只读</text><picker v-if="canEditTrip && memberNames.length" :range="memberNames" @change="assign(item, Number($event.detail.value))"><text class="responsible">负责人：{{ responsibleName(item) }} ›</text></picker></view><text v-if="canEditTrip" class="remove" @tap="removeItem(item)">×</text></view>
+      <view v-for="item in packingItems" :key="item.id" class="packing-item" :class="{ packed: item.status === 'PACKED' }"><text class="check" @tap="canEditTrip && togglePacked(item)">{{ item.status === 'PACKED' ? '✓' : '' }}</text><view class="packing-info"><text class="packing-name">{{ item.name }}<text v-if="quantityText(item.quantity,item.unit)" class="quantity"> · {{ quantityText(item.quantity,item.unit) }}</text></text><text class="packing-meta">{{ item.sourceTemplateNameSnapshot ? `来自模板：${item.sourceTemplateNameSnapshot}` : '本次手工添加' }}{{ item.note ? ` · ${item.note}` : '' }}</text><text v-if="!canEditTrip" class="responsible">{{item.group?`准备组：${item.group.name} · `:''}}负责人：{{ responsibleName(item) }} · 只读</text><view v-else class="assignment"><picker v-if="groupNames.length" :range="groupNames" @change="assignGroup(item,Number($event.detail.value))"><text class="responsible">准备组：{{item.group?.name||'未分组'}} ›</text></picker><picker v-if="assignableMemberNames(item).length" :range="assignableMemberNames(item)" @change="assign(item, Number($event.detail.value))"><text class="responsible">负责人：{{ responsibleName(item) }} ›</text></picker></view></view><text v-if="canEditTrip" class="remove" @tap="removeItem(item)">×</text></view>
     </view>
 
     <view v-else>
@@ -158,4 +183,5 @@ onShow(loadData);
 
 <style scoped>
 .page{min-height:100vh;padding:38rpx 28rpx 70rpx;background:#edf5eb}.heading .label,.heading .title,.heading .subtitle,.trip-title,.trip-sub,.map-note,.packing-name,.packing-meta,.responsible,.template-name,.template-description{display:block}.label{font-size:24rpx;letter-spacing:3rpx;color:#6e9770}.title{margin-top:10rpx;font-size:42rpx;font-weight:700;color:#3f5844}.subtitle{margin-top:11rpx;font-size:23rpx;color:#819183}.tabs{display:flex;margin-top:28rpx;padding:7rpx;border-radius:20rpx;background:#dcebd8}.tab{flex:1;padding:16rpx;border-radius:15rpx;text-align:center;color:#6d886f;font-size:24rpx}.tab.chosen{background:#fff;color:#43704a;font-weight:600}.map{margin-top:20rpx;padding:30rpx;border-radius:28rpx;background:linear-gradient(135deg,#dcefd8,#dbeaf0);color:#4e6b54;text-align:center;font-size:28rpx}.map-icon{display:block;margin-bottom:10rpx;font-size:62rpx}.map-note{margin-top:8rpx;color:#819687;font-size:21rpx}.trip{display:flex;align-items:center;gap:18rpx;margin-top:16rpx;padding:24rpx;border-radius:24rpx;background:#fffdf7}.pin{font-size:39rpx}.trip-info{min-width:0;flex:1}.trip-title{font-size:29rpx;color:#465a49}.trip-sub{margin-top:7rpx;color:#909c91;font-size:21rpx}.state{padding:9rpx 12rpx;border-radius:99rpx;background:#e2f0df;color:#5a8160;font-size:20rpx}.empty{padding:65rpx 0;text-align:center;color:#87988a;font-size:25rpx}.button{margin-top:28rpx;padding:25rpx;border-radius:24rpx;background:#69a778;color:#fff;text-align:center;font-size:27rpx}.button.small{margin-top:18rpx;padding:19rpx;font-size:24rpx}.editor{margin-top:20rpx;padding:22rpx;border-radius:24rpx;background:#fff}.input{box-sizing:border-box;width:100%;margin-top:12rpx;padding:19rpx;border:2rpx solid #e3ebe2;border-radius:15rpx;background:#fff;font-size:24rpx;color:#58675a}.date-row,.item-inputs{display:grid;grid-template-columns:1fr 1fr;gap:12rpx}.back{margin:24rpx 0 14rpx;color:#5e8663;font-size:24rpx}.trip-head{padding:24rpx;border-radius:24rpx;background:#fffdf7}.packing-actions{display:flex;gap:14rpx;margin-top:16rpx}.packing-actions picker,.packing-actions>.action{flex:1}.action{padding:18rpx;border-radius:18rpx;background:#d8ead7;color:#4f7955;text-align:center;font-size:23rpx}.notice,.template-explain{margin-top:16rpx;padding:20rpx;border-radius:18rpx;background:#fff8dc;color:#7a704f;font-size:22rpx;line-height:1.6}.packing-item{display:flex;align-items:center;gap:16rpx;margin-top:14rpx;padding:21rpx;border-radius:22rpx;background:#fffdf7}.packing-item.packed{opacity:.62}.check{display:flex;align-items:center;justify-content:center;width:42rpx;height:42rpx;border:2rpx solid #90b492;border-radius:12rpx;color:#fff}.packed .check{background:#69a778}.packing-info{min-width:0;flex:1}.packing-name{font-size:27rpx;color:#48584a}.packed .packing-name{text-decoration:line-through}.quantity{color:#6f7f71;font-size:22rpx}.packing-meta{margin-top:6rpx;color:#9a9b93;font-size:19rpx}.responsible{margin-top:9rpx;color:#5e8b66;font-size:21rpx}.remove{padding:10rpx;color:#ba8373;font-size:34rpx}.template-card{margin-top:16rpx;padding:23rpx;border-radius:24rpx;background:#fffdf7}.template-top{display:flex;justify-content:space-between}.template-name{font-size:29rpx;color:#435747}.template-description{margin-top:7rpx;color:#92998f;font-size:21rpx}.edit{color:#579064;font-size:23rpx}.chips{display:flex;flex-wrap:wrap;gap:9rpx;margin-top:18rpx}.chip{padding:9rpx 13rpx;border-radius:99rpx;background:#e5f0df;color:#627a62;font-size:20rpx}.archive{display:inline-block;margin-top:18rpx;color:#a09283;font-size:20rpx}.editor-title{display:block;font-size:28rpx;font-weight:600;color:#485b4b}.template-row{display:grid;grid-template-columns:1fr 120rpx 100rpx 50rpx;gap:8rpx;align-items:center}.template-note{grid-column:1/4}.template-row .remove{grid-column:4;grid-row:1}.add-row{display:inline-block;margin-top:18rpx;color:#56855d;font-size:23rpx}.cancel{padding:20rpx;text-align:center;color:#8a958b;font-size:23rpx}
+.collab-summary{display:flex;justify-content:space-between;margin-top:14rpx;padding:19rpx 22rpx;border-radius:20rpx;background:#dcebd8;color:#55765b;font-size:22rpx}.member-row{display:flex;align-items:center;justify-content:space-between;padding:15rpx 0;border-bottom:1rpx solid #edf0e9}.member-name,.member-role{display:block}.member-name{color:#465a49;font-size:25rpx}.member-role{margin-top:5rpx;color:#94a096;font-size:19rpx}.danger-link{color:#b87568;font-size:21rpx}.action.full{margin-top:16rpx}.group-list{display:flex;flex-wrap:wrap;gap:8rpx;margin-top:15rpx}.group-editor{margin-top:15rpx;padding-top:8rpx;border-top:1rpx solid #edf0e9}.check-member{display:inline-flex;align-items:center;margin:14rpx 20rpx 0 0;color:#607163;font-size:22rpx}.check-member checkbox{transform:scale(.8)}
 </style>

@@ -33,6 +33,17 @@ enum TripStatus {
   CANCELLED
 }
 
+enum TripMemberRole {
+  OWNER
+  MEMBER
+}
+
+enum TripMemberStatus {
+  ACTIVE
+  HISTORY
+  REVOKED
+}
+
 enum RecipeStatus {
   DRAFT
   PUBLISHED
@@ -212,10 +223,14 @@ model Trip {
   startsAt     DateTime
   endsAt       DateTime?
   destination  String?
+  version      Int               @default(1)
+  completedAt  DateTime?
   createdAt    DateTime          @default(now())
+  updatedAt    DateTime          @updatedAt
   household    Household         @relation(fields: [householdId], references: [id])
   members      TripMember[]
   packingItems TripPackingItem[]
+  preparationGroups TripPreparationGroup[]
 }
 
 model HouseholdInvitation {
@@ -265,11 +280,43 @@ model TripMember {
   tripId       String
   membershipId String
   canEdit      Boolean    @default(false)
+  tripRole     TripMemberRole   @default(MEMBER)
+  status       TripMemberStatus @default(ACTIVE)
+  leftAt       DateTime?
+  version      Int              @default(1)
   joinedAt     DateTime   @default(now())
   trip         Trip       @relation(fields: [tripId], references: [id], onDelete: Cascade)
   membership   Membership @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+  groupMemberships TripPreparationGroupMember[]
 
   @@id([tripId, membershipId])
+  @@index([membershipId, status])
+}
+
+model TripPreparationGroup {
+  id           String    @id @default(cuid())
+  tripId       String
+  name         String
+  version      Int       @default(1)
+  createdAt    DateTime  @default(now())
+  updatedAt    DateTime  @updatedAt
+  trip         Trip      @relation(fields: [tripId], references: [id], onDelete: Cascade)
+  members      TripPreparationGroupMember[]
+  packingItems TripPackingItem[]
+
+  @@unique([tripId, name])
+  @@index([tripId])
+}
+
+model TripPreparationGroupMember {
+  groupId      String
+  tripId       String
+  membershipId String
+  group        TripPreparationGroup @relation(fields: [groupId], references: [id], onDelete: Cascade)
+  tripMember   TripMember @relation(fields: [tripId, membershipId], references: [tripId, membershipId], onDelete: Cascade)
+
+  @@id([groupId, membershipId])
+  @@index([tripId, membershipId])
 }
 
 model PackingTemplate {
@@ -309,22 +356,29 @@ model TripPackingItem {
   tripId                  String
   sourceTemplateId        String?
   sourceTemplateItemId    String?
+  sourceTemplateNameSnapshot String?
+  sourceItemNameSnapshot  String?
+  groupId                 String?
   name                    String
   quantity                Decimal?             @db.Decimal(12, 3)
   unit                    String?
   note                    String?
   status                  PackingItemStatus    @default(PENDING)
   responsibleMembershipId String?
+  version                 Int                  @default(1)
+  excludedAt              DateTime?
   createdAt               DateTime             @default(now())
   updatedAt               DateTime             @updatedAt
   trip                    Trip                 @relation(fields: [tripId], references: [id], onDelete: Cascade)
   sourceTemplate          PackingTemplate?     @relation(fields: [sourceTemplateId], references: [id], onDelete: SetNull)
   sourceTemplateItem      PackingTemplateItem? @relation(fields: [sourceTemplateItemId], references: [id], onDelete: SetNull)
+  group                   TripPreparationGroup? @relation(fields: [groupId], references: [id], onDelete: SetNull)
   responsibleMembership   Membership?          @relation("PackingItemResponsible", fields: [responsibleMembershipId], references: [id], onDelete: SetNull)
 
   @@unique([tripId, sourceTemplateItemId])
   @@index([tripId, status])
   @@index([responsibleMembershipId])
+  @@index([groupId])
 }
 
 model RecipeCategory {

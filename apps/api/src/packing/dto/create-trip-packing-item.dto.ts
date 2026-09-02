@@ -16,4 +16,7 @@ export class CreateTripPackingItemDto {
 
   @IsOptional() @TrimText() @IsString() @Length(1, 80)
   responsibleMembershipId?: string;
+
+  @IsOptional() @TrimText() @IsString() @Length(1, 80)
+  groupId?: string;
 }

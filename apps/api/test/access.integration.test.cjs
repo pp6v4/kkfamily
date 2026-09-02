@@ -186,6 +186,49 @@ test('Calendar rechecks source module permissions, not just calendar membership'
   const result=await call(member,'GET','/calendar/events?from=2026-08-01&to=2026-09-01');
   assert.equal(result.status,200); assert.equal(result.body.data.filter(e=>e.type==='MEAL').length,0);
 });
+test('D07: trip membership is explicit, revocation is immediate, and the final owner is protected', async () => {
+  const who=await owner(),member=await join(who,['CAMPER']);
+  const created=await call(who,'POST','/trips',{title:'成员边界验证',startsAt:'2026-09-10T08:00:00+08:00'});assert.equal(created.status,201);
+  const trip=created.body.data;assert.equal(trip.members[0].tripRole,'OWNER');assert.equal(trip.version,1);
+  assert.equal((await call(member,'GET',`/trips/${trip.id}`)).status,403,'Household role does not imply trip access');
+  const candidates=await call(who,'GET',`/trips/${trip.id}/candidates`);assert.ok(candidates.body.data.some(row=>row.id===member.memberId));
+  const added=await call(who,'POST',`/trips/${trip.id}/members`,{membershipId:member.memberId,canEdit:true});assert.equal(added.status,201,JSON.stringify(added.body));
+  assert.equal((await call(member,'GET',`/trips/${trip.id}`)).status,200);
+  const ownerRow=added.body.data.members.find(row=>row.membershipId===who.memberId);
+  assert.equal((await call(who,'PATCH',`/trips/${trip.id}/members/${who.memberId}`,{expectedVersion:ownerRow.version,canEdit:false})).status,409,'Owner cannot lock the trip by dropping edit permission');
+  assert.equal((await call(who,'PATCH',`/trips/${trip.id}/members/${who.memberId}`,{expectedVersion:ownerRow.version,status:'REVOKED'})).status,409,'A trip keeps at least one owner');
+  const memberRow=added.body.data.members.find(row=>row.membershipId===member.memberId);
+  assert.equal((await call(who,'PATCH',`/trips/${trip.id}/members/${member.memberId}`,{expectedVersion:memberRow.version,status:'REVOKED'})).status,200);
+  assert.equal((await call(member,'GET',`/trips/${trip.id}`)).status,403);
+  assert.equal((await call(member,'GET','/trips')).body.data.some(row=>row.id===trip.id),false);
+});
+test('D07: preparation groups accept only active trip members and reject stale updates', async () => {
+  const who=await owner(),member=await join(who,['CAMPER']),outsider=await join(who,['CAMPER']);
+  const trip=(await call(who,'POST','/trips',{title:'分组验证',startsAt:'2026-09-11T08:00:00+08:00'})).body.data;
+  await call(who,'POST',`/trips/${trip.id}/members`,{membershipId:member.memberId});
+  assert.equal((await call(who,'POST',`/trips/${trip.id}/preparation-groups`,{name:'朋友家',membershipIds:[outsider.memberId]})).status,400);
+  const group=await call(who,'POST',`/trips/${trip.id}/preparation-groups`,{name:'我们家',membershipIds:[who.memberId,member.memberId]});assert.equal(group.status,201,JSON.stringify(group.body));
+  const updated=await call(who,'PATCH',`/trips/${trip.id}/preparation-groups/${group.body.data.id}`,{expectedVersion:1,name:'主家',membershipIds:[who.memberId]});assert.equal(updated.status,200);assert.equal(updated.body.data.version,2);
+  assert.equal((await call(who,'PATCH',`/trips/${trip.id}/preparation-groups/${group.body.data.id}`,{expectedVersion:1,name:'过期覆盖',membershipIds:[]})).status,409);
+});
+test('D07/D08: pending responsibilities block revocation until explicitly cleared', async () => {
+  const who=await owner(),member=await join(who,['CAMPER']);
+  const trip=(await call(who,'POST','/trips',{title:'负责人验证',startsAt:'2026-09-12T08:00:00+08:00'})).body.data;
+  const withMember=(await call(who,'POST',`/trips/${trip.id}/members`,{membershipId:member.memberId})).body.data;
+  const item=await call(who,'POST',`/trips/${trip.id}/packing-items`,{name:'天幕',responsibleMembershipId:member.memberId});assert.equal(item.status,201);
+  const memberRow=withMember.members.find(row=>row.membershipId===member.memberId);
+  assert.equal((await call(who,'PATCH',`/trips/${trip.id}/members/${member.memberId}`,{expectedVersion:memberRow.version,status:'REVOKED'})).status,409);
+  const cleared=await call(who,'PATCH',`/trips/${trip.id}/members/${member.memberId}`,{expectedVersion:memberRow.version,status:'REVOKED',clearResponsibilities:true});assert.equal(cleared.status,200);
+  const stored=await db.tripPackingItem.findUnique({where:{id:item.body.data.id}});assert.equal(stored.responsibleMembershipId,null);assert.equal(stored.version,2);
+});
+test('D07: normal completion converts active members to durable read-only history', async () => {
+  const who=await owner(),member=await join(who,['CAMPER']);
+  let trip=(await call(who,'POST','/trips',{title:'历史访问验证',startsAt:'2026-09-13T08:00:00+08:00'})).body.data;
+  trip=(await call(who,'POST',`/trips/${trip.id}/members`,{membershipId:member.memberId})).body.data;
+  for(const status of ['PENDING','DEPARTING','COMPLETED']){const changed=await call(who,'PATCH',`/trips/${trip.id}/status`,{expectedVersion:trip.version,status});assert.equal(changed.status,200,JSON.stringify(changed.body));trip=changed.body.data;}
+  assert.ok(trip.members.every(row=>row.status==='HISTORY'));assert.equal((await call(member,'GET',`/trips/${trip.id}`)).status,200);
+  assert.equal((await call(member,'POST',`/trips/${trip.id}/packing-items`,{name:'结束后新增'})).status,403);
+});
 test('A11/A12/A13/A15: two votes count one dish; distinct dishes aggregate 500g/3 eggs with 150g shortage', async () => {
   const who=await owner(), member=await join(who);
   async function recipe(name,tomato,eggs) {
@@ -268,10 +311,26 @@ test('A24/A25/A29: arbitrary template items stay exact, repeat apply skips, assi
   const first=await call(who,'POST',path+'/apply-template',{templateId:template.body.data.id});
   const second=await call(who,'POST',path+'/apply-template',{templateId:template.body.data.id});
   assert.equal(first.body.data.addedCount,3); assert.equal(second.body.data.addedCount,0); assert.equal(second.body.data.skippedCount,3);
-  const item=first.body.data.items[0]; await call(who,'PATCH',`${path}/${item.id}`,{responsibleMembershipId:member.memberId});
+  const item=first.body.data.items[0]; await call(who,'PATCH',`${path}/${item.id}`,{expectedVersion:item.version,responsibleMembershipId:member.memberId});
   assert.equal((await call(member,'GET',path)).status,200);
-  assert.equal((await call(member,'PATCH',`${path}/${item.id}`,{status:'PACKED'})).status,403);
+  assert.equal((await call(member,'PATCH',`${path}/${item.id}`,{expectedVersion:item.version,status:'PACKED'})).status,403);
   assert.equal((await call(member,'GET','/packing-templates')).status,403);
+});
+test('D08: packing assignments honor preparation groups, versions, and soft exclusion',async()=>{
+  const who=await owner(),member=await join(who,['CAMPER']);
+  const trip=(await call(who,'POST','/trips',{title:'行李版本验证',startsAt:'2026-09-14T08:00:00+08:00'})).body.data;
+  await call(who,'POST',`/trips/${trip.id}/members`,{membershipId:member.memberId});
+  const group=await call(who,'POST',`/trips/${trip.id}/preparation-groups`,{name:'我们家',membershipIds:[who.memberId]});assert.equal(group.status,201);
+  const path=`/trips/${trip.id}/packing-items`;
+  assert.equal((await call(who,'POST',path,{name:'帐篷',groupId:group.body.data.id,responsibleMembershipId:member.memberId})).status,400,'Person must belong to selected group');
+  const created=await call(who,'POST',path,{name:'帐篷',groupId:group.body.data.id,responsibleMembershipId:who.memberId});assert.equal(created.status,201);assert.equal(created.body.data.version,1);
+  assert.equal((await call(who,'PATCH',`/trips/${trip.id}/preparation-groups/${group.body.data.id}`,{expectedVersion:1,name:'我们家',membershipIds:[]})).status,409,'Group removal cannot strand an assigned item');
+  const updated=await call(who,'PATCH',`${path}/${created.body.data.id}`,{expectedVersion:1,status:'PACKED'});assert.equal(updated.status,200);assert.equal(updated.body.data.version,2);
+  assert.equal((await call(who,'PATCH',`${path}/${created.body.data.id}`,{expectedVersion:1,status:'PENDING'})).status,409);
+  assert.equal((await call(who,'DELETE',`${path}/${created.body.data.id}?expectedVersion=1`)).status,409);
+  assert.equal((await call(who,'DELETE',`${path}/${created.body.data.id}?expectedVersion=2`)).status,200);
+  assert.equal((await call(who,'GET',path)).body.data.length,0);
+  const stored=await db.tripPackingItem.findUnique({where:{id:created.body.data.id}});assert.ok(stored.excludedAt);assert.equal(stored.version,3);
 });
 
 async function mealFixture({quantity=300,unit='g',seasonings=['生抽','醋','盐']}={}) {
