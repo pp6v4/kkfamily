@@ -301,6 +301,24 @@ test('A33/A35: private recipe image validates bytes and ownership; revoked user 
   const stillShortLived=await app.inject({method:'GET',url:'/v1'+url.body.data.path});assert.equal(stillShortLived.statusCode,200);
   const token=new URL('http://test'+url.body.data.path).searchParams.get('token');assert.equal((await call(ownerAccount,'GET','/recipes',undefined,ownerAccount.householdId)).status,200);assert.equal((await call(ownerAccount,'GET','/recipes',undefined,'not-the-household')).status,403);assert.ok(token.length>20);
 });
+test('D10: trip photos require trip membership, revoke new reads, and allow history members to add photos',async()=>{
+  const who=await owner(),member=await join(who,['CAMPER']);
+  let trip=(await call(who,'POST','/trips',{title:'行程相册验证',startsAt:'2026-09-20T08:00:00+08:00'})).body.data;
+  assert.equal((await call(member,'GET',`/trips/${trip.id}/photos`)).status,404);
+  trip=(await call(who,'POST',`/trips/${trip.id}/members`,{membershipId:member.memberId})).body.data;
+  const intent=await call(member,'POST','/media/upload-intents',{ownerType:'TRIP',ownerId:trip.id,expectedOwnerVersion:trip.version,mimeType:'image/png',byteSize:TEST_PNG.length});assert.equal(intent.status,201,JSON.stringify(intent.body));assert.equal(intent.body.data.objectKey,undefined);
+  const uploaded=await callRaw(member,intent.body.data.uploadPath,TEST_PNG);assert.equal(uploaded.status,200);
+  const confirmed=await call(member,'POST','/media/assets/confirm',{intentId:intent.body.data.id,checksumSha256:uploaded.body.data.checksumSha256});assert.equal(confirmed.status,201,JSON.stringify(confirmed.body));
+  const photos=await call(who,'GET',`/trips/${trip.id}/photos`);assert.equal(photos.status,200);assert.equal(photos.body.data.length,1);assert.equal(photos.body.data[0].createdBy.id,member.userId);
+  const url=await call(member,'GET',`/media/assets/${confirmed.body.data.asset.id}/url`);assert.equal(url.status,200);
+  const memberRow=trip.members.find(row=>row.membershipId===member.memberId);trip=(await call(who,'PATCH',`/trips/${trip.id}/members/${member.memberId}`,{expectedVersion:memberRow.version,status:'REVOKED',clearResponsibilities:true})).body.data;
+  assert.equal((await call(member,'GET',`/media/assets/${confirmed.body.data.asset.id}/url`)).status,404);
+  assert.equal((await app.inject({method:'GET',url:'/v1'+url.body.data.path})).statusCode,200,'Already issued capability remains short lived');
+  for(const status of ['PENDING','DEPARTING','COMPLETED'])trip=(await call(who,'PATCH',`/trips/${trip.id}/status`,{expectedVersion:trip.version,status})).body.data;
+  const afterIntent=await call(who,'POST','/media/upload-intents',{ownerType:'TRIP',ownerId:trip.id,expectedOwnerVersion:trip.version,mimeType:'image/png',byteSize:TEST_PNG.length});assert.equal(afterIntent.status,201,JSON.stringify(afterIntent.body));
+  const afterUpload=await callRaw(who,afterIntent.body.data.uploadPath,TEST_PNG);const afterConfirm=await call(who,'POST','/media/assets/confirm',{intentId:afterIntent.body.data.id,checksumSha256:afterUpload.body.data.checksumSha256});assert.equal(afterConfirm.status,201);assert.equal(afterConfirm.body.data.ownerVersion,trip.version+1);
+  assert.equal((await call(who,'GET',`/trips/${trip.id}/photos`)).body.data.length,2);
+});
 test('A24/A25/A29: arbitrary template items stay exact, repeat apply skips, assignee remains read-only', async () => {
   const who=await owner(), member=await join(who,['CAMPER']);
   const trip=(await call(who,'POST','/trips',{title:'虚构验证出行',startsAt:'2026-09-01T09:00:00+08:00'})).body.data;

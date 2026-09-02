@@ -2,6 +2,7 @@
 import { computed, onUnmounted, ref } from 'vue';
 import { onHide, onShow } from '@dcloudio/uni-app';
 import TripItinerary from '../../components/trip-itinerary.vue';
+import TripPhotos from '../../components/trip-photos.vue';
 import { canAccess, refreshAccess, type HouseholdContext } from '../../services/session';
 import { takeCalendarTarget } from '../../services/calendar-navigation';
 import { addTripMember, applyPackingTemplate, createPackingTemplate, createTrip, createTripPackingItem, createTripPreparationGroup, getTrip, listPackingTemplates, listTripCandidates, listTripPackingItems, listTrips, removeTripPackingItem, updatePackingTemplate, updateTripMember, updateTripPackingItem, updateTripStatus, type PackingTemplate, type Trip, type TripPackingItem } from '../../services/family-api';
@@ -29,6 +30,7 @@ const groupMemberIds = ref<string[]>([]);
 const selectedTrip = computed(() => trips.value.find((trip) => trip.id === selectedTripId.value));
 const currentTripMember = computed(() => selectedTrip.value?.members.find(m=>m.membershipId===session.value?.membershipId));
 const canEditTrip = computed(() => canAccess(session.value,'trips','EDIT') && currentTripMember.value?.status === 'ACTIVE' && Boolean(currentTripMember.value?.canEdit) && !['COMPLETED','CANCELLED'].includes(selectedTrip.value?.status || ''));
+const canAddTripPhotos = computed(() => canAccess(session.value,'trips','EDIT') && ['ACTIVE','HISTORY'].includes(currentTripMember.value?.status || '') && Boolean(currentTripMember.value?.canEdit));
 const isTripOwner = computed(() => canEditTrip.value && currentTripMember.value?.tripRole === 'OWNER');
 function canEditTemplate(template: PackingTemplate) { return canAccess(session.value,'packing_templates','EDIT') && (template.createdById===session.value?.membershipId || canAccess(session.value,'packing_templates','MANAGE')); }
 const candidateNames = computed(() => candidates.value.map((entry,index)=>entry.user.nickname||`成员${index+1}`));
@@ -200,6 +202,7 @@ onUnmounted(() => { if (overviewTimer) clearInterval(overviewTimer); });
       <view class="back" @tap="closeTrip">‹ 返回行程</view>
       <view class="trip-head"><text class="trip-title">{{ selectedTrip.title }}</text><text class="trip-sub">{{ selectedTrip.destination || '未填写目的地' }} · 已准备 {{ packedCount }}/{{ packingItems.length }}</text></view>
       <TripItinerary :trip="selectedTrip" :can-edit="canEditTrip" :active="pageVisible" @changed="itineraryChanged" />
+      <TripPhotos :trip="selectedTrip" :can-upload="canAddTripPhotos" @changed="itineraryChanged" />
       <view class="collab-summary" @tap="showingCollaboration=!showingCollaboration"><text>同行 {{selectedTrip.members.length}} 人 · 准备小组 {{selectedTrip.preparationGroups.length}} 个</text><text>{{showingCollaboration?'收起':'管理协作'}} ›</text></view>
       <view v-if="showingCollaboration" class="editor collab-panel">
         <view v-for="member in selectedTrip.members" :key="member.membershipId" class="member-row"><view><text class="member-name">{{member.membership.user.nickname||'家庭成员'}}</text><text class="member-role">{{member.tripRole==='OWNER'?'行程负责人':'同行成员'}} · {{member.status==='HISTORY'?'历史可见':member.canEdit?'可协作':'只读'}}</text></view><text v-if="isTripOwner && member.membershipId!==session?.membershipId" class="danger-link" @tap="revokeMember(member)">撤销</text></view>

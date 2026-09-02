@@ -130,3 +130,10 @@ test('Media client uploads bytes only through authenticated API path and builds 
   assert.equal(binary.path,'/media/upload-intents/i/content');assert.equal(binary.method,'PUT');assert.equal(binary.data,bytes);assert.equal(binary.mime,'image/png');assert.match(binary.headers.Authorization,/^Bearer /);assert.equal(binary.headers['X-Household-Id'],family.householdId);
   assert.equal(api.publicMediaUrl('/media/public?token=token'),'https://example.test/api/v1/media/public?token=token');
 });
+test('Trip photo client binds upload intent and gallery listing to the selected trip version',async()=>{
+  const uni=mockUni(),sent=[];
+  const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent.push({path,method,data});return[];}}},uni);
+  await api.createMediaUploadIntent({ownerType:'TRIP',ownerId:'trip-a',expectedOwnerVersion:8,mimeType:'image/png',byteSize:16});await api.listTripPhotos('trip-a');
+  assert.equal(sent[0].path,'/media/upload-intents');assert.equal(sent[0].data.ownerType,'TRIP');assert.equal(sent[0].data.expectedOwnerVersion,8);
+  assert.equal(sent[1].path,'/trips/trip-a/photos');assert.equal(sent[1].method,'GET');
+});
