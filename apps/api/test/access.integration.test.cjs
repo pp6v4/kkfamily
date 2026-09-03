@@ -196,6 +196,16 @@ test('A21/A30: calendar hides nonmember trips and includes authorized cross-mont
   assert.equal((await call(who,'GET',path)).body.data.length,0);
   assert.equal((await call(who,'POST','/calendar/events',{title:'假行程',type:'TRIP',startsAt:'2026-09-01T08:00:00+08:00'})).status,400);
 });
+test('D09: trip detail edits are versioned, can clear optional dates, and update calendar projection',async()=>{
+  const who=await owner();
+  let trip=(await call(who,'POST','/trips',{title:'旧行程名',destination:'旧目的地',startsAt:'2026-09-20T08:00:00+08:00',endsAt:'2026-09-21T20:00:00+08:00'})).body.data;
+  const updated=await call(who,'PATCH',`/trips/${trip.id}`,{expectedVersion:trip.version,title:'新行程名',destination:'',startsAt:'2026-09-22T08:00:00+08:00',endsAt:null});
+  assert.equal(updated.status,200,JSON.stringify(updated.body));trip=updated.body.data;
+  assert.equal(trip.version,2);assert.equal(trip.title,'新行程名');assert.equal(trip.destination,null);assert.equal(trip.endsAt,null);
+  assert.equal((await call(who,'PATCH',`/trips/${trip.id}`,{expectedVersion:1,title:'过期页面覆盖'})).status,409);
+  const events=await call(who,'GET','/calendar/events?from=2026-09-22&to=2026-09-23');
+  const projected=events.body.data.find(event=>event.sourceType==='TRIP'&&event.sourceId===trip.id);assert.equal(projected.title,'新行程名');assert.equal(projected.endsAt,null);
+});
 test('Calendar rechecks source module permissions, not just calendar membership', async () => {
   const who=await owner(), member=await join(who);
   await call(who,'POST','/meals',{scheduledAt:'2026-08-31T18:00:00+08:00',mealType:'晚餐'});

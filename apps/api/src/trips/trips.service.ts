@@ -55,7 +55,7 @@ export class TripsService {
       const { trip } = await this.requireTripAccess(userId, householdId, tripId, true, tx);
       if (trip.version !== dto.expectedVersion) throw new ConflictException('行程已更新，请刷新后重试');
       const startsAt = dto.startsAt ? new Date(dto.startsAt) : trip.startsAt;
-      const endsAt = dto.endsAt ? new Date(dto.endsAt) : trip.endsAt;
+      const endsAt = dto.endsAt === undefined ? trip.endsAt : dto.endsAt ? new Date(dto.endsAt) : null;
       this.assertDates(startsAt, endsAt ?? undefined);
       const updated = await tx.trip.update({ where: { id: tripId }, data: { title: dto.title?.trim(), startsAt, endsAt, destination: dto.destination === undefined ? undefined : dto.destination.trim() || null, version: { increment: 1 } } });
       await tx.calendarEvent.updateMany({ where: { householdId, sourceType: 'TRIP', sourceId: tripId }, data: { title: updated.title, startsAt: updated.startsAt, endsAt: updated.endsAt } });
@@ -146,7 +146,8 @@ export class TripsService {
       await this.assertGroupMembers(tx, tripId, dto.membershipIds);
       const removedIds = group.members.map(member => member.membershipId).filter(membershipId => !dto.membershipIds.includes(membershipId));
       if (removedIds.length && await tx.tripPackingItem.count({ where: { tripId, groupId, excludedAt: null, responsibleMembershipId: { in: removedIds } } })) throw new ConflictException('被移出小组的成员仍有行李责任，请先重新分配或清空');
-      await tx.tripPreparationGroup.update({ where: { id: groupId }, data: { name: dto.name.trim(), version: { increment: 1 } } });
+      try { await tx.tripPreparationGroup.update({ where: { id: groupId }, data: { name: dto.name.trim(), version: { increment: 1 } } }); }
+      catch (error) { if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('行程内已存在同名准备小组'); throw error; }
       await tx.tripPreparationGroupMember.deleteMany({ where: { groupId } });
       if (dto.membershipIds.length) await tx.tripPreparationGroupMember.createMany({ data: dto.membershipIds.map(membershipId => ({ groupId, tripId, membershipId })) });
       return tx.tripPreparationGroup.findUniqueOrThrow({ where: { id: groupId }, include: { members: true } });

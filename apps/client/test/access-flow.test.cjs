@@ -158,6 +158,14 @@ test('Itinerary API carries trip and item versions, including confirmed stop rem
   assert.equal(sent[0].path,'/trips/trip-a/stops');assert.equal(sent[0].method,'POST');assert.equal(sent[0].data.expectedTripVersion,7);
   assert.equal(sent[1].path,'/trips/trip-a/stops/stop-a?expectedVersion=3&expectedTripVersion=7&confirm=true');assert.equal(sent[1].method,'DELETE');
 });
+test('Trip and preparation-group edits carry their current versions',async()=>{
+  const uni=mockUni(),sent=[];
+  const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent.push({path,method,data});return data||{};}}},uni);
+  await api.updateTrip({id:'trip-a',version:7},{title:'新行程',endsAt:null});
+  await api.updateTripPreparationGroup('trip-a',{id:'group-a',version:4},'我们家',['member-a']);
+  assert.equal(sent[0].path,'/trips/trip-a');assert.equal(sent[0].data.expectedVersion,7);assert.equal(sent[0].data.endsAt,null);
+  assert.equal(sent[1].path,'/trips/trip-a/preparation-groups/group-a');assert.equal(sent[1].data.expectedVersion,4);assert.deepEqual(sent[1].data.membershipIds,['member-a']);
+});
 test('Media client uploads bytes only through authenticated API path and builds same-domain read URL',async()=>{
   const uni=mockUni();let binary;
   const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawRequest:async()=>({}),rawBinaryRequest:async(path,method,data,mime,headers)=>{binary={path,method,data,mime,headers};return{checksumSha256:'a'.repeat(64)};}}},uni);

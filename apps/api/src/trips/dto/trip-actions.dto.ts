@@ -10,7 +10,7 @@ export class UpdateTripDto {
   @IsOptional() @IsDateString()
   startsAt?: string;
   @IsOptional() @IsDateString()
-  endsAt?: string;
+  endsAt?: string | null;
   @IsOptional() @TrimText() @IsString() @Length(0, 120)
   destination?: string;
 }
