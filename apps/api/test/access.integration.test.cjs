@@ -91,6 +91,13 @@ test('A44: refresh tokens rotate once, reuse revokes the family, and logout revo
   assert.equal((await call(null,'POST','/auth/logout',{refreshToken:logoutRaw})).status,201);
   assert.equal((await call(null,'POST','/auth/refresh',{refreshToken:logoutRaw})).status,401);
 });
+test('A45: account owner can set a trimmed display name without a household context',async()=>{
+  const who=await identity();
+  const saved=await call(who,'PATCH','/auth/me',{nickname:'  小扣  '},undefined);
+  assert.equal(saved.status,200,JSON.stringify(saved.body));assert.equal(saved.body.data.user.nickname,'小扣');
+  assert.equal((await db.user.findUnique({where:{id:who.userId}})).nickname,'小扣');
+  assert.equal((await call(who,'PATCH','/auth/me',{nickname:'   '},undefined)).status,400);
+});
 test('A02: every implemented household listing rejects missing/blank headers', async () => {
   const who = await owner();
   for (const path of ['/recipes', '/inventory', '/shopping-lists', '/trips', '/packing-templates', '/members', '/favorites', '/archive/fields', '/dashboard/summary?from=2026-08-01T00:00:00Z&to=2026-09-01T00:00:00Z', '/inbox', '/notification-preferences', '/households/current/access', '/meals?from=2026-08-01&to=2026-09-01', '/calendar/events?from=2026-08-01&to=2026-09-01', '/calendar/anniversaries']) {

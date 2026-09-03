@@ -19,6 +19,9 @@ export interface LoginResult {
   accessToken: string;
   refreshToken: string;
   user: {
+    id: string;
+    nickname: string | null;
+    avatarUrl: string | null;
     households: Array<{
       membershipId: string;
       household: { id: string; name: string };
@@ -157,6 +160,11 @@ export async function identityRequest<T>(path: string, method: UniApp.RequestOpt
     const result = await rawRequest<T>(path, method, data, { Authorization: `Bearer ${identity.accessToken}` });
     return { data: result, identity };
   }
+}
+
+export async function updateMyProfile(nickname: string) {
+  const { data, identity } = await identityRequest<{ user: LoginResult['user'] }>('/auth/me', 'PATCH', { nickname });
+  return { ...identity, user: data.user };
 }
 
 export async function renewSession(preferredHouseholdId?: string) {

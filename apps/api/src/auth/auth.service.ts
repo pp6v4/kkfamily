@@ -85,6 +85,11 @@ export class AuthService {
     return { data: { user: this.profileFrom(user) } };
   }
 
+  async updateProfile(userId: string, nickname: string) {
+    const user = await this.prisma.user.update({ where: { id: userId }, data: { nickname: nickname.trim() }, include: profileInclude });
+    return { data: { user: this.profileFrom(user) } };
+  }
+
   private async issueNewSession(userId: string, openId: string) {
     const refreshToken = this.newRefreshToken();
     await this.prisma.authSession.create({ data: {

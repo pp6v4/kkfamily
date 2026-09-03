@@ -1,10 +1,11 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
-import { ensureIdentity, identityRequest, logoutSession, rememberSession, type LoginResult } from '../../services/session';
+import { ensureIdentity, identityRequest, logoutSession, rememberSession, updateMyProfile, type LoginResult } from '../../services/session';
 const name = ref('扣扣的家'), code = ref(''), busy = ref(false), error = ref('');
+const profileName = ref('');
 const identity = ref<LoginResult>();
-async function login() { error.value = ''; try { identity.value = await ensureIdentity(); } catch (e) { error.value = e instanceof Error ? e.message : '登录失败，请重试'; } }
+async function login() { error.value = ''; try { identity.value = await ensureIdentity(); profileName.value = identity.value.user.nickname || ''; } catch (e) { error.value = e instanceof Error ? e.message : '登录失败，请重试'; } }
 async function submit(action: 'create' | 'join') {
   if (busy.value) return;
   if (action === 'create' && !name.value.trim() || action === 'join' && !code.value.trim()) { error.value = '请填写家庭名称或邀请码'; return; }
@@ -34,11 +35,20 @@ function logout() {
     catch (e) { error.value = e instanceof Error ? e.message : '退出失败'; }
   } });
 }
+async function saveProfile() {
+  if (busy.value) return;
+  if (!profileName.value.trim()) { error.value = '请输入家庭成员显示名'; return; }
+  busy.value = true; error.value = '';
+  try { identity.value = await updateMyProfile(profileName.value.trim()); profileName.value = identity.value.user.nickname || ''; uni.showToast({ title: '显示名已保存', icon: 'success' }); }
+  catch (e) { error.value = e instanceof Error ? e.message : '保存失败，填写内容已保留'; }
+  finally { busy.value = false; }
+}
 onShow(login);
 </script>
 <template>
   <view class="page"><text class="eyebrow">扣扣的家</text><text class="title">欢迎回家 🏡</text><text class="hint">微信只确认你的身份。加入同一个家庭后，才会共享菜谱与行程。</text>
     <view v-if="error" class="error">{{ error }}<text @tap="login">　重新登录</text></view>
+    <view v-if="identity" class="card"><text class="heading">我的账号</text><input v-model="profileName" type="nickname" maxlength="30" placeholder="设置家人能认出的显示名" /><text class="hint">显示名用于点餐、待办负责人和露营分工；不会用昵称搜索或授权账号。</text><button :disabled="busy" :loading="busy" @tap="saveProfile">保存显示名</button></view>
     <view v-for="(family, index) in identity?.user.households.filter(h => h.status === 'ACTIVE')" :key="family.membershipId" class="card"><text>{{ family.household.name }}</text><button @tap="enterExisting(index)">进入已有家庭</button></view>
     <view class="card"><text class="heading">家人已经创建好了？</text><input v-model="code" maxlength="32" placeholder="粘贴管理员提供的邀请码" /><text class="hint">邀请码只用于加入家庭，不会自动开放所有功能。</text><button :disabled="busy" :loading="busy" @tap="submit('join')">加入家庭</button></view>
     <view class="card"><text class="heading">第一次使用</text><input v-model="name" maxlength="40" placeholder="给家庭起个名字" /><text class="hint">只有点击下方按钮才会创建新家庭；夫妻共用时只需一人创建。</text><button :disabled="busy" @tap="submit('create')">创建新家庭</button></view>

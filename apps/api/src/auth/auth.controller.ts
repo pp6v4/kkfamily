@@ -1,9 +1,10 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Patch, Post, UseGuards } from '@nestjs/common';
 import { CurrentUser, RequestUser } from './current-user.decorator';
 import { AccessTokenGuard } from './access-token.guard';
 import { AuthService } from './auth.service';
 import { WechatLoginDto } from './dto/wechat-login.dto';
 import { RefreshSessionDto } from './dto/refresh-session.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -28,6 +29,12 @@ export class AuthController {
   @UseGuards(AccessTokenGuard)
   me(@CurrentUser() user: RequestUser) {
     return this.authService.getProfile(user.userId);
+  }
+
+  @Patch('me')
+  @UseGuards(AccessTokenGuard)
+  updateMe(@CurrentUser() user: RequestUser, @Body() dto: UpdateProfileDto) {
+    return this.authService.updateProfile(user.userId, dto.nickname);
   }
 }
 

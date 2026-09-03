@@ -65,6 +65,15 @@ test('Identity-scoped create or join retries once and returns the renewed access
   assert.deepEqual(calls.map(item=>item.path),['/auth/me','/invitations/redeem','/auth/refresh','/invitations/redeem']);
   assert.equal(calls[1].headers.Authorization,'Bearer old-access');assert.equal(calls[3].headers.Authorization,'Bearer new-access');
 });
+test('Account profile update keeps current tokens and replaces the identity display name',async()=>{
+  const uni=mockUni(),calls=[];
+  const current={accessToken:'access-a',refreshToken:'refresh-a',user:{id:'user-a',nickname:null,avatarUrl:null,households:[]}};
+  const session=loadTs('src/services/session.ts',{'./transport':{ApiError,rawRequest:async(path,method,data,headers)=>{calls.push({path,method,data,headers});if(path==='/auth/me'&&method==='GET')return{user:current.user};if(path==='/auth/me'&&method==='PATCH')return{user:{...current.user,nickname:'小扣'}};throw Error('Unexpected '+path);}}},uni);
+  uni.setStorageSync('kkfamily.accessToken',current.accessToken);uni.setStorageSync('kkfamily.refreshToken',current.refreshToken);
+  const updated=await session.updateMyProfile('小扣');
+  assert.equal(updated.user.nickname,'小扣');assert.equal(updated.accessToken,'access-a');assert.equal(updated.refreshToken,'refresh-a');
+  assert.equal(calls[1].path,'/auth/me');assert.equal(calls[1].method,'PATCH');assert.equal(calls[1].data.nickname,'小扣');assert.match(calls[1].headers.Authorization,/access-a/);
+});
 test('Permission refresh updates cached roles/versions and 403 clears stale household context',async()=>{
   const uni=mockUni();let deny=false;
   const session=loadTs('src/services/session.ts',{'./transport':{ApiError,rawRequest:async()=>{if(deny)throw new ApiError('成员已停用',403);return {roles:['GUEST'],version:2,permissionVersion:2,effectivePermissions:{recipes:'VIEW'}};}}},uni);
@@ -84,6 +93,14 @@ test('Rejected join preserves input and exposes error instead of reporting succe
   const page=loadPage('src/pages/join/index.vue',{'../../services/session':{ensureIdentity:async()=>({accessToken:'fictional-token',user:{households:[]}}),identityRequest:async()=>{throw new Error('邀请码已失效');},rememberSession:()=>saved=true}},uni);
   page.code.value='x'.repeat(32);await page.submit('join');
   assert.equal(page.code.value,'x'.repeat(32));assert.match(page.error.value,/已失效/);assert.equal(saved,false);assert.equal(page.busy.value,false);assert.equal(uni.routes.length,0);
+});
+test('Account page trims and saves the display name while preserving failed input',async()=>{
+  const uni=mockUni();let submitted='',fail=false;
+  const current={accessToken:'access-a',refreshToken:'refresh-a',user:{id:'user-a',nickname:null,avatarUrl:null,households:[]}};
+  const page=loadPage('src/pages/join/index.vue',{'../../services/session':{ensureIdentity:async()=>current,updateMyProfile:async nickname=>{submitted=nickname;if(fail)throw Error('暂时失败');return{...current,user:{...current.user,nickname}};}}},uni);
+  page.identity.value=current;page.profileName.value='  小扣  ';await page.saveProfile();
+  assert.equal(submitted,'小扣');assert.equal(page.identity.value.user.nickname,'小扣');assert.equal(page.profileName.value,'小扣');
+  fail=true;page.profileName.value='老婆';await page.saveProfile();assert.equal(page.profileName.value,'老婆');assert.match(page.error.value,/暂时失败/);
 });
 test('Permission editor previews DENY and preserves draft on version conflict',async()=>{
   const uni=mockUni();const target={id:'member-b',version:7,roles:['CHEF'],overrides:[],status:'ACTIVE',user:{id:'user-b',nickname:'示例成员'},effectivePermissions:{recipes:'EDIT'}};let submitted;
