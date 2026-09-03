@@ -20,18 +20,19 @@
 
 ## 当前状态
 
-源码已覆盖微信登录/JWT访问会话、共享家庭邀请与角色权限、菜谱、多人点餐与确认快照、手工库存辅助比对、购物清单、权限过滤的家庭日历、露营成员/小组/行李/路线/住宿/照片、家庭待办、收藏与灵感、加密家庭档案、非财务生活看板和站内提醒。客户端均通过REST API读写，不再以页面写死数据充当业务结果。
+源码已覆盖微信登录、15分钟JWT访问令牌与30天轮换刷新会话、共享家庭邀请与角色权限、菜谱、多人点餐与确认快照、手工库存辅助比对、购物清单、权限过滤的家庭日历、露营成员/小组/行李/路线/住宿/照片、家庭待办、收藏与灵感、加密家庭档案、非财务生活看板和站内提醒。客户端均通过REST API读写，不再以页面写死数据充当业务结果。
 
 2026-09-01已确认：一期做饭完成不自动减少库存，购物完成不自动增加库存；库存仅供辅助判断并由家人手工维护。
 
 自定义行李模板没有任何系统内置的“烧烤模块”。“烧烤”只可能是用户自己填写的模板名称；模板物品完全自定义，套用到行程后复制为独立快照，不随模板后续修改。
 
-当前不是正式发布版。下一阶段重点是在隔离PostgreSQL执行14批迁移及45条HTTP集成用例，并完成真实COS、微信双账号、订阅消息、地图供应商、ICP备案/HTTPS和生产部署验收。最新差异见[`docs/implementation-gap-audit.md`](docs/implementation-gap-audit.md)，详细字段、接口和43条验收设计见[`docs/design/`](docs/design/README.md)。
+当前不是正式发布版。下一阶段重点是在隔离PostgreSQL执行15批迁移及46条HTTP集成用例，并完成真实COS、微信双账号、订阅消息、地图供应商、ICP备案/HTTPS和生产部署验收。最新差异见[`docs/implementation-gap-audit.md`](docs/implementation-gap-audit.md)，详细字段、接口和44条验收设计见[`docs/design/`](docs/design/README.md)。
 
 ## 当前 API
 
 - `GET /v1/health`
 - `POST /v1/auth/wechat/login`
+- `POST /v1/auth/refresh`、`POST /v1/auth/logout`
 - `GET /v1/auth/me`
 - `POST /v1/households`
 - `/v1/recipes/**`：分类、菜谱录入和状态管理

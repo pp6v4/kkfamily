@@ -1,4 +1,4 @@
-import { clearSession, ensureSession } from './session';
+import { ensureSession, renewSession } from './session';
 import { ApiError, rawRequest } from './transport';
 export type Level = 'VIEW' | 'EDIT' | 'MANAGE';
 export interface Override { module: string; level: Level; effect: 'ALLOW' | 'DENY' }
@@ -7,7 +7,13 @@ export interface Invitation { id: string; roleCodes: string[]; expiresAt: string
 async function request<T>(path: string, method: UniApp.RequestOptions['method'] = 'GET', data?: unknown) {
   const session = await ensureSession();
   try { return await rawRequest<T>(path.replace(':household', encodeURIComponent(session.householdId)), method, data, { Authorization: `Bearer ${session.accessToken}`, 'X-Household-Id': session.householdId }); }
-  catch (error) { if (error instanceof ApiError && error.statusCode === 401) clearSession(); throw error; }
+  catch (error) {
+    if (error instanceof ApiError && error.statusCode === 401) {
+      const renewed = await renewSession(session.householdId);
+      return rawRequest<T>(path.replace(':household', encodeURIComponent(renewed.householdId)), method, data, { Authorization: `Bearer ${renewed.accessToken}`, 'X-Household-Id': renewed.householdId });
+    }
+    throw error;
+  }
 }
 export const listMembers = (cursor = '') => request<{ items: Member[]; nextCursor: string | null }>('/members' + (cursor ? `?cursor=${encodeURIComponent(cursor)}` : ''));
 export const roleCatalog = () => request<Record<string, Record<string, Level>>>('/members/roles');

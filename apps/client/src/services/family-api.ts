@@ -1,4 +1,4 @@
-import { clearSession, ensureSession } from './session';
+import { ensureSession, renewSession } from './session';
 import { ApiError, rawBinaryRequest, rawRequest } from './transport';
 import { API_BASE_URL } from './config';
 
@@ -40,11 +40,14 @@ async function request<T>(path: string, method: UniApp.RequestOptions['method'] 
   try {
     return await rawRequest<T>(path, method, data, { Authorization: `Bearer ${session.accessToken}`, 'X-Household-Id': session.householdId });
   } catch (error) {
-    if (error instanceof ApiError && error.statusCode === 401) clearSession();
+    if (error instanceof ApiError && error.statusCode === 401) {
+      const renewed = await renewSession(session.householdId);
+      return rawRequest<T>(path, method, data, { Authorization: `Bearer ${renewed.accessToken}`, 'X-Household-Id': renewed.householdId });
+    }
     throw error;
   }
 }
-async function binaryRequest<T>(path:string,data:ArrayBuffer,mimeType:string){const session=await ensureSession();try{return await rawBinaryRequest<T>(path,'PUT',data,mimeType,{Authorization:`Bearer ${session.accessToken}`,'X-Household-Id':session.householdId});}catch(error){if(error instanceof ApiError&&error.statusCode===401)clearSession();throw error;}}
+async function binaryRequest<T>(path:string,data:ArrayBuffer,mimeType:string){const session=await ensureSession();try{return await rawBinaryRequest<T>(path,'PUT',data,mimeType,{Authorization:`Bearer ${session.accessToken}`,'X-Household-Id':session.householdId});}catch(error){if(error instanceof ApiError&&error.statusCode===401){const renewed=await renewSession(session.householdId);return rawBinaryRequest<T>(path,'PUT',data,mimeType,{Authorization:`Bearer ${renewed.accessToken}`,'X-Household-Id':renewed.householdId});}throw error;}}
 
 export function listRecipeCategories() { return request<RecipeCategory[]>('/recipes/categories'); }
 export function listRecipes() { return request<Recipe[]>('/recipes'); }

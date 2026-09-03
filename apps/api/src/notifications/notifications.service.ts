@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { NotificationEventType, Prisma } from '@prisma/client';
+import { NotificationEventType } from '@prisma/client';
 import { AccessService } from '../access/access.service';
 import { permits } from '../access/permission-policy';
 import { PrismaService } from '../prisma/prisma.service';

@@ -54,7 +54,11 @@ export async function menuSnapshot(db: Prisma.TransactionClient, meal: LoadedMea
 
 export async function mealView(db: Prisma.TransactionClient, meal: LoadedMeal) {
   const snapshot = await menuSnapshot(db, meal);
-  const { snapshots, dishes, completedFromVersion, ...base } = meal;
+  const base = {
+    id: meal.id, householdId: meal.householdId, scheduledAt: meal.scheduledAt, mealType: meal.mealType,
+    localDate: meal.localDate, slotKey: meal.slotKey, version: meal.version, snapshotVersion: meal.snapshotVersion,
+    completedAt: meal.completedAt, status: meal.status,
+  };
   // A confirmed meal exposes frozen recipes, never current recipe content disguised as history.
   const items = meal.status === 'DRAFT' ? meal.items : (snapshot?.dishes ?? []).flatMap(d => d.wantedBy.map(w => ({
     id: `${d.recipeId}:${w.membershipId}`, recipeId: d.recipeId, addedById: w.membershipId, recipe: d.recipe,

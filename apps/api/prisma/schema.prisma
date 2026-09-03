@@ -238,6 +238,23 @@ model User {
   updatedAt            DateTime              @updatedAt
   memberships          Membership[]
   subscriptionReceipts SubscriptionReceipt[]
+  authSessions         AuthSession[]
+}
+
+model AuthSession {
+  id          String    @id @default(cuid())
+  userId      String
+  familyId    String
+  refreshHash String    @unique
+  expiresAt   DateTime
+  consumedAt  DateTime?
+  revokedAt   DateTime?
+  rotatedToId String?
+  createdAt   DateTime  @default(now())
+  user        User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, familyId])
+  @@index([expiresAt])
 }
 
 model Household {

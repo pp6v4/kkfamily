@@ -1,7 +1,7 @@
 import { AccessService } from '../access/access.service';
 import { Level, permits } from '../access/permission-policy';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
-import { PackingItemStatus, Prisma, TripMemberStatus, TripStatus } from '@prisma/client';
+import { Prisma, TripMemberStatus, TripStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
 import { ApplyPackingTemplateDto } from './dto/apply-packing-template.dto';
 import { CreatePackingTemplateDto } from './dto/create-packing-template.dto';

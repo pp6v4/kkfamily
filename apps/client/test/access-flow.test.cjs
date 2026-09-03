@@ -38,6 +38,15 @@ test('New identity is directed to join, never automatically creates a separate h
   assert.deepEqual(calls,[['/auth/wechat/login','POST']]);
   assert.deepEqual(uni.routes,['/pages/join/index']); assert.equal(uni.values.has('kkfamily.householdContext'),false);
 });
+test('Expired access token rotates the stored refresh token before using wx.login',async()=>{
+  const uni=mockUni(),calls=[];let wechatLoginCalls=0;
+  uni.login=input=>{wechatLoginCalls++;input.success({code:'should-not-be-used'});};
+  uni.setStorageSync('kkfamily.accessToken','expired-access');uni.setStorageSync('kkfamily.refreshToken','old-refresh');
+  const renewed={accessToken:'new-access',refreshToken:'new-refresh',user:{households:[{membershipId:'member-a',household:{id:'house-a',name:'虚构家庭'},status:'ACTIVE',roles:['MEMBER']}]}};
+  const session=loadTs('src/services/session.ts',{'./transport':{ApiError,rawRequest:async(path,method,data)=>{calls.push({path,method,data});if(path==='/auth/me')throw new ApiError('expired',401);if(path==='/auth/refresh')return renewed;throw Error('Unexpected '+path);}}},uni);
+  const [result,same]=await Promise.all([session.ensureIdentity(),session.ensureIdentity()]);assert.equal(result.accessToken,'new-access');assert.equal(same.accessToken,'new-access');assert.equal(uni.getStorageSync('kkfamily.refreshToken'),'new-refresh');assert.equal(wechatLoginCalls,0);
+  assert.deepEqual(calls.map(item=>item.path),['/auth/me','/auth/refresh']);assert.equal(calls[1].data.refreshToken,'old-refresh');
+});
 test('Permission refresh updates cached roles/versions and 403 clears stale household context',async()=>{
   const uni=mockUni();let deny=false;
   const session=loadTs('src/services/session.ts',{'./transport':{ApiError,rawRequest:async()=>{if(deny)throw new ApiError('成员已停用',403);return {roles:['GUEST'],version:2,permissionVersion:2,effectivePermissions:{recipes:'VIEW'}};}}},uni);
@@ -105,6 +114,11 @@ test('Family API serializes optimistic shopping version instead of a blind statu
   const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent={path,method,data};return data;}}},uni);
   const item={id:'shopping-a',version:9,status:'NEXT_TRIP'};await api.updateShoppingItem(item,'PURCHASED');
   assert.equal(sent.path,'/shopping-lists/items/shopping-a');assert.equal(sent.method,'PATCH');assert.equal(sent.data.expectedVersion,9);assert.equal(sent.data.status,'PURCHASED');
+});
+test('Family API retries an access-token 401 once with the same household after renewal',async()=>{
+  const uni=mockUni(),sent=[];let attempt=0;
+  const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,renewSession:async preferred=>{assert.equal(preferred,'house-a');return{...family,accessToken:'renewed-token'};}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data,headers)=>{sent.push({path,method,data,headers});if(attempt++===0)throw new ApiError('expired',401);return[];}}},uni);
+  await api.listRecipes();assert.equal(sent.length,2);assert.match(sent[0].headers.Authorization,/fictional-token/);assert.match(sent[1].headers.Authorization,/renewed-token/);assert.equal(sent[1].headers['X-Household-Id'],'house-a');
 });
 test('Camping API carries packing versions for updates and soft removal',async()=>{
   const uni=mockUni(),sent=[];

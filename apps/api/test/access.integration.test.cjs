@@ -77,6 +77,20 @@ async function attachReadyCover(who,recipe,bytes=TEST_PNG){
 test('A01: unauthenticated household data returns 401', async () => {
   assert.equal((await call(null, 'GET', '/recipes')).status, 401);
 });
+test('A44: refresh tokens rotate once, reuse revokes the family, and logout revokes the current session',async()=>{
+  const who=await identity(),raw='refresh-'+randomUUID()+randomUUID(),familyId=randomUUID();
+  await db.authSession.create({data:{userId:who.userId,familyId,refreshHash:createHash('sha256').update(raw).digest('hex'),expiresAt:new Date(Date.now()+86400_000)}});
+  const rotated=await call(null,'POST','/auth/refresh',{refreshToken:raw});assert.equal(rotated.status,201,JSON.stringify(rotated.body));
+  assert.notEqual(rotated.body.data.refreshToken,raw);assert.match(rotated.body.data.accessToken,/^[\w-]+\.[\w-]+\.[\w-]+$/);
+  assert.ok((await db.authSession.findUnique({where:{refreshHash:createHash('sha256').update(raw).digest('hex')}})).consumedAt);
+  assert.equal((await call(null,'POST','/auth/refresh',{refreshToken:raw})).status,401,'reusing the consumed token revokes its whole family');
+  assert.equal((await call(null,'POST','/auth/refresh',{refreshToken:rotated.body.data.refreshToken})).status,401,'a rotated child is invalid after reuse detection');
+  assert.equal(await db.authSession.count({where:{familyId,revokedAt:null}}),0);
+  const logoutRaw='logout-'+randomUUID()+randomUUID();
+  await db.authSession.create({data:{userId:who.userId,familyId:randomUUID(),refreshHash:createHash('sha256').update(logoutRaw).digest('hex'),expiresAt:new Date(Date.now()+86400_000)}});
+  assert.equal((await call(null,'POST','/auth/logout',{refreshToken:logoutRaw})).status,201);
+  assert.equal((await call(null,'POST','/auth/refresh',{refreshToken:logoutRaw})).status,401);
+});
 test('A02: every implemented household listing rejects missing/blank headers', async () => {
   const who = await owner();
   for (const path of ['/recipes', '/inventory', '/shopping-lists', '/trips', '/packing-templates', '/members', '/favorites', '/archive/fields', '/dashboard/summary?from=2026-08-01T00:00:00Z&to=2026-09-01T00:00:00Z', '/inbox', '/notification-preferences', '/households/current/access', '/meals?from=2026-08-01&to=2026-09-01', '/calendar/events?from=2026-08-01&to=2026-09-01', '/calendar/anniversaries']) {
