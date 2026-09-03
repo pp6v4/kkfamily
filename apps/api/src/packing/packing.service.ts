@@ -16,51 +16,65 @@ export class PackingService {
   async listTemplates(userId: string, householdId: string) {
     await this.requireMember(userId, householdId);
     return { data: await this.prisma.packingTemplate.findMany({
-      where: { householdId, archived: false }, include: { items: { orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] } }, orderBy: { updatedAt: 'desc' },
+      where: { householdId, archived: false }, include: { items: { where: { archivedAt: null }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] } }, orderBy: { updatedAt: 'desc' },
     }) };
   }
 
   async createTemplate(userId: string, householdId: string, dto: CreatePackingTemplateDto) {
     const membership = await this.requireMember(userId, householdId, 'EDIT');
     await this.ensureTemplateNameAvailable(householdId, dto.name);
-    return { data: await this.prisma.packingTemplate.create({
-      data: {
-        householdId, createdById: membership.id, name: dto.name.trim(), description: dto.description?.trim(),
-        items: { create: dto.items.map((item, index) => ({ name: item.name.trim(), defaultQuantity: item.quantity, unit: item.unit?.trim(), note: item.note?.trim(), sortOrder: item.sortOrder ?? index })) },
-      },
-      include: { items: { orderBy: { sortOrder: 'asc' } } },
-    }) };
+    try {
+      return { data: await this.prisma.packingTemplate.create({
+        data: {
+          householdId, createdById: membership.id, name: dto.name.trim(), description: dto.description?.trim() || null,
+          items: { create: dto.items.map((item, index) => ({ name: item.name.trim(), defaultQuantity: item.quantity ?? null, unit: item.unit?.trim() || null, note: item.note?.trim() || null, sortOrder: item.sortOrder ?? index })) },
+        },
+        include: { items: { where: { archivedAt: null }, orderBy: { sortOrder: 'asc' } } },
+      }) };
+    } catch (error) { this.rethrowTemplateNameConflict(error); }
   }
 
   async updateTemplate(userId: string, householdId: string, templateId: string, dto: UpdatePackingTemplateDto) {
     const membership = await this.requireMember(userId, householdId, 'EDIT');
-    const template = await this.prisma.packingTemplate.findFirst({ where: { id: templateId, householdId } });
+    const template = await this.prisma.packingTemplate.findFirst({ where: { id: templateId, householdId, archived: false } });
     if (!template) throw new NotFoundException('Packing template was not found');
     const isAdmin = permits(membership.effectivePermissions, 'packing_templates', 'MANAGE');
     if (template.createdById !== membership.id && !isAdmin) throw new ForbiddenException('Only the template creator or an administrator can edit it');
     if (dto.name && dto.name.trim() !== template.name) await this.ensureTemplateNameAvailable(householdId, dto.name);
-    const updated = await this.prisma.$transaction(async (tx) => {
-      await tx.packingTemplate.update({ where: { id: templateId }, data: { name: dto.name?.trim(), description: dto.description?.trim(), archived: dto.archived } });
-      if (dto.items) {
-        const existingItems = await tx.packingTemplateItem.findMany({ where: { templateId }, select: { id: true } });
-        const existingIds = new Set(existingItems.map((item) => item.id));
-        const retainedIds: string[] = [];
-        for (const [index, item] of dto.items.entries()) {
-          const data = { name: item.name.trim(), defaultQuantity: item.quantity, unit: item.unit?.trim(), note: item.note?.trim(), sortOrder: item.sortOrder ?? index };
-          if (item.id) {
-            if (!existingIds.has(item.id)) throw new BadRequestException('Packing template item does not belong to this template');
-            await tx.packingTemplateItem.update({ where: { id: item.id }, data });
-            retainedIds.push(item.id);
-          } else {
-            const created = await tx.packingTemplateItem.create({ data: { templateId, ...data } });
-            retainedIds.push(created.id);
+    try {
+      const updated = await this.prisma.$transaction(async (tx) => {
+        const changed = await tx.packingTemplate.updateMany({
+          where: { id: templateId, householdId, archived: false, version: dto.expectedVersion },
+          data: { name: dto.name?.trim(), description: dto.description === undefined ? undefined : dto.description?.trim() || null, archived: dto.archived, version: { increment: 1 } },
+        });
+        if (changed.count !== 1) throw new ConflictException('行李模板已更新，请刷新后重试');
+        if (dto.items) {
+          const existingItems = await tx.packingTemplateItem.findMany({ where: { templateId, archivedAt: null }, select: { id: true } });
+          const existingIds = new Set(existingItems.map((item) => item.id));
+          const retainedIds: string[] = [];
+          const submittedIds = new Set<string>();
+          for (const [index, item] of dto.items.entries()) {
+            const data = { name: item.name.trim(), defaultQuantity: item.quantity ?? null, unit: item.unit?.trim() || null, note: item.note?.trim() || null, sortOrder: item.sortOrder ?? index };
+            if (item.id) {
+              if (!existingIds.has(item.id)) throw new BadRequestException('Packing template item does not belong to this template');
+              if (submittedIds.has(item.id)) throw new BadRequestException('Packing template item was submitted more than once');
+              submittedIds.add(item.id);
+              await tx.packingTemplateItem.update({ where: { id: item.id }, data: { ...data, version: { increment: 1 } } });
+              retainedIds.push(item.id);
+            } else {
+              const created = await tx.packingTemplateItem.create({ data: { templateId, ...data } });
+              retainedIds.push(created.id);
+            }
           }
+          await tx.packingTemplateItem.updateMany({
+            where: { templateId, archivedAt: null, id: { notIn: retainedIds } },
+            data: { archivedAt: new Date(), version: { increment: 1 } },
+          });
         }
-        await tx.packingTemplateItem.deleteMany({ where: { templateId, id: { notIn: retainedIds } } });
-      }
-      return tx.packingTemplate.findUniqueOrThrow({ where: { id: templateId }, include: { items: { orderBy: { sortOrder: 'asc' } } } });
-    });
-    return { data: updated };
+        return tx.packingTemplate.findUniqueOrThrow({ where: { id: templateId }, include: { items: { where: { archivedAt: null }, orderBy: { sortOrder: 'asc' } } } });
+      });
+      return { data: updated };
+    } catch (error) { this.rethrowTemplateNameConflict(error); }
   }
 
   async listTripItems(userId: string, householdId: string, tripId: string) {
@@ -71,7 +85,7 @@ export class PackingService {
   async applyTemplate(userId: string, householdId: string, tripId: string, dto: ApplyPackingTemplateDto) {
     await this.requireTripAccess(userId, householdId, tripId, true);
     await this.requireMember(userId, householdId);
-    const template = await this.prisma.packingTemplate.findFirst({ where: { id: dto.templateId, householdId, archived: false }, include: { items: { orderBy: { sortOrder: 'asc' } } } });
+    const template = await this.prisma.packingTemplate.findFirst({ where: { id: dto.templateId, householdId, archived: false }, include: { items: { where: { archivedAt: null }, orderBy: { sortOrder: 'asc' } } } });
     if (!template) throw new NotFoundException('Packing template was not found');
     const result = await this.prisma.tripPackingItem.createMany({
       data: template.items.map((item) => ({
@@ -138,6 +152,13 @@ export class PackingService {
   private async ensureTemplateNameAvailable(householdId: string, name: string) {
     const duplicate = await this.prisma.packingTemplate.findFirst({ where: { householdId, name: name.trim() } });
     if (duplicate) throw new ConflictException('A packing template with this name already exists');
+  }
+
+  private rethrowTemplateNameConflict(error: unknown): never {
+    if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') {
+      throw new ConflictException('A packing template with this name already exists');
+    }
+    throw error;
   }
 
   private async requireMember(userId: string, householdId: string, level: Level = 'VIEW') {

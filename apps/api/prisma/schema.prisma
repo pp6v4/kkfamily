@@ -566,6 +566,7 @@ model PackingTemplate {
   description      String?
   createdById      String
   archived         Boolean               @default(false)
+  version          Int                   @default(1)
   createdAt        DateTime              @default(now())
   updatedAt        DateTime              @updatedAt
   household        Household             @relation(fields: [householdId], references: [id], onDelete: Cascade)
@@ -585,10 +586,12 @@ model PackingTemplateItem {
   unit             String?
   note             String?
   sortOrder        Int               @default(0)
+  version          Int               @default(1)
+  archivedAt       DateTime?
   template         PackingTemplate   @relation(fields: [templateId], references: [id], onDelete: Cascade)
   tripPackingItems TripPackingItem[]
 
-  @@index([templateId, sortOrder])
+  @@index([templateId, archivedAt, sortOrder])
 }
 
 model TripPackingItem {

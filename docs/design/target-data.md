@@ -57,7 +57,7 @@
 
 ## 自定义行李的历史补强
 
-现有模型：PackingTemplate、PackingTemplateItem、TripPackingItem已落库。以下新增字段避免“模板内容独立，但来源名还随模板变化”的局部快照问题。
+现有模型：PackingTemplate、PackingTemplateItem、TripPackingItem已落库。下列历史快照、版本和软归档字段已在2026-09-03源码与迁移中落实，待隔离PostgreSQL执行回归。
 
 | 模型 | 新字段 | 不变量 |
 | --- | --- | --- |

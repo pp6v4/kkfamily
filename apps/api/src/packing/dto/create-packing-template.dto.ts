@@ -10,13 +10,13 @@ export class PackingTemplateItemInput {
   name!: string;
 
   @IsOptional() @IsNumber() @Min(0.001)
-  quantity?: number;
+  quantity?: number | null;
 
   @IsOptional() @TrimText() @IsString() @Length(1, 20)
-  unit?: string;
+  unit?: string | null;
 
   @IsOptional() @TrimText() @IsString() @Length(1, 200)
-  note?: string;
+  note?: string | null;
 
   @IsOptional() @IsInt() @Min(0)
   sortOrder?: number;
@@ -27,7 +27,7 @@ export class CreatePackingTemplateDto {
   name!: string;
 
   @IsOptional() @TrimText() @IsString() @Length(1, 300)
-  description?: string;
+  description?: string | null;
 
   @IsArray() @ArrayMinSize(1) @ArrayMaxSize(100)
   @ValidateNested({ each: true }) @Type(() => PackingTemplateItemInput)

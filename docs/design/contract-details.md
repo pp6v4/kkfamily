@@ -137,7 +137,7 @@ U08需要“不同家庭准备不同东西”，不能只做一个人负责人�
 
 套用到行程时复制快照；一个行程可选多个模板，也能手工加项。去重只按来源模板项ID，不按物品名称：两个模板都含“水”应保留两个来源，提醒用户自行合并，避免错把两家各带的一份当重复。重复套用同一模板，已有项保留数量、负责人和状态，新增加的模板项可以追加；不得同步覆盖。明确返回addedCount/skippedCount及items。
 
-E：删除模板项采用archivedAt逻辑归档保留稳定ID；已应用清单保存sourceTemplateNameSnapshot和sourceItemNameSnapshot。模板改名/归档不改历史展示。当前实现来源项删除SET NULL且模板名实时关联，尚未覆盖这两个历史边界，需后续迁移。用户从行程移除后再套同一模板是否恢复，建议一期“显式移除保存excludedAt，默认重复套用不复活；恢复需选择重新加入”。这是工程建议，不标注成当前行为。
+E：删除模板项采用archivedAt逻辑归档保留稳定ID；已应用清单保存sourceTemplateNameSnapshot和sourceItemNameSnapshot。模板和模板项均有version，旧页面修改返回409；模板改名、删项或归档不改历史展示。用户从行程移除后再套同一模板默认不复活，因为excludedAt不删除来源唯一键。
 
 一期状态PENDING/PACKED；状态写入仍要求canEdit=true，负责人身份单独不授予编辑权限。两人同时改数量或负责人用version乐观锁；前端重复点选按请求锁防抖。归档/移除前提示目标和影响，不物理清理历史业务。
 

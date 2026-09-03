@@ -120,13 +120,15 @@ test('Family API retries an access-token 401 once with the same household after 
   const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,renewSession:async preferred=>{assert.equal(preferred,'house-a');return{...family,accessToken:'renewed-token'};}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data,headers)=>{sent.push({path,method,data,headers});if(attempt++===0)throw new ApiError('expired',401);return[];}}},uni);
   await api.listRecipes();assert.equal(sent.length,2);assert.match(sent[0].headers.Authorization,/fictional-token/);assert.match(sent[1].headers.Authorization,/renewed-token/);assert.equal(sent[1].headers['X-Household-Id'],'house-a');
 });
-test('Camping API carries packing versions for updates and soft removal',async()=>{
+test('Camping API carries template and packing-item versions for safe updates',async()=>{
   const uni=mockUni(),sent=[];
   const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent.push({path,method,data});return data||{};}}},uni);
   const item={id:'packing-a',version:4,status:'PENDING'};
+  await api.updatePackingTemplate({id:'template-a',version:6},{name:'新版模板'});
   await api.updateTripPackingItem('trip-a',item,{status:'PACKED'});await api.removeTripPackingItem('trip-a',item);
-  assert.equal(sent[0].path,'/trips/trip-a/packing-items/packing-a');assert.equal(sent[0].method,'PATCH');assert.equal(sent[0].data.expectedVersion,4);assert.equal(sent[0].data.status,'PACKED');
-  assert.equal(sent[1].path,'/trips/trip-a/packing-items/packing-a?expectedVersion=4');assert.equal(sent[1].method,'DELETE');
+  assert.equal(sent[0].path,'/packing-templates/template-a');assert.equal(sent[0].method,'PATCH');assert.equal(sent[0].data.expectedVersion,6);assert.equal(sent[0].data.name,'新版模板');
+  assert.equal(sent[1].path,'/trips/trip-a/packing-items/packing-a');assert.equal(sent[1].method,'PATCH');assert.equal(sent[1].data.expectedVersion,4);assert.equal(sent[1].data.status,'PACKED');
+  assert.equal(sent[2].path,'/trips/trip-a/packing-items/packing-a?expectedVersion=4');assert.equal(sent[2].method,'DELETE');
 });
 test('Itinerary API carries trip and item versions, including confirmed stop removal',async()=>{
   const uni=mockUni(),sent=[];

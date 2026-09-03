@@ -117,16 +117,18 @@ function removeTemplateItem(index: number) { if (templateForm.value.items.length
 async function saveTemplate() {
   const rows = templateForm.value.items.filter((item) => item.name.trim());
   if (!templateForm.value.name.trim() || !rows.length) { uni.showToast({ title: '请填写模板名称和至少一件物品', icon: 'none' }); return; }
-  const payload = { name: templateForm.value.name.trim(), description: templateForm.value.description.trim() || undefined, items: rows.map((item, index) => ({ id: item.id, name: item.name.trim(), quantity: item.quantity === '' ? undefined : Number(item.quantity), unit: item.unit.trim() || undefined, note: item.note.trim() || undefined, sortOrder: index })) };
+  const payload = { name: templateForm.value.name.trim(), description: templateForm.value.description.trim() || null, items: rows.map((item, index) => ({ id: item.id, name: item.name.trim(), quantity: item.quantity === '' ? null : Number(item.quantity), unit: item.unit.trim() || null, note: item.note.trim() || null, sortOrder: index })) };
   try {
-    if (editingTemplateId.value) await updatePackingTemplate(editingTemplateId.value, payload); else await createPackingTemplate(payload);
+    const editing = templates.value.find((template) => template.id === editingTemplateId.value);
+    if (editingTemplateId.value && !editing) throw new Error('行李模板已变更，请刷新后重试');
+    if (editing) await updatePackingTemplate(editing, payload); else await createPackingTemplate(payload);
     showingTemplateForm.value = false; await loadData(); uni.showToast({ title: editingTemplateId.value ? '模板已更新' : '模板已创建', icon: 'success' });
   } catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
 }
 function archiveTemplate(template: PackingTemplate) {
   uni.showModal({ title: '归档模板', content: `归档“${template.name}”后，已生成的行程行李不会受影响。`, success: async (result) => {
     if (!result.confirm) return;
-    try { await updatePackingTemplate(template.id, { archived: true }); await loadData(); }
+    try { await updatePackingTemplate(template, { archived: true }); await loadData(); }
     catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
   } });
 }

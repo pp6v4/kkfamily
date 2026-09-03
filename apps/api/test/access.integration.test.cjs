@@ -481,6 +481,30 @@ test('A24/A25/A29: arbitrary template items stay exact, repeat apply skips, assi
   assert.equal((await call(member,'PATCH',`${path}/${item.id}`,{expectedVersion:item.version,status:'PACKED'})).status,403);
   assert.equal((await call(member,'GET','/packing-templates')).status,403);
 });
+test('A28: template edits are versioned, removed items are archived, and existing trip snapshots stay unchanged',async()=>{
+  const who=await owner();
+  const firstTrip=(await call(who,'POST','/trips',{title:'旧行程快照',startsAt:'2026-09-12T08:00:00+08:00'})).body.data;
+  let template=(await call(who,'POST','/packing-templates',{name:'周末装备',items:[{name:'天幕'},{name:'炭'}]})).body.data;
+  assert.equal(template.version,1);assert.deepEqual(template.items.map(item=>item.name),['天幕','炭']);
+  const firstApply=await call(who,'POST',`/trips/${firstTrip.id}/packing-items/apply-template`,{templateId:template.id});
+  assert.equal(firstApply.status,201);assert.equal(firstApply.body.data.addedCount,2);
+  const retained=template.items[0],removed=template.items[1];
+  const edited=await call(who,'PATCH',`/packing-templates/${template.id}`,{expectedVersion:1,name:'精简装备',items:[{id:retained.id,name:'大天幕'}]});
+  assert.equal(edited.status,200,JSON.stringify(edited.body));template=edited.body.data;
+  assert.equal(template.version,2);assert.deepEqual(template.items.map(item=>item.name),['大天幕']);assert.equal(template.items[0].version,2);
+  assert.equal((await call(who,'PATCH',`/packing-templates/${template.id}`,{expectedVersion:1,name:'过期页面覆盖'})).status,409);
+  const archivedItem=await db.packingTemplateItem.findUnique({where:{id:removed.id}});
+  assert.ok(archivedItem.archivedAt);assert.equal(archivedItem.version,2);
+  const oldItems=(await call(who,'GET',`/trips/${firstTrip.id}/packing-items`)).body.data;
+  assert.deepEqual(oldItems.map(item=>item.name).sort(),['天幕','炭']);
+  assert.deepEqual(oldItems.map(item=>item.sourceTemplateNameSnapshot).sort(),['周末装备','周末装备']);
+  const nextTrip=(await call(who,'POST','/trips',{title:'新行程快照',startsAt:'2026-09-13T08:00:00+08:00'})).body.data;
+  const nextApply=await call(who,'POST',`/trips/${nextTrip.id}/packing-items/apply-template`,{templateId:template.id});
+  assert.equal(nextApply.body.data.addedCount,1);assert.equal(nextApply.body.data.items[0].name,'大天幕');
+  const archived=await call(who,'PATCH',`/packing-templates/${template.id}`,{expectedVersion:2,archived:true});
+  assert.equal(archived.status,200);assert.equal(archived.body.data.version,3);
+  assert.equal((await call(who,'POST',`/trips/${nextTrip.id}/packing-items/apply-template`,{templateId:template.id})).status,404);
+});
 test('D08: packing assignments honor preparation groups, versions, and soft exclusion',async()=>{
   const who=await owner(),member=await join(who,['CAMPER']);
   const trip=(await call(who,'POST','/trips',{title:'行李版本验证',startsAt:'2026-09-14T08:00:00+08:00'})).body.data;
