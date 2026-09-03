@@ -76,13 +76,13 @@ test('A01: unauthenticated household data returns 401', async () => {
 });
 test('A02: every implemented household listing rejects missing/blank headers', async () => {
   const who = await owner();
-  for (const path of ['/recipes', '/inventory', '/shopping-lists', '/trips', '/packing-templates', '/members', '/households/current/access', '/meals?from=2026-08-01&to=2026-09-01', '/calendar/events?from=2026-08-01&to=2026-09-01']) {
+  for (const path of ['/recipes', '/inventory', '/shopping-lists', '/trips', '/packing-templates', '/members', '/favorites', '/households/current/access', '/meals?from=2026-08-01&to=2026-09-01', '/calendar/events?from=2026-08-01&to=2026-09-01']) {
     for (const header of [undefined, '', ' ']) assert.equal((await call({ token: who.token }, 'GET', path, undefined, header)).status, 400, path);
   }
 });
 test('A03: valid token cannot select another household', async () => {
   const one = await owner(), two = await owner();
-  for (const path of ['/recipes', '/members', '/trips', '/inventory', '/shopping-lists']) assert.equal((await call(one, 'GET', path, undefined, two.householdId)).status, 403, path);
+  for (const path of ['/recipes', '/members', '/trips', '/inventory', '/shopping-lists', '/favorites']) assert.equal((await call(one, 'GET', path, undefined, two.householdId)).status, 403, path);
 });
 test('A04: explicit DENY defeats chef role and explicit VIEW replaces EDIT', async () => {
   const who = await owner(), chef = await join(who, ['CHEF']);
@@ -336,6 +336,39 @@ test('A36/C03: task assignment, versions, history, reopen reason and calendar ca
   changed=await call(member,'PATCH',`${path}/${task.id}/status`,{expectedVersion:task.version,status:'CANCELLED'});task=changed.body.data;
   calendar=await call(viewer,'GET','/calendar/events?from=2026-09-25T00:00:00%2B08:00&to=2026-09-26T00:00:00%2B08:00');assert.ok(!calendar.body.data.some(event=>event.sourceId===task.id));
   const detail=await call(who,'GET',`${path}/${task.id}`);assert.ok(detail.body.data.history.length>=6);assert.ok(detail.body.data.history.some(item=>item.comment==='返工复查'));
+});
+test('A38/D12: favorite visibility, private media and idempotent draft conversion preserve the source',async()=>{
+  const who=await owner();
+  const editor=await join(who,['MEMBER'],[{module:'recipes',level:'EDIT',effect:'ALLOW'}]);
+  const viewer=await join(who,['GUEST'],[{module:'favorites',level:'VIEW',effect:'ALLOW'}]);
+  assert.equal((await call(editor,'POST','/favorites',{type:'LINK',title:'无协议链接',sourceUrl:'example.test',tags:[],visibility:'HOUSEHOLD'})).status,400);
+  const sharedResponse=await call(editor,'POST','/favorites',{type:'LINK',title:'想试的新早餐',text:'只保存我手工填写的内容',sourceUrl:'https://example.test/inspiration',tags:['早餐','早餐'],visibility:'HOUSEHOLD'});
+  assert.equal(sharedResponse.status,201,JSON.stringify(sharedResponse.body));let shared=sharedResponse.body.data;
+  assert.deepEqual(shared.tags,['早餐']);assert.equal((await call(viewer,'GET',`/favorites/${shared.id}`)).status,200);
+  const privateResponse=await call(editor,'POST','/favorites',{type:'TEXT',title:'私人的小想法',text:'仅自己可见',tags:[],visibility:'PRIVATE'});
+  assert.equal(privateResponse.status,201);const privateFavorite=privateResponse.body.data;
+  assert.equal((await call(viewer,'GET',`/favorites/${privateFavorite.id}`)).status,404);
+  assert.ok(!(await call(viewer,'GET','/favorites')).body.data.some(item=>item.id===privateFavorite.id));
+  assert.ok((await call(who,'GET','/favorites')).body.data.some(item=>item.id===privateFavorite.id),'MANAGE can maintain all household favorites');
+  assert.equal((await call(editor,'PATCH',`/favorites/${shared.id}`,{expectedVersion:99,title:'过期覆盖'})).status,409);
+  const intent=await call(editor,'POST','/media/upload-intents',{ownerType:'FAVORITE',ownerId:shared.id,expectedOwnerVersion:shared.version,mimeType:'image/png',byteSize:TEST_PNG.length});assert.equal(intent.status,201,JSON.stringify(intent.body));
+  const uploaded=await callRaw(editor,intent.body.data.uploadPath,TEST_PNG);const confirmed=await call(editor,'POST','/media/assets/confirm',{intentId:intent.body.data.id,checksumSha256:uploaded.body.data.checksumSha256});assert.equal(confirmed.status,201,JSON.stringify(confirmed.body));
+  shared=(await call(editor,'GET',`/favorites/${shared.id}`)).body.data;assert.deepEqual(shared.assetIds,[confirmed.body.data.asset.id]);assert.equal(shared.version,2);
+  assert.equal((await call(viewer,'GET',`/media/assets/${confirmed.body.data.asset.id}/url`)).status,200);
+  const input={expectedVersion:shared.version,targetType:'RECIPE',idempotencyKey:'favorite-retry-key-001',confirmedTitle:'早餐灵感草稿'};
+  const converted=await Promise.all([1,2].map(()=>call(editor,'POST',`/favorites/${shared.id}/convert`,input)));
+  assert.ok(converted.every(result=>result.status===201),JSON.stringify(converted));assert.equal(converted[0].body.data.targetId,converted[1].body.data.targetId);
+  const recipe=await db.recipe.findUnique({where:{id:converted[0].body.data.targetId},include:{ingredients:true,seasonings:true}});
+  assert.equal(recipe.status,'DRAFT');assert.deepEqual(recipe.steps,[]);assert.equal(recipe.ingredients.length,0);assert.equal(recipe.seasonings.length,0);assert.equal(recipe.coverAssetId,null);
+  const covered=await attachReadyCover(editor,recipe);assert.equal((await call(editor,'PATCH',`/recipes/${recipe.id}/status`,{status:'PUBLISHED',expectedVersion:covered.version})).status,409,'Empty converted draft cannot publish even after adding a cover');
+  assert.ok(await db.favorite.findUnique({where:{id:shared.id}}),'Conversion keeps source favorite');
+  assert.equal(await db.favoriteConversion.count({where:{favoriteId:shared.id,targetType:'RECIPE'}}),1);
+  const taskInput={expectedVersion:shared.version,targetType:'TASK',idempotencyKey:'favorite-task-key-001',confirmedTitle:'试做早餐',confirmedDescription:'周末安排'};
+  const taskConversion=await call(editor,'POST',`/favorites/${shared.id}/convert`,taskInput);assert.equal(taskConversion.status,201,JSON.stringify(taskConversion.body));
+  const task=await db.task.findUnique({where:{id:taskConversion.body.data.targetId}});assert.equal(task.status,'PENDING');assert.equal(task.assigneeMembershipId,editor.memberId);assert.match(task.description,/周末安排/);assert.match(task.description,/https:\/\/example\.test/);
+  assert.equal((await call(editor,'POST',`/favorites/${shared.id}/archive`,{expectedVersion:shared.version})).status,201);
+  assert.equal((await call(viewer,'GET',`/favorites/${shared.id}`)).status,404);
+  assert.ok(await db.recipe.findUnique({where:{id:recipe.id}}),'Archiving the source does not delete converted targets');
 });
 test('A24/A25/A29: arbitrary template items stay exact, repeat apply skips, assignee remains read-only', async () => {
   const who=await owner(), member=await join(who,['CAMPER']);

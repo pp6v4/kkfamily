@@ -145,3 +145,17 @@ test('Task client sends optimistic version for content and status updates',async
   assert.equal(sent[0].path,'/tasks/task-a');assert.equal(sent[0].method,'PATCH');assert.equal(sent[0].data.expectedVersion,6);assert.equal(sent[0].data.title,'清洗空调');
   assert.equal(sent[1].path,'/tasks/task-a/status');assert.equal(sent[1].method,'PATCH');assert.equal(sent[1].data.expectedVersion,6);assert.equal(sent[1].data.status,'IN_PROGRESS');
 });
+test('Favorite client preserves optimistic versions and a stable conversion idempotency key',async()=>{
+  const uni=mockUni(),sent=[];
+  const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent.push({path,method,data});return data||{};}}},uni);
+  const favorite={id:'favorite-a',version:4,type:'LINK',title:'早餐灵感',visibility:'HOUSEHOLD'};
+  await api.updateFavorite(favorite,{title:'周末早餐'});
+  await api.convertFavorite(favorite,{targetType:'RECIPE',idempotencyKey:'same-conversion-key',confirmedTitle:'周末早餐草稿'});
+  await api.archiveFavorite(favorite);
+  await api.createMediaUploadIntent({ownerType:'FAVORITE',ownerId:favorite.id,expectedOwnerVersion:favorite.version,mimeType:'image/png',byteSize:16});
+  assert.deepEqual(sent.slice(0,3).map(item=>[item.path,item.method,item.data.expectedVersion]),[
+    ['/favorites/favorite-a','PATCH',4],['/favorites/favorite-a/convert','POST',4],['/favorites/favorite-a/archive','POST',4],
+  ]);
+  assert.equal(sent[1].data.idempotencyKey,'same-conversion-key');assert.equal(sent[1].data.targetType,'RECIPE');
+  assert.equal(sent[3].data.ownerType,'FAVORITE');assert.equal(sent[3].data.expectedOwnerVersion,4);
+});

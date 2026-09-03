@@ -26,6 +26,8 @@ export interface TripPackingItem { id: string; version: number; name: string; qu
 export interface TaskPerson { id:string; user:{id:string;nickname:string|null;avatarUrl:string|null} }
 export interface TaskHistory { id:string; fromStatus:Task['status']|null; toStatus:Task['status']|null; comment:string|null; createdAt:string; actor:TaskPerson }
 export interface Task { id:string; version:number; type:'TODO'|'REQUEST'; title:string; description:string|null; assigneeMembershipId:string|null; dueAt:string|null; reminderAt:string|null; priority:'LOW'|'NORMAL'|'HIGH'; status:'PENDING'|'IN_PROGRESS'|'COMPLETED'|'CANCELLED'; completedAt:string|null; assignee:TaskPerson|null; createdBy:TaskPerson; completedBy:TaskPerson|null; history?:TaskHistory[] }
+export interface FavoriteConversion { id:string; targetType:'RECIPE'|'TASK'; targetId:string; createdAt:string }
+export interface Favorite { id:string; version:number; type:'TEXT'|'IMAGE'|'LINK'; title:string; text:string|null; sourceUrl:string|null; assetIds:string[]; tags:string[]; visibility:'PRIVATE'|'HOUSEHOLD'; createdById:string; createdBy:TaskPerson; conversions:FavoriteConversion[]; createdAt:string; updatedAt:string }
 
 async function request<T>(path: string, method: UniApp.RequestOptions['method'] = 'GET', data?: unknown): Promise<T> {
   const session = await ensureSession();
@@ -46,7 +48,7 @@ export function updateRecipe(recipeId: string, input: { expectedVersion: number;
 export function updateRecipeStatus(recipe: Recipe, status: Recipe['status']) { return request<Recipe>(`/recipes/${recipe.id}/status`, 'PATCH', { status, expectedVersion: recipe.version }); }
 export interface MediaAsset { id:string; mimeType:string; byteSize:number; checksumSha256:string }
 export interface TripPhoto { id:string; mimeType:string; byteSize:number; createdAt:string; createdBy:{id:string;nickname:string|null;avatarUrl:string|null} }
-export function createMediaUploadIntent(input:{ownerType:'RECIPE'|'TRIP';ownerId:string;expectedOwnerVersion:number;mimeType:'image/jpeg'|'image/png'|'image/webp';byteSize:number}){return request<{id:string;uploadPath:string;mimeType:string;byteSize:number;expiresAt:string}>('/media/upload-intents','POST',input);}
+export function createMediaUploadIntent(input:{ownerType:'RECIPE'|'TRIP'|'FAVORITE';ownerId:string;expectedOwnerVersion:number;mimeType:'image/jpeg'|'image/png'|'image/webp';byteSize:number}){return request<{id:string;uploadPath:string;mimeType:string;byteSize:number;expiresAt:string}>('/media/upload-intents','POST',input);}
 export function uploadMediaContent(uploadPath:string,data:ArrayBuffer,mimeType:string){return binaryRequest<{intentId:string;checksumSha256:string;byteSize:number}>(uploadPath,data,mimeType);}
 export function confirmMediaAsset(intentId:string,checksumSha256:string){return request<{asset:MediaAsset;ownerVersion:number}>('/media/assets/confirm','POST',{intentId,checksumSha256});}
 export function getMediaReadUrl(assetId:string){return request<{path:string;expiresAt:string}>(`/media/assets/${assetId}/url`);}
@@ -108,3 +110,9 @@ export function createTask(input:{type:Task['type'];title:string;description?:st
 export function updateTask(task:Task,input:{type?:Task['type'];title?:string;description?:string;assigneeMembershipId?:string|null;dueAt?:string|null;priority?:Task['priority'];reminderAt?:string|null}){return request<Task>(`/tasks/${task.id}`,'PATCH',{expectedVersion:task.version,...input});}
 export function updateTaskStatus(task:Task,status:Task['status'],reason?:string){return request<Task>(`/tasks/${task.id}/status`,'PATCH',{expectedVersion:task.version,status,reason});}
 export function addTaskComment(taskId:string,comment:string){return request<Task>(`/tasks/${taskId}/comments`,'POST',{comment});}
+export function listFavorites(){return request<Favorite[]>('/favorites');}
+export function getFavorite(favoriteId:string){return request<Favorite>(`/favorites/${favoriteId}`);}
+export function createFavorite(input:{type:Favorite['type'];title:string;text?:string;sourceUrl?:string;tags:string[];visibility:Favorite['visibility']}){return request<Favorite>('/favorites','POST',input);}
+export function updateFavorite(favorite:Favorite,input:{type?:Favorite['type'];title?:string;text?:string|null;sourceUrl?:string|null;tags?:string[];visibility?:Favorite['visibility']}){return request<Favorite>(`/favorites/${favorite.id}`,'PATCH',{expectedVersion:favorite.version,...input});}
+export function archiveFavorite(favorite:Favorite){return request<{archived:boolean;id:string}>(`/favorites/${favorite.id}/archive`,'POST',{expectedVersion:favorite.version});}
+export function convertFavorite(favorite:Favorite,input:{targetType:'RECIPE'|'TASK';idempotencyKey:string;confirmedTitle:string;confirmedDescription?:string}){return request<{targetId:string;targetType:'RECIPE'|'TASK';status:'DRAFT';repeated:boolean}>(`/favorites/${favorite.id}/convert`,'POST',{expectedVersion:favorite.version,...input});}

@@ -161,6 +161,22 @@ enum TaskStatus {
   CANCELLED
 }
 
+enum FavoriteType {
+  TEXT
+  IMAGE
+  LINK
+}
+
+enum FavoriteVisibility {
+  PRIVATE
+  HOUSEHOLD
+}
+
+enum FavoriteConversionTarget {
+  RECIPE
+  TASK
+}
+
 model User {
   id          String       @id @default(cuid())
   openId      String       @unique
@@ -191,6 +207,7 @@ model Household {
   mediaAssets      MediaAsset[]
   mediaReferences  MediaReference[]
   tasks            Task[]
+  favorites        Favorite[]
 }
 
 model CalendarEvent {
@@ -233,6 +250,8 @@ model Membership {
   assignedTasks           Task[]                 @relation("TaskAssignee")
   completedTasks          Task[]                 @relation("TaskCompleter")
   taskHistory             TaskHistory[]
+  createdFavorites        Favorite[]           @relation("FavoriteCreator")
+  favoriteConversions     FavoriteConversion[] @relation("FavoriteConversionActor")
 
   @@unique([householdId, userId])
 }
@@ -801,4 +820,42 @@ model TaskHistory {
   actor             Membership  @relation(fields: [actorMembershipId], references: [id], onDelete: Restrict)
 
   @@index([taskId, createdAt, id])
+}
+
+model Favorite {
+  id          String             @id @default(cuid())
+  householdId String
+  type        FavoriteType
+  title       String
+  text        String?
+  sourceUrl   String?
+  assetIds    Json               @default("[]")
+  tags        Json               @default("[]")
+  visibility  FavoriteVisibility @default(PRIVATE)
+  createdById String
+  version     Int                @default(1)
+  archivedAt  DateTime?
+  createdAt   DateTime           @default(now())
+  updatedAt   DateTime           @updatedAt
+  household   Household          @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  createdBy   Membership         @relation("FavoriteCreator", fields: [createdById], references: [id], onDelete: Restrict)
+  conversions FavoriteConversion[]
+
+  @@index([householdId, archivedAt, updatedAt])
+  @@index([createdById, visibility, archivedAt])
+}
+
+model FavoriteConversion {
+  id                String                   @id @default(cuid())
+  favoriteId        String
+  targetType        FavoriteConversionTarget
+  targetId          String
+  actorMembershipId String
+  idempotencyKey    String
+  createdAt         DateTime                 @default(now())
+  favorite          Favorite                 @relation(fields: [favoriteId], references: [id], onDelete: Cascade)
+  actor             Membership               @relation("FavoriteConversionActor", fields: [actorMembershipId], references: [id], onDelete: Restrict)
+
+  @@unique([actorMembershipId, idempotencyKey])
+  @@index([favoriteId, createdAt])
 }

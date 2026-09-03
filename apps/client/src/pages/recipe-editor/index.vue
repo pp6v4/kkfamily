@@ -33,7 +33,7 @@ async function loadPage(query?: Record<string, string | undefined>) {
       const recipe = await getRecipe(recipeId.value);
       recipeVersion.value = recipe.version; recipeStatus.value = recipe.status; name.value = recipe.name;
       coverAssetId.value = recipe.coverAssetId ?? '';
-      ingredients.value = recipe.ingredients.map(item => ({ name: item.ingredient.name, quantity: item.quantity === null ? '' : String(Number(item.quantity)), unit: item.unit }));
+      ingredients.value = recipe.ingredients.length ? recipe.ingredients.map(item => ({ name: item.ingredient.name, quantity: item.quantity === null ? '' : String(Number(item.quantity)), unit: item.unit })) : [{ name: '', quantity: '', unit: 'g' }];
       seasonings.value = recipe.seasonings.length ? recipe.seasonings.map(item => item.name) : [''];
       steps.value = recipe.steps.length ? [...recipe.steps] : [''];
       const index = categories.value.findIndex(item => item.id === recipe.category?.id); categoryIndex.value = index < 0 ? 0 : index;

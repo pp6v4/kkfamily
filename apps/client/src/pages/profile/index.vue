@@ -20,6 +20,10 @@ function open(title: string) {
     if (!canAccess(session.value, 'tasks')) { uni.showToast({ title: '尚未获得家庭待办权限', icon: 'none' }); return; }
     uni.navigateTo({ url: '/pages/tasks/index' }); return;
   }
+  if (title === '收藏与灵感') {
+    if (!canAccess(session.value, 'favorites')) { uni.showToast({ title: '尚未获得收藏灵感权限', icon: 'none' }); return; }
+    uni.navigateTo({ url: '/pages/favorites/index' }); return;
+  }
   if (title === '设置') { uni.navigateTo({ url: '/pages/join/index' }); return; }
   uni.showToast({ title: `${title}尚未实现，当前不是可用功能`, icon: 'none' });
 }

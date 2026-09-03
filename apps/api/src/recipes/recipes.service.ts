@@ -116,6 +116,9 @@ export class RecipesService {
       if (recipe.status === dto.status) return { data: await tx.recipe.findUniqueOrThrow({ where: { id: recipeId }, include: recipeInclude }) };
       if (dto.status === RecipeStatus.PUBLISHED) {
         if (!recipe.coverAssetId || !await tx.mediaAsset.findFirst({ where: { id: recipe.coverAssetId, householdId, status: 'READY' } })) throw new ConflictException('发布菜谱前请先上传并确认成品图片');
+        const ingredientCount = await tx.recipeIngredient.count({ where: { recipeId } });
+        const steps = Array.isArray(recipe.steps) ? recipe.steps.filter(step => typeof step === 'string' && step.trim()) : [];
+        if (!ingredientCount || !steps.length) throw new ConflictException('发布菜谱前请至少填写一种食材和一个做法步骤');
       }
       const updated = await tx.recipe.update({ where: { id: recipeId }, data: { status: dto.status, version: { increment: 1 } }, include: recipeInclude });
       await tx.auditLog.create({ data: { householdId, actorMembershipId: membership.id, action: 'RECIPE_STATUS', targetId: recipeId, details: { from: recipe.status, to: dto.status, fromVersion: recipe.version, toVersion: updated.version } } });
