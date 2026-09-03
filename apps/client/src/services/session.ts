@@ -30,7 +30,7 @@ export interface LoginResult {
 
 let pendingSession: Promise<HouseholdContext> | undefined;
 let pendingIdentity: Promise<LoginResult> | undefined;
-let pendingRenewal: Promise<HouseholdContext> | undefined;
+let pendingIdentityRenewal: Promise<LoginResult> | undefined;
 let openingJoin = false;
 
 function loginCode() {
@@ -60,6 +60,19 @@ async function rotateRefreshToken() {
   const login = await rawRequest<LoginResult>('/auth/refresh', 'POST', { refreshToken });
   storeTokens(login);
   return login;
+}
+
+export async function renewIdentity() {
+  if (pendingIdentityRenewal) return pendingIdentityRenewal;
+  pendingIdentityRenewal = (async () => {
+    try { return await rotateRefreshToken(); }
+    catch (error) {
+      if (!(error instanceof ApiError && error.statusCode === 401)) throw error;
+      clearStoredTokens();
+      return loginWithWechat();
+    }
+  })();
+  try { return await pendingIdentityRenewal; } finally { pendingIdentityRenewal = undefined; }
 }
 
 function activeHousehold(login: LoginResult, preferredHouseholdId?: string, requirePreferred = false) {
@@ -122,11 +135,7 @@ export async function ensureIdentity(): Promise<LoginResult> {
         if (!(error instanceof ApiError && error.statusCode === 401)) throw error;
       }
     }
-    if (refreshToken) {
-      try { return await rotateRefreshToken(); }
-      catch (error) { if (!(error instanceof ApiError && error.statusCode === 401)) throw error; clearStoredTokens(); }
-    }
-    return loginWithWechat();
+    return refreshToken ? renewIdentity() : loginWithWechat();
   })();
   try { return await pendingIdentity; } finally { pendingIdentity = undefined; }
 }
@@ -137,22 +146,25 @@ export function canAccess(context: HouseholdContext | undefined, module: string,
   return assigned ? rank[assigned] >= rank[level] : false;
 }
 
+export async function identityRequest<T>(path: string, method: UniApp.RequestOptions['method'], data?: unknown) {
+  let identity = await ensureIdentity();
+  try {
+    const result = await rawRequest<T>(path, method, data, { Authorization: `Bearer ${identity.accessToken}` });
+    return { data: result, identity };
+  } catch (error) {
+    if (!(error instanceof ApiError && error.statusCode === 401)) throw error;
+    identity = await renewIdentity();
+    const result = await rawRequest<T>(path, method, data, { Authorization: `Bearer ${identity.accessToken}` });
+    return { data: result, identity };
+  }
+}
+
 export async function renewSession(preferredHouseholdId?: string) {
-  if (pendingRenewal) return pendingRenewal;
-  pendingRenewal = (async () => {
-    let login: LoginResult;
-    try { login = await rotateRefreshToken(); }
-    catch (error) {
-      if (!(error instanceof ApiError && error.statusCode === 401)) throw error;
-      clearStoredTokens();
-      login = await loginWithWechat();
-    }
-    const context = contextFrom(login, preferredHouseholdId, Boolean(preferredHouseholdId));
-    if (!context) { openJoin(); throw new Error('请先创建家庭或输入管理员提供的邀请码'); }
-    rememberSession(context);
-    return context;
-  })();
-  try { return await pendingRenewal; } finally { pendingRenewal = undefined; }
+  const login = await renewIdentity();
+  const context = contextFrom(login, preferredHouseholdId, Boolean(preferredHouseholdId));
+  if (!context) { openJoin(); throw new Error('请先创建家庭或输入管理员提供的邀请码'); }
+  rememberSession(context);
+  return context;
 }
 
 export async function logoutSession() {

@@ -32,7 +32,7 @@
 - API ESLint与TypeScript构建：通过。
 - Prisma schema：通过（使用仅供校验的本地占位DATABASE_URL，不连接数据库）。
 - 微信小程序构建：通过；构建结果已同步到`outputs/mp-weixin`并做文件哈希核对。
-- 客户端逻辑与媒体签名单元测试：23/23通过。
+- 客户端逻辑与媒体签名单元测试：24/24通过。
 - 数据库HTTP集成测试：47条声明已编写，本轮未执行；不能记录为PASS。
 - Prisma迁移目录：16批；本轮未在独立PostgreSQL执行。
 

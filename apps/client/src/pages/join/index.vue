@@ -1,8 +1,7 @@
 <script setup lang="ts">
 import { ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
-import { ensureIdentity, logoutSession, rememberSession, type LoginResult } from '../../services/session';
-import { rawRequest } from '../../services/transport';
+import { ensureIdentity, identityRequest, logoutSession, rememberSession, type LoginResult } from '../../services/session';
 const name = ref('扣扣的家'), code = ref(''), busy = ref(false), error = ref('');
 const identity = ref<LoginResult>();
 async function login() { error.value = ''; try { identity.value = await ensureIdentity(); } catch (e) { error.value = e instanceof Error ? e.message : '登录失败，请重试'; } }
@@ -11,13 +10,11 @@ async function submit(action: 'create' | 'join') {
   if (action === 'create' && !name.value.trim() || action === 'join' && !code.value.trim()) { error.value = '请填写家庭名称或邀请码'; return; }
   busy.value = true; error.value = '';
   try {
-    const current = await ensureIdentity();
-    const headers = { Authorization: `Bearer ${current.accessToken}` };
     if (action === 'create') {
-      const family = await rawRequest<{ id: string; name: string; membershipId: string }>('/households', 'POST', { name: name.value.trim() }, headers);
+      const { data: family, identity: current } = await identityRequest<{ id: string; name: string; membershipId: string }>('/households', 'POST', { name: name.value.trim() });
       rememberSession({ householdId: family.id, householdName: family.name, membershipId: family.membershipId, roles: ['ADMIN'], accessToken: current.accessToken });
     } else {
-      const member = await rawRequest<{ membershipId: string; roles: string[]; household: { id: string; name: string } }>('/invitations/redeem', 'POST', { code: code.value.trim() }, headers);
+      const { data: member, identity: current } = await identityRequest<{ membershipId: string; roles: string[]; household: { id: string; name: string } }>('/invitations/redeem', 'POST', { code: code.value.trim() });
       rememberSession({ householdId: member.household.id, householdName: member.household.name, membershipId: member.membershipId, roles: member.roles, accessToken: current.accessToken });
     }
     code.value = ''; uni.switchTab({ url: '/pages/profile/index' });

@@ -38,14 +38,32 @@ test('New identity is directed to join, never automatically creates a separate h
   assert.deepEqual(calls,[['/auth/wechat/login','POST']]);
   assert.deepEqual(uni.routes,['/pages/join/index']); assert.equal(uni.values.has('kkfamily.householdContext'),false);
 });
-test('Expired access token rotates the stored refresh token before using wx.login',async()=>{
+test('Expired access token shares one rotation across identity and household renewal',async()=>{
   const uni=mockUni(),calls=[];let wechatLoginCalls=0;
   uni.login=input=>{wechatLoginCalls++;input.success({code:'should-not-be-used'});};
   uni.setStorageSync('kkfamily.accessToken','expired-access');uni.setStorageSync('kkfamily.refreshToken','old-refresh');
   const renewed={accessToken:'new-access',refreshToken:'new-refresh',user:{households:[{membershipId:'member-a',household:{id:'house-a',name:'虚构家庭'},status:'ACTIVE',roles:['MEMBER']}]}};
   const session=loadTs('src/services/session.ts',{'./transport':{ApiError,rawRequest:async(path,method,data)=>{calls.push({path,method,data});if(path==='/auth/me')throw new ApiError('expired',401);if(path==='/auth/refresh')return renewed;throw Error('Unexpected '+path);}}},uni);
-  const [result,same]=await Promise.all([session.ensureIdentity(),session.ensureIdentity()]);assert.equal(result.accessToken,'new-access');assert.equal(same.accessToken,'new-access');assert.equal(uni.getStorageSync('kkfamily.refreshToken'),'new-refresh');assert.equal(wechatLoginCalls,0);
+  const [result,same,context]=await Promise.all([session.ensureIdentity(),session.ensureIdentity(),session.renewSession('house-a')]);assert.equal(result.accessToken,'new-access');assert.equal(same.accessToken,'new-access');assert.equal(context.accessToken,'new-access');assert.equal(uni.getStorageSync('kkfamily.refreshToken'),'new-refresh');assert.equal(wechatLoginCalls,0);
   assert.deepEqual(calls.map(item=>item.path),['/auth/me','/auth/refresh']);assert.equal(calls[1].data.refreshToken,'old-refresh');
+});
+test('Identity-scoped create or join retries once and returns the renewed access token',async()=>{
+  const uni=mockUni(),calls=[];let joinAttempt=0,wechatLoginCalls=0;
+  uni.login=input=>{wechatLoginCalls++;input.success({code:'should-not-be-used'});};
+  uni.setStorageSync('kkfamily.accessToken','old-access');uni.setStorageSync('kkfamily.refreshToken','old-refresh');
+  const user={households:[]},renewed={accessToken:'new-access',refreshToken:'new-refresh',user};
+  const session=loadTs('src/services/session.ts',{'./transport':{ApiError,rawRequest:async(path,method,data,headers)=>{
+    calls.push({path,method,data,headers});
+    if(path==='/auth/me')return{user};
+    if(path==='/auth/refresh')return renewed;
+    if(path==='/invitations/redeem'&&joinAttempt++===0)throw new ApiError('expired',401);
+    if(path==='/invitations/redeem')return{membershipId:'member-b'};
+    throw Error('Unexpected '+path);
+  }}},uni);
+  const result=await session.identityRequest('/invitations/redeem','POST',{code:'fictional-code'});
+  assert.equal(result.data.membershipId,'member-b');assert.equal(result.identity.accessToken,'new-access');assert.equal(wechatLoginCalls,0);
+  assert.deepEqual(calls.map(item=>item.path),['/auth/me','/invitations/redeem','/auth/refresh','/invitations/redeem']);
+  assert.equal(calls[1].headers.Authorization,'Bearer old-access');assert.equal(calls[3].headers.Authorization,'Bearer new-access');
 });
 test('Permission refresh updates cached roles/versions and 403 clears stale household context',async()=>{
   const uni=mockUni();let deny=false;
@@ -56,13 +74,14 @@ test('Permission refresh updates cached roles/versions and 403 clears stale hous
 });
 test('Join component redeems explicit code, selects returned household, and never POSTs a new household',async()=>{
   const uni=mockUni(),calls=[];let stored;
-  const page=loadPage('src/pages/join/index.vue',{'../../services/session':{ensureIdentity:async()=>({accessToken:'fictional-token',user:{households:[]}}),rememberSession:value=>stored=value},'../../services/transport':{rawRequest:async(path,method,body)=>{calls.push({path,method,code:body.code});return {membershipId:'member-b',roles:['MEMBER'],household:{id:'house-a',name:'虚构家庭'}};}}},uni);
+  const current={accessToken:'fictional-token',user:{households:[]}};
+  const page=loadPage('src/pages/join/index.vue',{'../../services/session':{ensureIdentity:async()=>current,identityRequest:async(path,method,body)=>{calls.push({path,method,code:body.code});return {identity:current,data:{membershipId:'member-b',roles:['MEMBER'],household:{id:'house-a',name:'虚构家庭'}}};},rememberSession:value=>stored=value}},uni);
   page.code.value='x'.repeat(32);await page.submit('join');
   assert.equal(calls.length,1);assert.equal(calls[0].path,'/invitations/redeem');assert.equal(stored.householdId,'house-a');assert.equal(stored.membershipId,'member-b');assert.equal(page.code.value,'');assert.equal(page.busy.value,false);
 });
 test('Rejected join preserves input and exposes error instead of reporting success',async()=>{
   const uni=mockUni();let saved=false;
-  const page=loadPage('src/pages/join/index.vue',{'../../services/session':{ensureIdentity:async()=>({accessToken:'fictional-token',user:{households:[]}}),rememberSession:()=>saved=true},'../../services/transport':{rawRequest:async()=>{throw new Error('邀请码已失效');}}},uni);
+  const page=loadPage('src/pages/join/index.vue',{'../../services/session':{ensureIdentity:async()=>({accessToken:'fictional-token',user:{households:[]}}),identityRequest:async()=>{throw new Error('邀请码已失效');},rememberSession:()=>saved=true}},uni);
   page.code.value='x'.repeat(32);await page.submit('join');
   assert.equal(page.code.value,'x'.repeat(32));assert.match(page.error.value,/已失效/);assert.equal(saved,false);assert.equal(page.busy.value,false);assert.equal(uni.routes.length,0);
 });
