@@ -177,6 +177,19 @@ enum FavoriteConversionTarget {
   TASK
 }
 
+enum ArchiveValueType {
+  TEXT
+  DATE
+  CONTACT
+  ADDRESS
+}
+
+enum ArchiveVisibility {
+  MANAGERS
+  MEMBERS
+  SELECTED
+}
+
 model User {
   id          String       @id @default(cuid())
   openId      String       @unique
@@ -208,6 +221,7 @@ model Household {
   mediaReferences  MediaReference[]
   tasks            Task[]
   favorites        Favorite[]
+  archiveFields    ArchiveFieldDefinition[]
 }
 
 model CalendarEvent {
@@ -252,6 +266,8 @@ model Membership {
   taskHistory             TaskHistory[]
   createdFavorites        Favorite[]           @relation("FavoriteCreator")
   favoriteConversions     FavoriteConversion[] @relation("FavoriteConversionActor")
+  archiveFieldGrants      ArchiveFieldGrant[]
+  updatedArchiveValues    ArchiveFieldValue[]    @relation("ArchiveValueUpdater")
 
   @@unique([householdId, userId])
 }
@@ -858,4 +874,49 @@ model FavoriteConversion {
 
   @@unique([actorMembershipId, idempotencyKey])
   @@index([favoriteId, createdAt])
+}
+
+model ArchiveFieldDefinition {
+  id          String            @id @default(cuid())
+  householdId String
+  key         String
+  label       String
+  valueType   ArchiveValueType
+  sensitive   Boolean           @default(false)
+  visibility  ArchiveVisibility @default(MANAGERS)
+  version     Int               @default(1)
+  archivedAt  DateTime?
+  createdAt   DateTime          @default(now())
+  updatedAt   DateTime          @updatedAt
+  household   Household         @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  value       ArchiveFieldValue?
+  grants      ArchiveFieldGrant[]
+
+  @@unique([householdId, key])
+  @@index([householdId, archivedAt, label])
+}
+
+model ArchiveFieldValue {
+  fieldId         String                 @id
+  valueCiphertext String
+  nonce           String
+  authTag         String
+  keyVersion      Int
+  updatedById     String
+  version         Int                    @default(1)
+  updatedAt       DateTime               @updatedAt
+  field           ArchiveFieldDefinition @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  updatedBy       Membership             @relation("ArchiveValueUpdater", fields: [updatedById], references: [id], onDelete: Restrict)
+}
+
+model ArchiveFieldGrant {
+  fieldId      String
+  membershipId String
+  canRead      Boolean                @default(true)
+  canEdit      Boolean                @default(false)
+  field        ArchiveFieldDefinition @relation(fields: [fieldId], references: [id], onDelete: Cascade)
+  membership   Membership             @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@id([fieldId, membershipId])
+  @@index([membershipId, canRead])
 }

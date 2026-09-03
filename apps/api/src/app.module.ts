@@ -17,6 +17,7 @@ import { MembersModule } from './members/members.module';
 import { MediaModule } from './media/media.module';
 import { TasksModule } from './tasks/tasks.module';
 import { FavoritesModule } from './favorites/favorites.module';
+import { ArchiveModule } from './archive/archive.module';
 
 @Module({
   imports: [
@@ -34,6 +35,8 @@ import { FavoritesModule } from './favorites/favorites.module';
         COS_REGION: Joi.string().default('ap-beijing'),
         COS_SECRET_ID: Joi.string().when('MEDIA_DRIVER', { is: 'cos', then: Joi.required(), otherwise: Joi.allow('') }),
         COS_SECRET_KEY: Joi.string().when('MEDIA_DRIVER', { is: 'cos', then: Joi.required(), otherwise: Joi.allow('') }),
+        ARCHIVE_ENCRYPTION_KEY: Joi.string().base64().allow('').default(''),
+        ARCHIVE_ENCRYPTION_KEY_VERSION: Joi.number().integer().min(1).default(1),
       }),
     }),
     PrismaModule,
@@ -51,6 +54,7 @@ import { FavoritesModule } from './favorites/favorites.module';
     MediaModule,
     TasksModule,
     FavoritesModule,
+    ArchiveModule,
   ],
   controllers: [HealthController],
 })

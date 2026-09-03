@@ -6,7 +6,7 @@
 
 1. 不需要子域名。API 固定使用 `https://pp6v4.com/api/`；微信后台合法域名登记 `https://pp6v4.com`。
 2. 服务器安装 Docker Engine 与 Docker Compose plugin。
-3. 在 `apps/api/.env` 填入微信、COS、JWT 密钥；在 `infra/.env` 填入 PostgreSQL/Redis 密码。
+3. 在 `apps/api/.env` 填入微信、COS、JWT 密钥，并用 `openssl rand -base64 32` 生成 `ARCHIVE_ENCRYPTION_KEY`；在 `infra/.env` 填入 PostgreSQL/Redis 密码。档案加密密钥必须单独备份，丢失后数据库密文不能恢复。
 4. 首次申请证书前，将 `infra/nginx/bootstrap.conf` 复制为 `infra/nginx/nginx.conf`。
 
 ## 首次运行

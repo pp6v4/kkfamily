@@ -28,6 +28,8 @@ export interface TaskHistory { id:string; fromStatus:Task['status']|null; toStat
 export interface Task { id:string; version:number; type:'TODO'|'REQUEST'; title:string; description:string|null; assigneeMembershipId:string|null; dueAt:string|null; reminderAt:string|null; priority:'LOW'|'NORMAL'|'HIGH'; status:'PENDING'|'IN_PROGRESS'|'COMPLETED'|'CANCELLED'; completedAt:string|null; assignee:TaskPerson|null; createdBy:TaskPerson; completedBy:TaskPerson|null; history?:TaskHistory[] }
 export interface FavoriteConversion { id:string; targetType:'RECIPE'|'TASK'; targetId:string; createdAt:string }
 export interface Favorite { id:string; version:number; type:'TEXT'|'IMAGE'|'LINK'; title:string; text:string|null; sourceUrl:string|null; assetIds:string[]; tags:string[]; visibility:'PRIVATE'|'HOUSEHOLD'; createdById:string; createdBy:TaskPerson; conversions:FavoriteConversion[]; createdAt:string; updatedAt:string }
+export interface ArchiveGrant { fieldId?:string; membershipId:string; canRead:boolean; canEdit:boolean }
+export interface ArchiveField { id:string;key:string;label:string;valueType:'TEXT'|'DATE'|'CONTACT'|'ADDRESS';sensitive:boolean;visibility:'MANAGERS'|'MEMBERS'|'SELECTED';version:number;hasValue:boolean;valueVersion:number;updatedAt:string|null;canEdit:boolean;grants?:ArchiveGrant[] }
 
 async function request<T>(path: string, method: UniApp.RequestOptions['method'] = 'GET', data?: unknown): Promise<T> {
   const session = await ensureSession();
@@ -116,3 +118,9 @@ export function createFavorite(input:{type:Favorite['type'];title:string;text?:s
 export function updateFavorite(favorite:Favorite,input:{type?:Favorite['type'];title?:string;text?:string|null;sourceUrl?:string|null;tags?:string[];visibility?:Favorite['visibility']}){return request<Favorite>(`/favorites/${favorite.id}`,'PATCH',{expectedVersion:favorite.version,...input});}
 export function archiveFavorite(favorite:Favorite){return request<{archived:boolean;id:string}>(`/favorites/${favorite.id}/archive`,'POST',{expectedVersion:favorite.version});}
 export function convertFavorite(favorite:Favorite,input:{targetType:'RECIPE'|'TASK';idempotencyKey:string;confirmedTitle:string;confirmedDescription?:string}){return request<{targetId:string;targetType:'RECIPE'|'TASK';status:'DRAFT';repeated:boolean}>(`/favorites/${favorite.id}/convert`,'POST',{expectedVersion:favorite.version,...input});}
+export function listArchiveFields(){return request<ArchiveField[]>('/archive/fields');}
+export function createArchiveField(input:{key:string;label:string;valueType:ArchiveField['valueType'];sensitive:boolean;visibility:ArchiveField['visibility'];grants:ArchiveGrant[]}){return request<ArchiveField>('/archive/fields','POST',input);}
+export function updateArchiveField(field:ArchiveField,input:{label?:string;valueType?:ArchiveField['valueType'];sensitive?:boolean;visibility?:ArchiveField['visibility'];grants?:ArchiveGrant[]}){return request<ArchiveField>(`/archive/fields/${field.id}`,'PATCH',{expectedVersion:field.version,...input});}
+export function archiveArchiveField(field:ArchiveField){return request<{id:string;archived:boolean}>(`/archive/fields/${field.id}/archive`,'POST',{expectedVersion:field.version});}
+export function getArchiveValue(fieldId:string){return request<{field:ArchiveField;value:string|null;valueVersion:number;updatedAt:string|null}>(`/archive/fields/${fieldId}/value`);}
+export function setArchiveValue(fieldId:string,value:string,expectedVersion:number){return request<{fieldId:string;valueVersion:number;updatedAt:string}>(`/archive/fields/${fieldId}/value`,'PUT',{value,expectedVersion});}

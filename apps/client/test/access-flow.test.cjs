@@ -159,3 +159,12 @@ test('Favorite client preserves optimistic versions and a stable conversion idem
   assert.equal(sent[1].data.idempotencyKey,'same-conversion-key');assert.equal(sent[1].data.targetType,'RECIPE');
   assert.equal(sent[3].data.ownerType,'FAVORITE');assert.equal(sent[3].data.expectedOwnerVersion,4);
 });
+test('Archive client sends separate field and encrypted-value versions without plaintext in URLs',async()=>{
+  const uni=mockUni(),sent=[];
+  const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent.push({path,method,data});return data||{};}}},uni);
+  const field={id:'field-a',version:3,valueVersion:7};
+  await api.updateArchiveField(field,{label:'家庭联系人'});await api.setArchiveValue(field.id,'虚构联系人 10086',field.valueVersion);await api.getArchiveValue(field.id);
+  assert.equal(sent[0].path,'/archive/fields/field-a');assert.equal(sent[0].data.expectedVersion,3);
+  assert.equal(sent[1].path,'/archive/fields/field-a/value');assert.equal(sent[1].method,'PUT');assert.equal(sent[1].data.expectedVersion,7);assert.equal(sent[1].data.value,'虚构联系人 10086');
+  assert.equal(sent[2].path,'/archive/fields/field-a/value');assert.ok(!sent.some(item=>item.path.includes('10086')));
+});

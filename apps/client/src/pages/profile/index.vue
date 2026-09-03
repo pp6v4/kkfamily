@@ -24,6 +24,10 @@ function open(title: string) {
     if (!canAccess(session.value, 'favorites')) { uni.showToast({ title: '尚未获得收藏灵感权限', icon: 'none' }); return; }
     uni.navigateTo({ url: '/pages/favorites/index' }); return;
   }
+  if (title === '家庭档案') {
+    if (!canAccess(session.value, 'archive')) { uni.showToast({ title: '尚未获得家庭档案权限', icon: 'none' }); return; }
+    uni.navigateTo({ url: '/pages/archive/index' }); return;
+  }
   if (title === '设置') { uni.navigateTo({ url: '/pages/join/index' }); return; }
   uni.showToast({ title: `${title}尚未实现，当前不是可用功能`, icon: 'none' });
 }
