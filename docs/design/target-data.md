@@ -86,7 +86,7 @@
 | 模型 | 字段与规则 | 约束 |
 | --- | --- | --- |
 | CalendarEvent（扩展） | sourceVersion:I,occurrenceKey:S,allDay:B,timezone:S,visibility:S,version:I | UNIQUE(householdId,sourceType,sourceId,occurrenceKey)；无来源事件可单独id |
-| Anniversary | id,householdId,title,month:I,day:I,recurrence:YEARLY/NONE,leapPolicy:S,localDate?,note?,createdById,version | 月日合法；一期公历，不自动宣称农历支持 |
+| Anniversary | id,householdId,title,localDate:S(YYYY-MM-DD),recurrence:YEARLY/ONCE,leapPolicy:FEB_28/MAR_1/SKIP,note?,createdById,version,archivedAt? | 日期合法；一期公历，不自动宣称农历支持；删除为软归档 |
 | EventException | id,anniversaryId,occurrenceDate:DATE,action:CANCEL/RESCHEDULE,newDate? | UNIQUE(anniversaryId,occurrenceDate) |
 | Task | id,householdId,type:TODO/REQUEST,title,description?,assigneeMembershipId?,dueAt?,priority,status,reminderAt?,createdById,completedById?,completedAt?,version,archivedAt? | INDEX(householdId,status,dueAt,id)；负责人同家庭 |
 | TaskHistory | id,taskId,actorMembershipId,fromStatus?,toStatus?,comment?,createdAt | 不可普通更新；字段脱敏 |

@@ -183,3 +183,14 @@ test('Notification client uses optimistic versions for preferences and inbox rea
   assert.equal(sent[0].path,'/notification-preferences');assert.equal(sent[0].method,'PATCH');assert.equal(sent[0].data.expectedVersion,2);assert.equal(sent[0].data.enabled,false);
   assert.equal(sent[1].path,'/inbox/inbox-a/read');assert.equal(sent[1].data.expectedVersion,5);
 });
+test('Anniversary client preserves recurrence choices and optimistic versions',async()=>{
+  const uni=mockUni(),sent=[];
+  const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent.push({path,method,data});return data||{};}}},uni);
+  const anniversary={id:'anniversary-a',version:3};
+  await api.createAnniversary({title:'结婚纪念日',localDate:'2024-02-29',recurrence:'YEARLY',leapPolicy:'MAR_1'});
+  await api.updateAnniversary(anniversary,{title:'我们的纪念日',leapPolicy:'FEB_28'});
+  await api.archiveAnniversary(anniversary);
+  assert.equal(sent[0].path,'/calendar/anniversaries');assert.equal(sent[0].method,'POST');assert.equal(sent[0].data.recurrence,'YEARLY');assert.equal(sent[0].data.leapPolicy,'MAR_1');
+  assert.equal(sent[1].path,'/calendar/anniversaries/anniversary-a');assert.equal(sent[1].method,'PATCH');assert.equal(sent[1].data.expectedVersion,3);
+  assert.equal(sent[2].path,'/calendar/anniversaries/anniversary-a/archive');assert.equal(sent[2].data.expectedVersion,3);
+});

@@ -12,7 +12,8 @@ export interface IngredientComparison { key: string; kind: 'FOOD' | 'SEASONING';
 export interface ShoppingItem { id: string; version: number; name: string; quantity: string | number | null; unit: string | null; status: 'WISHLIST' | 'NEXT_TRIP' | 'REPLENISH' | 'PURCHASED'; sourceType: string; sourceId: string | null; sourceVersion: number | null; purchasedAt: string | null; previousItemId: string | null }
 export interface ShoppingList { id: string; name: string; items: ShoppingItem[] }
 export interface InventoryItem { id: string; version: number; quantity: string | number | null; unit: string; location: string | null; expiresAt: string | null; availability: 'PRESENT' | 'ABSENT' | 'UNKNOWN'; ingredient: { id: string; name: string; kind: 'FOOD' | 'SEASONING' } }
-export interface CalendarEvent { id: string; type: 'ANNIVERSARY' | 'MEAL' | 'TRIP' | 'TASK'; title: string; startsAt: string; endsAt: string | null; sourceType: string | null; sourceId: string | null }
+export interface CalendarEvent { id: string; type: 'ANNIVERSARY' | 'MEAL' | 'TRIP' | 'TASK'; title: string; startsAt: string; endsAt: string | null; sourceType: string | null; sourceId: string | null; localDate?: string; occurrenceDate?: string; recurrence?: Anniversary['recurrence']; leapPolicy?: Anniversary['leapPolicy']; note?: string | null; version?: number }
+export interface Anniversary { id:string;title:string;localDate:string;recurrence:'ONCE'|'YEARLY';leapPolicy:'FEB_28'|'MAR_1'|'SKIP';note:string|null;version:number;createdAt:string;updatedAt:string }
 export interface TripMember { membershipId: string; canEdit: boolean; tripRole: 'OWNER' | 'MEMBER'; status: 'ACTIVE' | 'HISTORY' | 'REVOKED'; version: number; membership: { id: string; user: { id: string; nickname: string | null; avatarUrl: string | null } } }
 export interface TripPreparationGroup { id: string; name: string; version: number; members: Array<{ membershipId: string }> }
 export interface TripStop { id: string; version: number; title: string; stopType: 'MEETING' | 'WAYPOINT' | 'CAMPSITE' | 'ATTRACTION' | 'HOTEL' | 'RETURN'; latitude: string | number; longitude: string | number; coordSystem: 'GCJ02'; arriveAt: string | null; leaveAt: string | null; sortOrder: number; note: string | null }
@@ -80,6 +81,10 @@ export interface SetInventoryInput { name: string; quantity?: number; unit?: str
 export function setInventoryItem(input: SetInventoryInput) { return request<InventoryItem>('/inventory', 'POST', input); }
 export function listCalendarEvents(from: string, to: string) { return request<CalendarEvent[]>(`/calendar/events?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`); }
 export function createCalendarEvent(input: { type: CalendarEvent['type']; title: string; startsAt: string; endsAt?: string; sourceType?: string; sourceId?: string }) { return request<CalendarEvent>('/calendar/events', 'POST', input); }
+export function listAnniversaries(){return request<Anniversary[]>('/calendar/anniversaries');}
+export function createAnniversary(input:{title:string;localDate:string;recurrence:Anniversary['recurrence'];leapPolicy:Anniversary['leapPolicy'];note?:string}){return request<Anniversary>('/calendar/anniversaries','POST',input);}
+export function updateAnniversary(anniversary:Pick<Anniversary,'id'|'version'>,input:{title?:string;localDate?:string;recurrence?:Anniversary['recurrence'];leapPolicy?:Anniversary['leapPolicy'];note?:string|null}){return request<Anniversary>(`/calendar/anniversaries/${anniversary.id}`,'PATCH',{expectedVersion:anniversary.version,...input});}
+export function archiveAnniversary(anniversary:Pick<Anniversary,'id'|'version'>){return request<{id:string;archived:boolean}>(`/calendar/anniversaries/${anniversary.id}/archive`,'POST',{expectedVersion:anniversary.version});}
 export function listTrips() { return request<Trip[]>('/trips'); }
 export function createTrip(input: { title: string; startsAt: string; endsAt?: string; destination?: string }) { return request<Trip>('/trips', 'POST', input); }
 export function getTrip(tripId: string) { return request<Trip>(`/trips/${tripId}`); }

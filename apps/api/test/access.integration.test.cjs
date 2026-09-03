@@ -79,13 +79,13 @@ test('A01: unauthenticated household data returns 401', async () => {
 });
 test('A02: every implemented household listing rejects missing/blank headers', async () => {
   const who = await owner();
-  for (const path of ['/recipes', '/inventory', '/shopping-lists', '/trips', '/packing-templates', '/members', '/favorites', '/archive/fields', '/dashboard/summary?from=2026-08-01T00:00:00Z&to=2026-09-01T00:00:00Z', '/inbox', '/notification-preferences', '/households/current/access', '/meals?from=2026-08-01&to=2026-09-01', '/calendar/events?from=2026-08-01&to=2026-09-01']) {
+  for (const path of ['/recipes', '/inventory', '/shopping-lists', '/trips', '/packing-templates', '/members', '/favorites', '/archive/fields', '/dashboard/summary?from=2026-08-01T00:00:00Z&to=2026-09-01T00:00:00Z', '/inbox', '/notification-preferences', '/households/current/access', '/meals?from=2026-08-01&to=2026-09-01', '/calendar/events?from=2026-08-01&to=2026-09-01', '/calendar/anniversaries']) {
     for (const header of [undefined, '', ' ']) assert.equal((await call({ token: who.token }, 'GET', path, undefined, header)).status, 400, path);
   }
 });
 test('A03: valid token cannot select another household', async () => {
   const one = await owner(), two = await owner();
-  for (const path of ['/recipes', '/members', '/trips', '/inventory', '/shopping-lists', '/favorites', '/archive/fields', '/dashboard/summary?from=2026-08-01T00:00:00Z&to=2026-09-01T00:00:00Z', '/inbox']) assert.equal((await call(one, 'GET', path, undefined, two.householdId)).status, 403, path);
+  for (const path of ['/recipes', '/members', '/trips', '/inventory', '/shopping-lists', '/favorites', '/archive/fields', '/dashboard/summary?from=2026-08-01T00:00:00Z&to=2026-09-01T00:00:00Z', '/inbox', '/calendar/anniversaries']) assert.equal((await call(one, 'GET', path, undefined, two.householdId)).status, 403, path);
 });
 test('A04: explicit DENY defeats chef role and explicit VIEW replaces EDIT', async () => {
   const who = await owner(), chef = await join(who, ['CHEF']);
@@ -188,6 +188,23 @@ test('Calendar rechecks source module permissions, not just calendar membership'
   await permissions(who,member.memberId,1,['MEMBER'],[{module:'meals',level:'VIEW',effect:'DENY'}]);
   const result=await call(member,'GET','/calendar/events?from=2026-08-01&to=2026-09-01');
   assert.equal(result.status,200); assert.equal(result.body.data.filter(e=>e.type==='MEAL').length,0);
+});
+test('D09: yearly anniversaries project leap-day policy and remain versioned, editable and archivable',async()=>{
+  const who=await owner(),viewer=await join(who,['GUEST'],[{module:'calendar',level:'VIEW',effect:'ALLOW'}]);
+  const created=await call(who,'POST','/calendar/anniversaries',{title:'虚构闰日纪念日',localDate:'2024-02-29',recurrence:'YEARLY',leapPolicy:'FEB_28',note:'仅用于隔离测试'});
+  assert.equal(created.status,201,JSON.stringify(created.body));const anniversary=created.body.data;assert.equal(anniversary.version,1);
+  assert.equal((await call(viewer,'POST','/calendar/anniversaries',{title:'越权',localDate:'2026-01-01',recurrence:'ONCE'})).status,403);
+  assert.equal((await call(who,'POST','/calendar/anniversaries',{title:'坏日期',localDate:'2026-02-30',recurrence:'ONCE'})).status,400);
+  let events=await call(viewer,'GET','/calendar/events?from=2025-02-28T00%3A00%3A00%2B08%3A00&to=2025-03-01T00%3A00%3A00%2B08%3A00');
+  assert.equal(events.status,200);assert.equal(events.body.data.length,1);assert.equal(events.body.data[0].occurrenceDate,'2025-02-28');assert.equal(events.body.data[0].sourceId,anniversary.id);
+  const updated=await call(who,'PATCH',`/calendar/anniversaries/${anniversary.id}`,{expectedVersion:1,title:'更新后的纪念日',leapPolicy:'MAR_1'});
+  assert.equal(updated.status,200,JSON.stringify(updated.body));assert.equal(updated.body.data.version,2);
+  assert.equal((await call(who,'PATCH',`/calendar/anniversaries/${anniversary.id}`,{expectedVersion:1,title:'过期覆盖'})).status,409);
+  events=await call(who,'GET','/calendar/events?from=2025-03-01T00%3A00%3A00%2B08%3A00&to=2025-03-02T00%3A00%3A00%2B08%3A00');
+  assert.equal(events.body.data.length,1);assert.equal(events.body.data[0].title,'更新后的纪念日');assert.equal(events.body.data[0].occurrenceDate,'2025-03-01');
+  assert.equal((await call(who,'POST',`/calendar/anniversaries/${anniversary.id}/archive`,{expectedVersion:2})).status,201);
+  assert.equal((await call(who,'GET','/calendar/anniversaries')).body.data.some(item=>item.id===anniversary.id),false);
+  assert.equal((await call(who,'GET','/calendar/events?from=2025-03-01T00%3A00%3A00%2B08%3A00&to=2025-03-02T00%3A00%3A00%2B08%3A00')).body.data.length,0);
 });
 test('D07: trip membership is explicit, revocation is immediate, and the final owner is protected', async () => {
   const who=await owner(),member=await join(who,['CAMPER']);
