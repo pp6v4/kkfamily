@@ -125,9 +125,19 @@ const mealSession={...family,effectivePermissions:{meals:'MANAGE',recipes:'VIEW'
 function mealRecord(overrides={}) {return {id:'meal-a',version:7,snapshotVersion:1,localDate:'2026-09-01',slotKey:'',scheduledAt:'2026-09-01T18:00:00+08:00',mealType:'DINNER',status:'CONFIRMED',legacyWithoutSnapshot:false,items:[],menu:[],...overrides};}
 function mealDependencies(overrides={}) {
   return {'../../services/session':{canAccess:allowed,refreshAccess:async()=>mealSession},'../../services/calendar-navigation':{takeCalendarTarget:()=>undefined},'../../services/family-api':{
-    mealTypeCodes:{早餐:'BREAKFAST',午餐:'LUNCH',晚餐:'DINNER',加餐:'OTHER'},mealTypeLabel:()=> '晚餐',listMeals:async()=>[],listRecipes:async()=>[],recalculateMeal:async()=>[],listMealSnapshots:async()=>[],...overrides,
+    mealTypeCodes:{早餐:'BREAKFAST',午餐:'LUNCH',晚餐:'DINNER',加餐:'OTHER'},mealTypeLabel:()=> '晚餐',listMeals:async()=>[],listRecipeCategories:async()=>[],listRecipes:async()=>[],recalculateMeal:async()=>[],listMealSnapshots:async()=>[],...overrides,
   }};
 }
+test('Recipe manager can add a trimmed category and update recipe lifecycle without reloading stale versions',async()=>{
+  const uni=mockUni(),categories=[],statuses=[];
+  const manager={...mealSession,effectivePermissions:{...mealSession.effectivePermissions,recipes:'MANAGE'}};
+  const recipe={id:'recipe-a',version:4,name:'烤鱼',status:'PUBLISHED',category:null,ingredients:[],seasonings:[],steps:['烤熟']};
+  const page=loadPage('src/pages/meal/index.vue',mealDependencies({createRecipeCategory:async(name,sortOrder)=>{categories.push({name,sortOrder});return{id:'category-a',name,sortOrder};},updateRecipeStatus:async(value,status)=>{statuses.push({version:value.version,status});return{...value,status,version:value.version+1};}}),uni);
+  page.session.value=manager;page.recipeCategories.value=[{id:'category-old',name:'主食',sortOrder:0}];page.categoryName.value='  海鲜  ';await page.saveCategory();
+  assert.deepEqual(categories,[{name:'海鲜',sortOrder:1}]);assert.equal(page.categoryName.value,'');assert.equal(page.recipeCategories.value[1].name,'海鲜');
+  page.recipes.value=[recipe];await page.applyRecipeStatus(recipe,'ARCHIVED');
+  assert.deepEqual(statuses,[{version:4,status:'ARCHIVED'}]);assert.equal(page.recipes.value[0].version,5);assert.equal(page.recipes.value[0].status,'ARCHIVED');
+});
 test('Meal confirmation modal never confirms when the user cancels',async()=>{
   const uni=mockUni();let modal,transitions=0;
   uni.showModal=input=>modal=input;
@@ -156,6 +166,13 @@ test('Family API serializes optimistic shopping version instead of a blind statu
   const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent={path,method,data};return data;}}},uni);
   const item={id:'shopping-a',version:9,status:'NEXT_TRIP'};await api.updateShoppingItem(item,'PURCHASED');
   assert.equal(sent.path,'/shopping-lists/items/shopping-a');assert.equal(sent.method,'PATCH');assert.equal(sent.data.expectedVersion,9);assert.equal(sent.data.status,'PURCHASED');
+});
+test('Family API sends category creation and recipe lifecycle versions to their database endpoints',async()=>{
+  const uni=mockUni(),sent=[];
+  const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent.push({path,method,data});return{...data,id:'saved'};}}},uni);
+  await api.createRecipeCategory('海鲜',3);await api.updateRecipeStatus({id:'recipe-a',version:7},'ARCHIVED');
+  assert.equal(sent[0].path,'/recipes/categories');assert.equal(sent[0].method,'POST');assert.equal(sent[0].data.name,'海鲜');assert.equal(sent[0].data.sortOrder,3);
+  assert.equal(sent[1].path,'/recipes/recipe-a/status');assert.equal(sent[1].method,'PATCH');assert.equal(sent[1].data.status,'ARCHIVED');assert.equal(sent[1].data.expectedVersion,7);
 });
 test('Family API retries an access-token 401 once with the same household after renewal',async()=>{
   const uni=mockUni(),sent=[];let attempt=0;

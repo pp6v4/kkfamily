@@ -50,6 +50,7 @@ async function request<T>(path: string, method: UniApp.RequestOptions['method'] 
 async function binaryRequest<T>(path:string,data:ArrayBuffer,mimeType:string){const session=await ensureSession();try{return await rawBinaryRequest<T>(path,'PUT',data,mimeType,{Authorization:`Bearer ${session.accessToken}`,'X-Household-Id':session.householdId});}catch(error){if(error instanceof ApiError&&error.statusCode===401){const renewed=await renewSession(session.householdId);return rawBinaryRequest<T>(path,'PUT',data,mimeType,{Authorization:`Bearer ${renewed.accessToken}`,'X-Household-Id':renewed.householdId});}throw error;}}
 
 export function listRecipeCategories() { return request<RecipeCategory[]>('/recipes/categories'); }
+export function createRecipeCategory(name: string, sortOrder = 0) { return request<RecipeCategory>('/recipes/categories', 'POST', { name, sortOrder }); }
 export function listRecipes() { return request<Recipe[]>('/recipes'); }
 export function getRecipe(recipeId: string) { return request<Recipe>(`/recipes/${recipeId}`); }
 export function createRecipe(input: { name: string; categoryId?: string; ingredients: Array<{ name: string; quantity?: number; unit: string; optional?: boolean }>; seasonings: string[]; steps: string[] }) { return request<Recipe>('/recipes', 'POST', input); }

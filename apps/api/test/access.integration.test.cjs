@@ -315,6 +315,14 @@ test('A10: trim precedes validation; empty names and negative recipe quantities 
   assert.equal(await db.recipe.count({where:{householdId:who.householdId}}),0);
 });
 
+test('A46: recipe managers can create trimmed categories and duplicate names return a conflict', async () => {
+  const who=await owner();
+  const created=await call(who,'POST','/recipes/categories',{name:'  海鲜  ',sortOrder:3});
+  assert.equal(created.status,201,JSON.stringify(created.body));assert.equal(created.body.data.name,'海鲜');assert.equal(created.body.data.sortOrder,3);
+  const duplicate=await call(who,'POST','/recipes/categories',{name:'海鲜',sortOrder:4});
+  assert.equal(duplicate.status,409,JSON.stringify(duplicate.body));assert.equal(await db.recipeCategory.count({where:{householdId:who.householdId,name:'海鲜'}}),1);
+});
+
 test('D04: recipe detail respects draft visibility and stale edits never overwrite newer content', async () => {
   const who=await owner(),viewer=await join(who,['GUEST'],[{module:'recipes',level:'VIEW',effect:'ALLOW'}]);
   const created=await call(who,'POST','/recipes',{name:'初版菜名',ingredients:[{name:'土豆',quantity:2,unit:'个'}],seasonings:['盐'],steps:['蒸熟']});
@@ -331,6 +339,10 @@ test('D04: recipe detail respects draft visibility and stale edits never overwri
   const covered=await attachReadyCover(who,updated.body.data);
   const published=await call(who,'PATCH',`/recipes/${recipe.id}/status`,{status:'PUBLISHED',expectedVersion:covered.version});
   assert.equal(published.status,200);assert.equal(published.body.data.version,4);assert.equal((await call(viewer,'GET',`/recipes/${recipe.id}`)).status,200);
+  const archived=await call(who,'PATCH',`/recipes/${recipe.id}/status`,{status:'ARCHIVED',expectedVersion:published.body.data.version});
+  assert.equal(archived.status,200);assert.equal(archived.body.data.status,'ARCHIVED');assert.equal((await call(viewer,'GET',`/recipes/${recipe.id}`)).status,404);
+  const restored=await call(who,'PATCH',`/recipes/${recipe.id}/status`,{status:'DRAFT',expectedVersion:archived.body.data.version});
+  assert.equal(restored.status,200);assert.equal(restored.body.data.status,'DRAFT');assert.equal((await call(viewer,'GET',`/recipes/${recipe.id}`)).status,404);
 });
 
 test('A33/A35: private recipe image validates bytes and ownership; revoked user gets no new URL while old URL expires shortly',async()=>{

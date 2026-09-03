@@ -26,7 +26,12 @@ export class RecipesService {
 
   async createCategory(userId: string, householdId: string, dto: CreateCategoryDto) {
     await this.access.require(userId, householdId, 'recipes', 'MANAGE');
-    return { data: await this.prisma.recipeCategory.create({ data: { householdId, name: dto.name.trim(), sortOrder: dto.sortOrder ?? 0 } }) };
+    try {
+      return { data: await this.prisma.recipeCategory.create({ data: { householdId, name: dto.name.trim(), sortOrder: dto.sortOrder ?? 0 } }) };
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('家庭内已存在同名菜谱分类');
+      throw error;
+    }
   }
 
   async createRecipe(userId: string, householdId: string, dto: CreateRecipeDto) {
