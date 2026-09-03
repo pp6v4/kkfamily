@@ -56,7 +56,7 @@ export function archiveRecipeCategory(category: RecipeCategory) { return request
 export function listRecipes() { return request<Recipe[]>('/recipes'); }
 export function getRecipe(recipeId: string) { return request<Recipe>(`/recipes/${recipeId}`); }
 export function createRecipe(input: { name: string; categoryId?: string; ingredients: Array<{ name: string; quantity?: number; unit: string; optional?: boolean }>; seasonings: string[]; steps: string[] }) { return request<Recipe>('/recipes', 'POST', input); }
-export function updateRecipe(recipeId: string, input: { expectedVersion: number; name: string; categoryId?: string; ingredients: Array<{ name: string; quantity?: number; unit: string; optional?: boolean }>; seasonings: string[]; steps: string[] }) { return request<Recipe>(`/recipes/${recipeId}`, 'PATCH', input); }
+export function updateRecipe(recipeId: string, input: { expectedVersion: number; name: string; categoryId?: string | null; ingredients: Array<{ name: string; quantity?: number; unit: string; optional?: boolean }>; seasonings: string[]; steps: string[] }) { return request<Recipe>(`/recipes/${recipeId}`, 'PATCH', input); }
 export function updateRecipeStatus(recipe: Recipe, status: Recipe['status']) { return request<Recipe>(`/recipes/${recipe.id}/status`, 'PATCH', { status, expectedVersion: recipe.version }); }
 export interface MediaAsset { id:string; mimeType:string; byteSize:number; checksumSha256:string }
 export interface TripPhoto { id:string; mimeType:string; byteSize:number; createdAt:string; createdBy:{id:string;nickname:string|null;avatarUrl:string|null} }

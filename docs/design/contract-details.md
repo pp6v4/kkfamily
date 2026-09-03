@@ -58,9 +58,9 @@ E：管理员创建随机至少128bit邀请码，数据库保存SHA-256摘要，
 
 ## D04 菜谱、标准食材与图片
 
-菜谱编辑字段：name必填1~80字，categoryId可空，ingredients至少1项；每项ingredientId或新名称、quantity可空、unit必填，quantity用正数十进制字符串最多3位小数；seasonings仅名称数组；steps按顺序的非空文本；coverAssetId及步骤图片指向已确认MediaAsset。不含difficulty/allergy/nutrition。提交时trim后再校验，拒绝全空格名称；调料去重，但不随意把生抽、老抽合并。
+菜谱编辑字段：name必填1~80字，categoryId可空；更新时省略categoryId表示保留当前分类，显式null表示改为“未分类”。ingredients至少1项；每项ingredientId或新名称、quantity可空、unit必填，quantity用正数十进制字符串最多3位小数；seasonings仅名称数组；steps按顺序的非空文本；coverAssetId及步骤图片指向已确认MediaAsset。不含difficulty/allergy/nutrition。提交时trim后再校验，拒绝全空格名称；调料去重，但不随意把生抽、老抽合并。
 
-E：保存为DRAFT时允许缺封面；发布PUBLISHED前要求食材、做法和至少一张已确认成品图。已有无图片发布菜谱不自动删除，应标注待补齐。归档菜不再进入新餐点选择，但历史快照不变。分类删除改为归档，既有菜谱仍可展示分类历史名称。
+E：保存为DRAFT时允许缺封面；发布PUBLISHED前要求食材、做法和至少一张已确认成品图。已有无图片发布菜谱不自动删除，应标注待补齐。归档菜不再进入新餐点选择，但历史快照不变。分类删除改为归档，既有菜谱仍可展示分类历史名称并继续编辑；只有用户主动切换分类或选择“未分类”时才改变关联。
 
 | 目标接口 | 输入 | 输出/约束 |
 | --- | --- | --- |

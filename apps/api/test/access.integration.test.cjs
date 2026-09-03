@@ -329,7 +329,10 @@ test('A46: recipe managers can version, reorder and archive categories while rec
   const archived=await call(who,'POST',`/recipes/categories/${created.body.data.id}/archive`,{expectedVersion:2});
   assert.equal(archived.status,201,JSON.stringify(archived.body));assert.equal(archived.body.data.version,3);assert.ok(archived.body.data.archivedAt);
   assert.equal((await call(who,'GET','/recipes/categories')).body.data.length,0);
-  assert.equal((await call(who,'GET',`/recipes/${recipe.body.data.id}`)).body.data.category.name,'水产');
+  const preserved=await call(who,'PATCH',`/recipes/${recipe.body.data.id}`,{expectedVersion:recipe.body.data.version,name:'烤鱼新版',ingredients:[{name:'鱼',quantity:1,unit:'条'}],seasonings:['盐'],steps:['烤熟']});
+  assert.equal(preserved.status,200,JSON.stringify(preserved.body));assert.equal(preserved.body.data.category.name,'水产');
+  const cleared=await call(who,'PATCH',`/recipes/${recipe.body.data.id}`,{expectedVersion:preserved.body.data.version,name:'烤鱼新版',categoryId:null,ingredients:[{name:'鱼',quantity:1,unit:'条'}],seasonings:['盐'],steps:['烤熟']});
+  assert.equal(cleared.status,200,JSON.stringify(cleared.body));assert.equal(cleared.body.data.category,null);
   assert.equal((await call(who,'POST','/recipes',{name:'归档分类新菜',categoryId:created.body.data.id,ingredients:[{name:'虾',quantity:1,unit:'斤'}],seasonings:['盐'],steps:['炒熟']})).status,404);
 });
 

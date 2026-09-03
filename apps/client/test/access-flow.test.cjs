@@ -26,7 +26,7 @@ function loadPage(relative, dependencies, uni) {
 }
 function mockUni() {
   const values=new Map(), routes=[];
-  return { values,routes,getStorageSync:key=>values.get(key),setStorageSync:(key,value)=>values.set(key,value),removeStorageSync:key=>values.delete(key),login:input=>input.success({code:'fictional-login-code'}),navigateTo:input=>{routes.push(input.url);input.complete?.();},switchTab:input=>routes.push(input.url),showToast(){},showModal(){},setClipboardData(){} };
+  return { values,routes,getStorageSync:key=>values.get(key),setStorageSync:(key,value)=>values.set(key,value),removeStorageSync:key=>values.delete(key),login:input=>input.success({code:'fictional-login-code'}),navigateTo:input=>{routes.push(input.url);input.complete?.();},navigateBack(){},switchTab:input=>routes.push(input.url),setNavigationBarTitle(){},showToast(){},showModal(){},setClipboardData(){} };
 }
 const family={householdId:'house-a',householdName:'虚构家庭',membershipId:'member-a',roles:['ADMIN'],accessToken:'fictional-token',version:1,effectivePermissions:{members:'MANAGE'}};
 function allowed(context,module,level='VIEW') {const ranks={VIEW:1,EDIT:2,MANAGE:3};return (ranks[context?.effectivePermissions?.[module]]||0)>=ranks[level];}
@@ -140,6 +140,15 @@ test('Recipe manager can add, edit, order and archive categories, then update re
   await page.applyCategoryArchive(edited);assert.deepEqual(categoryArchives,[3]);assert.equal(page.recipeCategories.value.some(item=>item.id==='category-old'),false);
   page.recipes.value=[recipe];await page.applyRecipeStatus(recipe,'ARCHIVED');
   assert.deepEqual(statuses,[{version:4,status:'ARCHIVED'}]);assert.equal(page.recipes.value[0].version,5);assert.equal(page.recipes.value[0].status,'ARCHIVED');
+});
+test('Recipe editor preserves an archived historical category unless the user explicitly clears it',async()=>{
+  const uni=mockUni(),updates=[];
+  const archived={id:'category-old',name:'旧分类',sortOrder:4,version:3,archivedAt:'2026-09-03T00:00:00.000Z'};
+  const recipe={id:'recipe-a',version:6,name:'旧菜',status:'DRAFT',coverAssetId:null,category:archived,ingredients:[{ingredientId:'food-a',quantity:'1',unit:'份',optional:false,ingredient:{id:'food-a',name:'食材'}}],seasonings:[],steps:['完成']};
+  const page=loadPage('src/pages/recipe-editor/index.vue',{'../../services/family-api':{listRecipeCategories:async()=>[],getRecipe:async()=>recipe,updateRecipe:async(id,input)=>{updates.push({id,input});return{...recipe,...input,version:input.expectedVersion+1};}}},uni);
+  await page.loadPage({id:recipe.id});assert.match(page.categoryName.value,/旧分类.*已归档/);page.name.value='旧菜新做法';await page.persist(false);
+  assert.equal(Object.prototype.hasOwnProperty.call(updates[0].input,'categoryId'),false);assert.equal(page.originalCategoryId.value,'category-old');
+  page.categoryIndex.value=0;await page.persist(false);assert.equal(updates[1].input.categoryId,null);assert.equal(page.originalCategoryId.value,null);
 });
 test('Meal confirmation modal never confirms when the user cancels',async()=>{
   const uni=mockUni();let modal,transitions=0;

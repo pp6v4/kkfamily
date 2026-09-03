@@ -12,11 +12,13 @@ const coverUploading = ref(false);
 const name = ref('');
 const categories = ref<RecipeCategory[]>([]);
 const categoryIndex = ref(0);
+const originalCategoryId = ref<string | null>(null);
 const ingredients = ref([{ name: '', quantity: '', unit: 'g' }]);
 const seasonings = ref(['']);
 const steps = ref(['']);
 const saving = ref(false);
-const categoryName = computed(() => categories.value[categoryIndex.value]?.name ?? '请选择分类');
+const categoryOptions = computed(() => [{ id: '', name: '未分类', archivedAt: null }, ...categories.value.map(item => ({ id: item.id, name: item.name + (item.archivedAt ? '（已归档）' : ''), archivedAt: item.archivedAt }))]);
+const categoryName = computed(() => categoryOptions.value[categoryIndex.value]?.name ?? '未分类');
 
 function message(error: unknown) { return error instanceof Error ? error.message : '操作失败'; }
 function addIngredient() { ingredients.value.push({ name: '', quantity: '', unit: 'g' }); }
@@ -32,11 +34,13 @@ async function loadPage(query?: Record<string, string | undefined>) {
     if (recipeId.value) {
       const recipe = await getRecipe(recipeId.value);
       recipeVersion.value = recipe.version; recipeStatus.value = recipe.status; name.value = recipe.name;
+      originalCategoryId.value = recipe.category?.id ?? null;
+      if (recipe.category && !categories.value.some(item => item.id === recipe.category!.id)) categories.value.push(recipe.category);
       coverAssetId.value = recipe.coverAssetId ?? '';
       ingredients.value = recipe.ingredients.length ? recipe.ingredients.map(item => ({ name: item.ingredient.name, quantity: item.quantity === null ? '' : String(Number(item.quantity)), unit: item.unit })) : [{ name: '', quantity: '', unit: 'g' }];
       seasonings.value = recipe.seasonings.length ? recipe.seasonings.map(item => item.name) : [''];
       steps.value = recipe.steps.length ? [...recipe.steps] : [''];
-      const index = categories.value.findIndex(item => item.id === recipe.category?.id); categoryIndex.value = index < 0 ? 0 : index;
+      const index = categoryOptions.value.findIndex(item => item.id === recipe.category?.id); categoryIndex.value = index < 0 ? 0 : index;
       uni.setNavigationBarTitle({ title: '编辑菜谱' });
       if (coverAssetId.value) { const read=await getMediaReadUrl(coverAssetId.value);coverPreview.value=publicMediaUrl(read.path); }
     }
@@ -47,23 +51,25 @@ async function loadPage(query?: Record<string, string | undefined>) {
 async function persist(leave=true) {
   const cleanIngredients = ingredients.value.filter((item) => item.name.trim());
   const cleanSteps = steps.value.map((item) => item.trim()).filter(Boolean);
-  if (!name.value.trim() || !categories.value.length || !cleanIngredients.length || cleanIngredients.some((item) => !item.unit.trim()) || !cleanSteps.length) {
-    uni.showToast({ title: '请填写菜名、分类、食材和做法', icon: 'none' }); return false;
+  if (!name.value.trim() || !cleanIngredients.length || cleanIngredients.some((item) => !item.unit.trim()) || !cleanSteps.length) {
+    uni.showToast({ title: '请填写菜名、食材和做法', icon: 'none' }); return false;
   }
   saving.value = true;
   try {
     const input = {
       name: name.value.trim(),
-      categoryId: categories.value[categoryIndex.value].id,
       ingredients: cleanIngredients.map((item) => ({ name: item.name.trim(), quantity: item.quantity === '' ? undefined : Number(item.quantity), unit: item.unit.trim() })),
       seasonings: seasonings.value.map((item) => item.trim()).filter(Boolean),
       steps: cleanSteps,
     };
+    const selected = categoryOptions.value[categoryIndex.value] ?? categoryOptions.value[0];
     if (recipeId.value) {
-      const updated = await updateRecipe(recipeId.value, { ...input, expectedVersion: recipeVersion.value });
+      const keepArchivedCategory = Boolean(selected.archivedAt && selected.id === originalCategoryId.value);
+      const updated = await updateRecipe(recipeId.value, { ...input, expectedVersion: recipeVersion.value, ...(keepArchivedCategory ? {} : { categoryId: selected.id || null }) });
       recipeVersion.value = updated.version;
+      if (!keepArchivedCategory) originalCategoryId.value = selected.id || null;
     } else {
-      const created = await createRecipe(input); recipeId.value = created.id; recipeVersion.value = created.version;
+      const created = await createRecipe({ ...input, ...(selected.id ? { categoryId: selected.id } : {}) }); recipeId.value = created.id; recipeVersion.value = created.version; originalCategoryId.value = selected.id || null;
     }
     uni.showToast({ title: recipeStatus.value === 'DRAFT' ? '菜谱草稿已保存' : '菜谱已更新', icon: 'success' });
     if(leave)setTimeout(() => uni.navigateBack(), 500);
@@ -96,7 +102,7 @@ onLoad(loadPage);
 <template>
   <view class="page">
     <view class="section"><text class="title">成品图片</text><image v-if="coverPreview" class="cover" :src="coverPreview" mode="aspectFill" /><view v-else class="cover-empty">🍲<text>发布前需要一张成品图</text></view><view class="cover-action" @tap="chooseCover">{{coverUploading?'正在安全上传…':coverAssetId?'更换封面':'选择封面'}}</view><text class="cover-note">草稿可以暂时不放图片；图片通过家庭权限读取，不公开存储桶地址。</text></view>
-    <view class="section"><text class="title">基本信息</text><input v-model="name" class="input" placeholder="菜名" /><picker :range="categories" range-key="name" @change="categoryIndex = Number($event.detail.value)"><view class="input picker">{{ categoryName }}　›</view></picker></view>
+    <view class="section"><text class="title">基本信息</text><input v-model="name" class="input" placeholder="菜名" /><picker :range="categoryOptions" range-key="name" @change="categoryIndex = Number($event.detail.value)"><view class="input picker">{{ categoryName }}　›</view></picker><text v-if="categoryOptions[categoryIndex]?.archivedAt" class="cover-note">该分类已经归档；不切换时仍会保留在这道旧菜谱上。</text></view>
     <view class="section"><text class="title">食材</text><view v-for="(item,index) in ingredients" :key="index" class="row"><input v-model="item.name" class="input short" placeholder="食材" /><input v-model="item.quantity" type="digit" class="input amount" placeholder="数量" /><input v-model="item.unit" class="input unit" placeholder="单位" /><text class="remove" @tap="removeIngredient(index)">×</text></view><text class="add" @tap="addIngredient">＋ 添加食材</text></view>
     <view class="section"><text class="title">调料（不填用量）</text><input v-for="(_,index) in seasonings" :key="index" v-model="seasonings[index]" class="input" placeholder="调料名称" /><text class="add" @tap="addSeasoning">＋ 添加调料</text></view>
     <view class="section"><text class="title">做法</text><view v-for="(_,index) in steps" :key="index" class="step"><textarea v-model="steps[index]" class="textarea" :placeholder="'步骤 ' + (index + 1)" /><text class="remove step-remove" @tap="removeStep(index)">×</text></view><text class="add" @tap="addStep">＋ 添加步骤</text></view>
