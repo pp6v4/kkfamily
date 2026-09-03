@@ -126,7 +126,7 @@ onShow(loadEvents);
 
 <template>
   <view class="page">
-    <view class="heading"><text class="label">扣扣的家 · 日历</text><text class="page-title">{{ dateTitle }}</text><text class="subtitle">点击事件可进入对应功能</text></view>
+    <view class="heading"><text class="label">{{session?.householdName||'扣扣的家'}} · 日历</text><text class="page-title">{{ dateTitle }}</text><text class="subtitle">点击事件可进入对应功能</text></view>
     <view v-if="events.length" class="event-list">
       <view v-for="event in events" :key="event.id" class="event" @tap="openEvent(event)">
         <text class="stamp" :class="typeClass[event.type]">{{ eventStamps[event.type] }}</text>

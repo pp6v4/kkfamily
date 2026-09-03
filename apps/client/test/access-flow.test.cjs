@@ -97,6 +97,12 @@ test('Calendar navigation preserves date/source, and consumption is scoped and o
   nav.setCalendarTarget({type:'TRIP',date:'2026-09-01',sourceId:'trip-a'});
   assert.equal(nav.takeCalendarTarget('MEAL'),undefined);const target=nav.takeCalendarTarget('TRIP');assert.equal(target.date,'2026-09-01');assert.equal(target.sourceId,'trip-a');assert.equal(nav.takeCalendarTarget('TRIP'),undefined);
 });
+test('My home displays the approved ICP subject number and supports copying it',()=>{
+  const source=fs.readFileSync(path.join(ROOT,'src/pages/profile/index.vue'),'utf8');
+  assert.match(source,/辽ICP备2026020161号/);
+  assert.match(source,/备案主体号/);
+  assert.match(source,/setClipboardData/);
+});
 
 const mealSession={...family,effectivePermissions:{meals:'MANAGE',recipes:'VIEW',inventory:'EDIT',shopping:'EDIT'}};
 function mealRecord(overrides={}) {return {id:'meal-a',version:7,snapshotVersion:1,localDate:'2026-09-01',slotKey:'',scheduledAt:'2026-09-01T18:00:00+08:00',mealType:'DINNER',status:'CONFIRMED',legacyWithoutSnapshot:false,items:[],menu:[],...overrides};}

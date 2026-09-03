@@ -2,13 +2,14 @@
 import { computed, ref } from 'vue';
 import { onShow } from '@dcloudio/uni-app';
 import { listCalendarEvents, type CalendarEvent } from '../../services/family-api';
-import { refreshAccess } from '../../services/session';
+import { refreshAccess, type HouseholdContext } from '../../services/session';
 
 const now = new Date();
 const current = ref(new Date(now.getFullYear(), now.getMonth(), 1));
 const selected = ref(format(now));
 const events = ref<CalendarEvent[]>([]);
 const loading = ref(false);
+const session = ref<HouseholdContext>();
 const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
 const eventStamps: Record<CalendarEvent['type'], string> = { ANNIVERSARY: '❤', MEAL: '🍲', TRIP: '⛺', TASK: '✓' };
 const typeClass: Record<CalendarEvent['type'], string> = { ANNIVERSARY: 'anniversary', MEAL: 'meal', TRIP: 'camping', TASK: 'task' };
@@ -32,7 +33,7 @@ async function loadMonth() {
   loading.value = true;
   const year = current.value.getFullYear(); const month = current.value.getMonth(); const from = new Date(year, month, 1); const to = new Date(year, month + 1, 1);
   events.value = [];
-  try { await refreshAccess(); events.value = await listCalendarEvents(from.toISOString(), to.toISOString()); }
+  try { session.value = await refreshAccess(); events.value = await listCalendarEvents(from.toISOString(), to.toISOString()); }
   catch (error) { events.value=[]; uni.showToast({ title: message(error), icon: 'none', duration: 3000 }); }
   finally { loading.value = false; }
 }
@@ -43,7 +44,7 @@ onShow(loadMonth);
 
 <template>
   <view class="page">
-    <view class="top"><view><text class="eyebrow">扣扣的家</text><text class="headline">家庭日历</text></view><view class="avatar">🏡</view></view>
+    <view class="top"><view><text class="eyebrow">{{session?.householdName||'扣扣的家'}}</text><text class="headline">家庭日历</text></view><view class="avatar">🏡</view></view>
     <view class="calendar-card"><view class="month"><text class="arrow" @tap="changeMonth(-1)">‹</text><text class="month-title">{{ title }}</text><text class="arrow" @tap="changeMonth(1)">›</text></view><view class="weekdays"><text v-for="day in weekdays" :key="day">{{ day }}</text></view><view class="days"><view v-for="item in days" :key="item.key" class="day" :class="{ muted: !item.isCurrent, today: item.key === today, selected: item.key === selected }" @tap="selectDay(item.key)"><text class="date">{{ item.day }}</text><view class="stamps"><text v-for="event in item.events.slice(0, 3)" :key="event.id" class="stamp" :class="typeClass[event.type]">{{ eventStamps[event.type] }}</text><text v-if="item.events.length > 3" class="more">+{{ item.events.length - 3 }}</text></view></view></view></view>
     <view class="legend"><view><text class="legend-stamp anniversary">❤</text><text>纪念日</text></view><view><text class="legend-stamp meal">🍲</text><text>吃什么</text></view><view><text class="legend-stamp camping">⛺</text><text>去露营</text></view><view><text class="legend-stamp task">✓</text><text>待办</text></view></view>
     <view class="tip" @tap="selectDay(selected)"><text>当天安排</text><text class="tip-copy">{{ loading ? '正在读取数据库…' : '查看或添加事件 ›' }}</text></view>
