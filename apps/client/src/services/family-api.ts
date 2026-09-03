@@ -31,6 +31,8 @@ export interface Favorite { id:string; version:number; type:'TEXT'|'IMAGE'|'LINK
 export interface ArchiveGrant { fieldId?:string; membershipId:string; canRead:boolean; canEdit:boolean }
 export interface ArchiveField { id:string;key:string;label:string;valueType:'TEXT'|'DATE'|'CONTACT'|'ADDRESS';sensitive:boolean;visibility:'MANAGERS'|'MEMBERS'|'SELECTED';version:number;hasValue:boolean;valueVersion:number;updatedAt:string|null;canEdit:boolean;grants?:ArchiveGrant[] }
 export interface DashboardSummary { from:string;to:string;recipes?:{publishedCount:number};meals?:{completedCount:number;frequentRecipes:Array<{recipeId:string;name:string;mealCount:number}>};shopping?:{pendingCount:number;counts:{WISHLIST:number;NEXT_TRIP:number;REPLENISH:number}};trips?:{visibleTripCount:number;pendingPackingCount:number};tasks?:{completed:number;total:number;completionRate:number|null} }
+export interface InboxItem { id:string;version:number;sourceType:'TASK';sourceId:string;title:string;status:Task['status'];reminderAt:string|null;readAt:string|null;createdAt:string }
+export interface NotificationPreference { membershipId:string;eventType:'TASK_REMINDER';enabled:boolean;leadMinutes:number;quietStart:string|null;quietEnd:string|null;version:number }
 
 async function request<T>(path: string, method: UniApp.RequestOptions['method'] = 'GET', data?: unknown): Promise<T> {
   const session = await ensureSession();
@@ -126,3 +128,9 @@ export function archiveArchiveField(field:ArchiveField){return request<{id:strin
 export function getArchiveValue(fieldId:string){return request<{field:ArchiveField;value:string|null;valueVersion:number;updatedAt:string|null}>(`/archive/fields/${fieldId}/value`);}
 export function setArchiveValue(fieldId:string,value:string,expectedVersion:number){return request<{fieldId:string;valueVersion:number;updatedAt:string}>(`/archive/fields/${fieldId}/value`,'PUT',{value,expectedVersion});}
 export function getDashboardSummary(from:string,to:string){return request<DashboardSummary>(`/dashboard/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);}
+export function listInbox(){return request<InboxItem[]>('/inbox');}
+export function readInboxItem(item:InboxItem){return request<InboxItem>(`/inbox/${item.id}/read`,'PATCH',{expectedVersion:item.version});}
+export function listNotificationPreferences(){return request<NotificationPreference[]>('/notification-preferences');}
+export function updateNotificationPreference(preference:NotificationPreference,input:{enabled:boolean;leadMinutes:number;quietStart:string|null;quietEnd:string|null}){return request<NotificationPreference>('/notification-preferences','PATCH',{eventType:preference.eventType,expectedVersion:preference.version,...input});}
+export function getPublicNotificationSettings(){return request<{taskReminderTemplateId:string|null;wechatSubscriptionAvailable:boolean}>('/notification-settings/public');}
+export function recordSubscriptionReceipt(input:{templateId:string;result:'ACCEPT'|'REJECT'|'BAN';clientScene?:string}){return request<{id:string}>('/subscriptions/receipts','POST',input);}

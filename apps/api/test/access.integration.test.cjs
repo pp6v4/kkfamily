@@ -14,6 +14,7 @@ process.env.ARCHIVE_ENCRYPTION_KEY = Buffer.alloc(32,7).toString('base64');
 process.env.ARCHIVE_ENCRYPTION_KEY_VERSION = '1';
 const { AppModule } = require('../dist/app.module');
 const { configureImageBodyParser } = require('../dist/media/binary-parser');
+const { NotificationsService } = require('../dist/notifications/notifications.service');
 let app, db, jwt;
 const TEST_PNG = Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0x00,0x00,0x00,0x0d,0x49,0x48,0x44,0x52]);
 
@@ -78,13 +79,13 @@ test('A01: unauthenticated household data returns 401', async () => {
 });
 test('A02: every implemented household listing rejects missing/blank headers', async () => {
   const who = await owner();
-  for (const path of ['/recipes', '/inventory', '/shopping-lists', '/trips', '/packing-templates', '/members', '/favorites', '/households/current/access', '/meals?from=2026-08-01&to=2026-09-01', '/calendar/events?from=2026-08-01&to=2026-09-01']) {
+  for (const path of ['/recipes', '/inventory', '/shopping-lists', '/trips', '/packing-templates', '/members', '/favorites', '/archive/fields', '/dashboard/summary?from=2026-08-01T00:00:00Z&to=2026-09-01T00:00:00Z', '/inbox', '/notification-preferences', '/households/current/access', '/meals?from=2026-08-01&to=2026-09-01', '/calendar/events?from=2026-08-01&to=2026-09-01']) {
     for (const header of [undefined, '', ' ']) assert.equal((await call({ token: who.token }, 'GET', path, undefined, header)).status, 400, path);
   }
 });
 test('A03: valid token cannot select another household', async () => {
   const one = await owner(), two = await owner();
-  for (const path of ['/recipes', '/members', '/trips', '/inventory', '/shopping-lists', '/favorites']) assert.equal((await call(one, 'GET', path, undefined, two.householdId)).status, 403, path);
+  for (const path of ['/recipes', '/members', '/trips', '/inventory', '/shopping-lists', '/favorites', '/archive/fields', '/dashboard/summary?from=2026-08-01T00:00:00Z&to=2026-09-01T00:00:00Z', '/inbox']) assert.equal((await call(one, 'GET', path, undefined, two.householdId)).status, 403, path);
 });
 test('A04: explicit DENY defeats chef role and explicit VIEW replaces EDIT', async () => {
   const who = await owner(), chef = await join(who, ['CHEF']);
@@ -415,6 +416,24 @@ test('A40/D12: dashboard hides unauthorized sources, filters trip membership and
   assert.equal((await call(viewer,'GET',`/dashboard/summary?from=${encodeURIComponent('2025-01-01T00:00:00Z')}&to=${encodeURIComponent('2026-09-02T00:00:00Z')}`)).status,400);
   const dashboardOnly=await join(who,['GUEST'],[{module:'dashboard',level:'VIEW',effect:'ALLOW'}]);
   const hidden=await call(dashboardOnly,'GET',path);assert.deepEqual(Object.keys(hidden.body.data).sort(),['from','to']);
+});
+test('A41/D13: task outbox produces an authorized inbox reminder, cancellation and disabled preference suppress delivery',async()=>{
+  const who=await owner(),member=await join(who,['MEMBER']),worker=app.get(NotificationsService);
+  const reminderAt='2026-09-10T11:00:00+08:00',dueAt='2026-09-11T18:00:00+08:00',runAt=new Date('2026-09-10T12:00:00+08:00');
+  const created=await call(who,'POST','/tasks',{type:'TODO',title:'按时清洗空调',assigneeMembershipId:member.memberId,dueAt,reminderAt,priority:'NORMAL'});assert.equal(created.status,201,JSON.stringify(created.body));
+  assert.equal(await db.outboxEvent.count({where:{aggregateId:created.body.data.id,version:1}}),1);assert.equal(await db.notificationJob.count({where:{sourceId:created.body.data.id,status:'PENDING'}}),1);
+  assert.equal((await call(member,'GET','/inbox')).body.data.length,0);assert.ok((await worker.runDue(runAt))>=1);
+  let inbox=await call(member,'GET','/inbox');assert.equal(inbox.status,200);assert.equal(inbox.body.data.length,1);assert.equal(inbox.body.data[0].title,'按时清洗空调');assert.equal(inbox.body.data[0].readAt,null);
+  const read=await call(member,'PATCH',`/inbox/${inbox.body.data[0].id}/read`,{expectedVersion:inbox.body.data[0].version});assert.equal(read.status,200);assert.ok(read.body.data.readAt);
+  const settings=await call(member,'GET','/notification-settings/public');assert.deepEqual(settings.body.data,{taskReminderTemplateId:null,wechatSubscriptionAvailable:false});
+  assert.equal((await call(member,'POST','/subscriptions/receipts',{templateId:'not-configured',result:'REJECT',clientScene:'settings'})).status,400);
+  let preferences=await call(member,'GET','/notification-preferences');assert.equal(preferences.body.data[0].version,0);assert.equal(preferences.body.data[0].enabled,true);
+  const disabled=await call(member,'PATCH','/notification-preferences',{eventType:'TASK_REMINDER',expectedVersion:0,enabled:false,leadMinutes:0,quietStart:'22:00',quietEnd:'08:00'});assert.equal(disabled.status,200,JSON.stringify(disabled.body));
+  const suppressed=await call(who,'POST','/tasks',{type:'TODO',title:'不发送的站内提醒',assigneeMembershipId:member.memberId,dueAt,reminderAt,priority:'NORMAL'});assert.equal(suppressed.status,201);
+  await worker.runDue(runAt);assert.equal((await call(member,'GET','/inbox')).body.data.length,1);assert.equal((await db.notificationJob.findFirst({where:{sourceId:suppressed.body.data.id}})).status,'CANCELLED');
+  let cancelled=(await call(who,'POST','/tasks',{type:'TODO',title:'取消后不提醒',assigneeMembershipId:who.memberId,dueAt,reminderAt,priority:'NORMAL'})).body.data;
+  cancelled=(await call(who,'PATCH',`/tasks/${cancelled.id}/status`,{expectedVersion:cancelled.version,status:'CANCELLED'})).body.data;
+  assert.equal(cancelled.status,'CANCELLED');assert.equal(await db.notificationJob.count({where:{sourceId:cancelled.id,status:'PENDING'}}),0);assert.equal(await db.outboxEvent.count({where:{aggregateId:cancelled.id}}),2);
 });
 test('A24/A25/A29: arbitrary template items stay exact, repeat apply skips, assignee remains read-only', async () => {
   const who=await owner(), member=await join(who,['CAMPER']);

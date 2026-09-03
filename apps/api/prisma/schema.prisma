@@ -190,6 +190,34 @@ enum ArchiveVisibility {
   SELECTED
 }
 
+enum NotificationEventType {
+  TASK_REMINDER
+}
+
+enum NotificationChannel {
+  INBOX
+  WECHAT
+}
+
+enum NotificationJobStatus {
+  PENDING
+  PROCESSING
+  SENT
+  CANCELLED
+  FAILED
+}
+
+enum OutboxStatus {
+  PENDING
+  PROCESSED
+}
+
+enum SubscriptionResult {
+  ACCEPT
+  REJECT
+  BAN
+}
+
 model User {
   id          String       @id @default(cuid())
   openId      String       @unique
@@ -198,6 +226,7 @@ model User {
   createdAt   DateTime     @default(now())
   updatedAt   DateTime     @updatedAt
   memberships Membership[]
+  subscriptionReceipts SubscriptionReceipt[]
 }
 
 model Household {
@@ -222,6 +251,7 @@ model Household {
   tasks            Task[]
   favorites        Favorite[]
   archiveFields    ArchiveFieldDefinition[]
+  outboxEvents     OutboxEvent[]
 }
 
 model CalendarEvent {
@@ -268,6 +298,9 @@ model Membership {
   favoriteConversions     FavoriteConversion[] @relation("FavoriteConversionActor")
   archiveFieldGrants      ArchiveFieldGrant[]
   updatedArchiveValues    ArchiveFieldValue[]    @relation("ArchiveValueUpdater")
+  notificationPreferences NotificationPreference[]
+  notificationJobs        NotificationJob[]
+  inboxItems              InboxItem[]
 
   @@unique([householdId, userId])
 }
@@ -919,4 +952,93 @@ model ArchiveFieldGrant {
 
   @@id([fieldId, membershipId])
   @@index([membershipId, canRead])
+}
+
+model NotificationPreference {
+  membershipId String
+  eventType    NotificationEventType
+  enabled      Boolean               @default(true)
+  leadMinutes  Int                   @default(0)
+  quietStart   String?               @default("22:00")
+  quietEnd     String?               @default("08:00")
+  version      Int                   @default(1)
+  updatedAt    DateTime              @updatedAt
+  membership   Membership            @relation(fields: [membershipId], references: [id], onDelete: Cascade)
+
+  @@id([membershipId, eventType])
+}
+
+model SubscriptionReceipt {
+  id          String             @id @default(cuid())
+  userId      String
+  templateId  String
+  result      SubscriptionResult
+  clientScene String?
+  recordedAt  DateTime           @default(now())
+  expiresAt   DateTime?
+  user        User               @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId, templateId, recordedAt])
+}
+
+model OutboxEvent {
+  id              String                @id @default(cuid())
+  householdId     String
+  eventType       NotificationEventType
+  aggregateType   String
+  aggregateId     String
+  version         Int
+  payloadRedacted Json
+  status          OutboxStatus          @default(PENDING)
+  createdAt       DateTime              @default(now())
+  processedAt     DateTime?
+  household       Household             @relation(fields: [householdId], references: [id], onDelete: Cascade)
+  jobs            NotificationJob[]
+
+  @@unique([eventType, aggregateType, aggregateId, version])
+  @@index([householdId, createdAt])
+}
+
+model NotificationJob {
+  id                    String                @id @default(cuid())
+  outboxId              String
+  recipientMembershipId String
+  eventType             NotificationEventType
+  sourceType            String
+  sourceId              String
+  scheduleVersion       Int
+  channel               NotificationChannel
+  status                NotificationJobStatus @default(PENDING)
+  scheduledAt           DateTime
+  attempts              Int                   @default(0)
+  lockedAt              DateTime?
+  lastError             String?
+  sentAt                DateTime?
+  dedupeKey             String                @unique
+  createdAt             DateTime              @default(now())
+  updatedAt             DateTime              @updatedAt
+  outbox                OutboxEvent            @relation(fields: [outboxId], references: [id], onDelete: Cascade)
+  recipient             Membership            @relation(fields: [recipientMembershipId], references: [id], onDelete: Cascade)
+  inboxItem             InboxItem?
+
+  @@unique([recipientMembershipId, eventType, sourceId, scheduleVersion, channel], map: "NotificationJob_schedule_key")
+  @@index([status, scheduledAt])
+  @@index([recipientMembershipId, status])
+}
+
+model InboxItem {
+  id                    String          @id @default(cuid())
+  jobId                 String          @unique
+  recipientMembershipId String
+  sourceType            String
+  sourceId              String
+  titleRedacted         String
+  readAt                DateTime?
+  invalidatedAt         DateTime?
+  version               Int             @default(1)
+  createdAt             DateTime        @default(now())
+  job                    NotificationJob @relation(fields: [jobId], references: [id], onDelete: Cascade)
+  recipient              Membership      @relation(fields: [recipientMembershipId], references: [id], onDelete: Cascade)
+
+  @@index([recipientMembershipId, readAt, createdAt, id])
 }

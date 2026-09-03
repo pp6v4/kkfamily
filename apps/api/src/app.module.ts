@@ -19,6 +19,7 @@ import { TasksModule } from './tasks/tasks.module';
 import { FavoritesModule } from './favorites/favorites.module';
 import { ArchiveModule } from './archive/archive.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { NotificationsModule } from './notifications/notifications.module';
 
 @Module({
   imports: [
@@ -38,6 +39,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
         COS_SECRET_KEY: Joi.string().when('MEDIA_DRIVER', { is: 'cos', then: Joi.required(), otherwise: Joi.allow('') }),
         ARCHIVE_ENCRYPTION_KEY: Joi.string().base64().allow('').default(''),
         ARCHIVE_ENCRYPTION_KEY_VERSION: Joi.number().integer().min(1).default(1),
+        WECHAT_TASK_REMINDER_TEMPLATE_ID: Joi.string().allow('').default(''),
       }),
     }),
     PrismaModule,
@@ -57,6 +59,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
     FavoritesModule,
     ArchiveModule,
     DashboardModule,
+    NotificationsModule,
   ],
   controllers: [HealthController],
 })

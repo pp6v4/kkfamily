@@ -174,3 +174,12 @@ test('Dashboard client URL-encodes both date boundaries',async()=>{
   await api.getDashboardSummary('2026-09-01T00:00:00+08:00','2026-10-01T00:00:00+08:00');
   assert.match(sent.path,/^\/dashboard\/summary\?from=/);assert.match(sent.path,/%2B08%3A00/);assert.match(sent.path,/&to=/);assert.equal(sent.method,'GET');
 });
+test('Notification client uses optimistic versions for preferences and inbox reads',async()=>{
+  const uni=mockUni(),sent=[];
+  const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent.push({path,method,data});return data||{};}}},uni);
+  const preference={eventType:'TASK_REMINDER',version:2,enabled:true,leadMinutes:0,quietStart:'22:00',quietEnd:'08:00'};
+  const item={id:'inbox-a',version:5,sourceType:'TASK',sourceId:'task-a'};
+  await api.updateNotificationPreference(preference,{enabled:false,leadMinutes:0,quietStart:'22:00',quietEnd:'08:00'});await api.readInboxItem(item);
+  assert.equal(sent[0].path,'/notification-preferences');assert.equal(sent[0].method,'PATCH');assert.equal(sent[0].data.expectedVersion,2);assert.equal(sent[0].data.enabled,false);
+  assert.equal(sent[1].path,'/inbox/inbox-a/read');assert.equal(sent[1].data.expectedVersion,5);
+});

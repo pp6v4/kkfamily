@@ -33,6 +33,30 @@ services:
         condition: service_healthy
     # API needs outbound HTTPS for WeChat/COS; no host API port is published.
     networks: [internal, edge]
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://localhost:3000/v1/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
+  notification-worker:
+    build:
+      context: ..
+      dockerfile: apps/api/Dockerfile
+    command: node dist/notifications/worker-main.js
+    env_file: ../apps/api/.env
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgresql://family_life:${POSTGRES_PASSWORD}@postgres:5432/family_life?schema=public
+      REDIS_URL: redis://:${REDIS_PASSWORD}@redis:6379
+    depends_on:
+      api:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks: [internal, edge]
 
   postgres:
     image: postgres:17-alpine

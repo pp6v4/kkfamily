@@ -10,7 +10,8 @@ const entries = [
   { icon: '💡', title: '收藏与灵感', subtitle: '收下想做的菜、想去的地方', tone: 'sun' },
   { icon: '📚', title: '家庭档案', subtitle: '一起留下值得记住的小事', tone: 'rose' },
   { icon: '📊', title: '生活小看板', subtitle: '看看日常，不比较谁更辛苦', tone: 'sky' },
-  { icon: '⚙️', title: '设置', subtitle: '家庭资料、消息提醒和账号信息', tone: 'stone' },
+  { icon: '🔔', title: '消息与提醒', subtitle: '站内消息和微信订阅设置', tone: 'stone' },
+  { icon: '⚙️', title: '账号与家庭', subtitle: '加入其他家庭或查看账号信息', tone: 'stone' },
 ];
 function open(title: string) {
   if (title === '家庭成员与权限') {
@@ -33,7 +34,11 @@ function open(title: string) {
     if (!canAccess(session.value, 'dashboard')) { uni.showToast({ title: '尚未获得生活看板权限', icon: 'none' }); return; }
     uni.navigateTo({ url: '/pages/dashboard/index' }); return;
   }
-  if (title === '设置') { uni.navigateTo({ url: '/pages/join/index' }); return; }
+  if (title === '消息与提醒') {
+    if (!canAccess(session.value, 'notifications')) { uni.showToast({ title: '尚未获得消息提醒权限', icon: 'none' }); return; }
+    uni.navigateTo({ url: '/pages/notifications/index' }); return;
+  }
+  if (title === '账号与家庭') { uni.navigateTo({ url: '/pages/join/index' }); return; }
   uni.showToast({ title: `${title}尚未实现，当前不是可用功能`, icon: 'none' });
 }
 </script>

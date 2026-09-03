@@ -186,7 +186,7 @@ E：纪念日一期公历年度重复，2月29日非闰年默认2月28日、可�
 
 待办字段title(1~120)、description(<=2000)、assigneeMembershipId、dueAt?、priority(LOW/NORMAL/HIGH)、status(PENDING/IN_PROGRESS/COMPLETED/CANCELLED)、reminderAt?、createdById、version。示例“清洗空调”是普通待办，不做周期家务排班或积分。E：工单作为待办的一种type=REQUEST，共用处理记录，支持问题描述、附件、受理、处理、完成；若用户期待软件反馈工单，应另评审不混淆。
 
-任务负责人或tasks:MANAGE可推进状态，创建者可改未开始任务；只有管理权限可重新分配。截止日前后提醒不改变完成状态；完成写completedAt/completedBy，重新打开需原因，TaskHistory保留。GET/POST /tasks；GET/PATCH /tasks/:id；PATCH /tasks/:id/status；POST /tasks/:id/comments。删除使用归档并取消待发提醒。当前待办主链路及截止日日历聚合已实现；reminderAt只保存计划，须等D13 Inbox/outbox/worker落地后才视为真正提醒。
+任务负责人或tasks:MANAGE可推进状态，创建者可改未开始任务；只有管理权限可重新分配。截止日前后提醒不改变完成状态；完成写completedAt/completedBy，重新打开需原因，TaskHistory保留。GET/POST /tasks；GET/PATCH /tasks/:id；PATCH /tasks/:id/status；POST /tasks/:id/comments。删除使用归档并取消待发提醒。当前待办主链路、截止日日历聚合及D13站内Inbox/outbox/worker已实现；微信外部订阅发送仍须正式模板字段联调。
 
 ## D12 收藏灵感、档案和看板
 
@@ -212,6 +212,8 @@ E：纪念日一期公历年度重复，2月29日非闰年默认2月28日、可�
 E：任务临期/行程前1天/行李检查/食材临期可配置，安静时段22:00~08:00。NotificationJob唯一(recipient,eventType,sourceId,scheduleVersion,channel)。事务outbox写入事件，worker发送前重新鉴权并确认业务未取消；重试1/5/15分钟最多3次，仅重试明确可重试失败，未知结果按通道幂等能力处理并记录UNKNOWN，避免盲目重复通知。拒绝授权或额度不足只保留站内提醒，不能一直弹授权框。
 
 GET /inbox、PATCH /inbox/:id/read、GET/PATCH /notification-preferences、POST /subscriptions/receipts。收件箱内容也走来源权限；撤权后隐藏失效条目而非继续泄露任务/行程标题。
+
+当前站内主链路已落地：待办变化与脱敏outbox/版本任务在同一事务，独立worker发送前重新检查来源；个人关闭、安静时段、任务取消和改派均会抑制或顺延。微信侧只实现用户主动申请与授权回执，正式发送须等待模板ID及字段联调，不把回执写成送达。
 
 ## D14 通用写入、异常与发布门槛
 
