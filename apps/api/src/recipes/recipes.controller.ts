@@ -5,6 +5,7 @@ import { CreateCategoryDto } from './dto/create-category.dto';
 import { CreateRecipeDto } from './dto/create-recipe.dto';
 import { UpdateRecipeDto } from './dto/update-recipe.dto';
 import { UpdateRecipeStatusDto } from './dto/update-recipe-status.dto';
+import { ArchiveCategoryDto, UpdateCategoryDto } from './dto/update-category.dto';
 import { RecipesService } from './recipes.service';
 
 @Controller('recipes')
@@ -20,6 +21,16 @@ export class RecipesController {
   @Post('categories')
   createCategory(@CurrentUser() user: RequestUser, @Headers('x-household-id') householdId: string, @Body() dto: CreateCategoryDto) {
     return this.recipesService.createCategory(user.userId, householdId, dto);
+  }
+
+  @Patch('categories/:categoryId')
+  updateCategory(@CurrentUser() user: RequestUser, @Headers('x-household-id') householdId: string, @Param('categoryId') categoryId: string, @Body() dto: UpdateCategoryDto) {
+    return this.recipesService.updateCategory(user.userId, householdId, categoryId, dto);
+  }
+
+  @Post('categories/:categoryId/archive')
+  archiveCategory(@CurrentUser() user: RequestUser, @Headers('x-household-id') householdId: string, @Param('categoryId') categoryId: string, @Body() dto: ArchiveCategoryDto) {
+    return this.recipesService.archiveCategory(user.userId, householdId, categoryId, dto);
   }
 
   @Post()

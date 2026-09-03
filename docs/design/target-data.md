@@ -28,6 +28,7 @@
 | 模型 | 字段与约束 | 数据迁移策略 |
 | --- | --- | --- |
 | Ingredient（扩展） | kind:FOOD/SEASONING,nameNormalized:S,defaultUnit:S? | 现有默认FOOD；调料标准化由用户确认映射，不按模糊名强合并 |
+| RecipeCategory（扩展） | version:I,archivedAt:T?，保留name、sortOrder | 改名/排序使用乐观锁；归档分类不再用于新菜，既有Recipe外键不清空，继续展示历史名称 |
 | RecipeSeasoning（扩展） | ingredientId?，保留name快照 | 逐步回填标准调料，不添加quantity |
 | Recipe（扩展） | version:I,coverAssetId?,archivedAt:T? | 现有coverObjectKey经对象核验后关联MediaAsset |
 | InventoryItem（扩展） | quantity:D?,availability:KNOWN/ABSENT/UNKNOWN,kind:FOOD/SEASONING,version:I | 旧数量转KNOWN；调料可以quantity=null，不把null当0 |

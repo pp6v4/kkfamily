@@ -26,7 +26,7 @@
 
 自定义行李模板没有任何系统内置的“烧烤模块”。“烧烤”只可能是用户自己填写的模板名称；模板物品完全自定义，套用到行程后复制为独立快照，不随模板后续修改。
 
-当前不是正式发布版。下一阶段重点是在隔离PostgreSQL执行16批迁移及50条HTTP集成用例，并完成真实COS、微信双账号、订阅消息、地图供应商、HTTPS、小程序平台备案、公安备案和生产部署验收。网站ICP服务备案号`辽ICP备2026020161号-1`已经写入小程序设置页和域名首页源码。最新差异见[`docs/implementation-gap-audit.md`](docs/implementation-gap-audit.md)，详细字段、接口和46条验收设计见[`docs/design/`](docs/design/README.md)。
+当前不是正式发布版。下一阶段重点是在隔离PostgreSQL执行17批迁移及50条HTTP集成用例，并完成真实COS、微信双账号、订阅消息、地图供应商、HTTPS、小程序平台备案、公安备案和生产部署验收。网站ICP服务备案号`辽ICP备2026020161号-1`已经写入小程序设置页和域名首页源码。最新差异见[`docs/implementation-gap-audit.md`](docs/implementation-gap-audit.md)，详细字段、接口和46条验收设计见[`docs/design/`](docs/design/README.md)。
 
 ## 当前 API
 

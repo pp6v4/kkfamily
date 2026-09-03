@@ -315,12 +315,22 @@ test('A10: trim precedes validation; empty names and negative recipe quantities 
   assert.equal(await db.recipe.count({where:{householdId:who.householdId}}),0);
 });
 
-test('A46: recipe managers can create trimmed categories and duplicate names return a conflict', async () => {
+test('A46: recipe managers can version, reorder and archive categories while recipes keep historical names', async () => {
   const who=await owner();
   const created=await call(who,'POST','/recipes/categories',{name:'  海鲜  ',sortOrder:3});
-  assert.equal(created.status,201,JSON.stringify(created.body));assert.equal(created.body.data.name,'海鲜');assert.equal(created.body.data.sortOrder,3);
+  assert.equal(created.status,201,JSON.stringify(created.body));assert.equal(created.body.data.name,'海鲜');assert.equal(created.body.data.sortOrder,3);assert.equal(created.body.data.version,1);
   const duplicate=await call(who,'POST','/recipes/categories',{name:'海鲜',sortOrder:4});
   assert.equal(duplicate.status,409,JSON.stringify(duplicate.body));assert.equal(await db.recipeCategory.count({where:{householdId:who.householdId,name:'海鲜'}}),1);
+  const recipe=await call(who,'POST','/recipes',{name:'烤鱼',categoryId:created.body.data.id,ingredients:[{name:'鱼',quantity:1,unit:'条'}],seasonings:['盐'],steps:['烤熟']});
+  assert.equal(recipe.status,201,JSON.stringify(recipe.body));assert.equal(recipe.body.data.category.name,'海鲜');
+  const updated=await call(who,'PATCH',`/recipes/categories/${created.body.data.id}`,{expectedVersion:1,name:'水产',sortOrder:1});
+  assert.equal(updated.status,200,JSON.stringify(updated.body));assert.equal(updated.body.data.name,'水产');assert.equal(updated.body.data.sortOrder,1);assert.equal(updated.body.data.version,2);
+  assert.equal((await call(who,'PATCH',`/recipes/categories/${created.body.data.id}`,{expectedVersion:1,name:'过期修改'})).status,409);
+  const archived=await call(who,'POST',`/recipes/categories/${created.body.data.id}/archive`,{expectedVersion:2});
+  assert.equal(archived.status,201,JSON.stringify(archived.body));assert.equal(archived.body.data.version,3);assert.ok(archived.body.data.archivedAt);
+  assert.equal((await call(who,'GET','/recipes/categories')).body.data.length,0);
+  assert.equal((await call(who,'GET',`/recipes/${recipe.body.data.id}`)).body.data.category.name,'水产');
+  assert.equal((await call(who,'POST','/recipes',{name:'归档分类新菜',categoryId:created.body.data.id,ingredients:[{name:'虾',quantity:1,unit:'斤'}],seasonings:['盐'],steps:['炒熟']})).status,404);
 });
 
 test('D04: recipe detail respects draft visibility and stale edits never overwrite newer content', async () => {

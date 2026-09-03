@@ -2,7 +2,7 @@ import { ensureSession, renewSession } from './session';
 import { ApiError, rawBinaryRequest, rawRequest } from './transport';
 import { API_BASE_URL } from './config';
 
-export interface RecipeCategory { id: string; name: string; sortOrder: number }
+export interface RecipeCategory { id: string; name: string; sortOrder: number; version: number; archivedAt?: string | null }
 export interface RecipeIngredient { ingredientId: string; quantity: string | number | null; unit: string; optional: boolean; ingredient: { id: string; name: string } }
 export interface Recipe { id: string; version: number; name: string; status: 'DRAFT' | 'PUBLISHED' | 'ARCHIVED'; coverAssetId?: string | null; category?: RecipeCategory | null; ingredients: RecipeIngredient[]; seasonings: Array<{ id: string; name: string }>; steps: string[] }
 export interface MealItem { id: string; addedById: string; recipeId: string; recipe: Recipe }
@@ -51,6 +51,8 @@ async function binaryRequest<T>(path:string,data:ArrayBuffer,mimeType:string){co
 
 export function listRecipeCategories() { return request<RecipeCategory[]>('/recipes/categories'); }
 export function createRecipeCategory(name: string, sortOrder = 0) { return request<RecipeCategory>('/recipes/categories', 'POST', { name, sortOrder }); }
+export function updateRecipeCategory(category: RecipeCategory, input: { name?: string; sortOrder?: number }) { return request<RecipeCategory>(`/recipes/categories/${category.id}`, 'PATCH', { expectedVersion: category.version, ...input }); }
+export function archiveRecipeCategory(category: RecipeCategory) { return request<RecipeCategory>(`/recipes/categories/${category.id}/archive`, 'POST', { expectedVersion: category.version }); }
 export function listRecipes() { return request<Recipe[]>('/recipes'); }
 export function getRecipe(recipeId: string) { return request<Recipe>(`/recipes/${recipeId}`); }
 export function createRecipe(input: { name: string; categoryId?: string; ingredients: Array<{ name: string; quantity?: number; unit: string; optional?: boolean }>; seasonings: string[]; steps: string[] }) { return request<Recipe>('/recipes', 'POST', input); }

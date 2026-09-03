@@ -629,11 +629,13 @@ model RecipeCategory {
   householdId String
   name        String
   sortOrder   Int       @default(0)
+  version     Int       @default(1)
+  archivedAt  DateTime?
   household   Household @relation(fields: [householdId], references: [id], onDelete: Cascade)
   recipes     Recipe[]
 
   @@unique([householdId, name])
-  @@index([householdId, sortOrder])
+  @@index([householdId, archivedAt, sortOrder])
 }
 
 model Ingredient {

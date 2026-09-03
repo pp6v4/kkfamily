@@ -69,7 +69,9 @@ E：保存为DRAFT时允许缺封面；发布PUBLISHED前要求食材、做法�
 | POST /recipes | 完整草稿字段 | recipeId, status=DRAFT, version=1 |
 | PATCH /recipes/:id | version及更新字段 | version+1；409不覆盖他人修改 |
 | PATCH /recipes/:id/status | status, version | 发布前校验图片；归档保留历史 |
-| POST/PATCH /recipes/categories | name, sortOrder, version | 分类维护；家庭内归一化名称唯一 |
+| POST /recipes/categories | name, sortOrder | 新建分类，version=1；家庭内去除首尾空格后的名称唯一 |
+| PATCH /recipes/categories/:id | expectedVersion, name?, sortOrder? | 改名/排序后version+1；旧版本409 |
+| POST /recipes/categories/:id/archive | expectedVersion | 软归档并version+1；新菜不可再选，既有菜谱保留分类历史名 |
 
 ## D05 同餐点菜、需求快照与库存比对
 

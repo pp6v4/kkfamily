@@ -8,6 +8,7 @@ import { CreateCategoryDto } from './dto/create-category.dto';
 import { CreateRecipeDto } from './dto/create-recipe.dto';
 import { UpdateRecipeDto } from './dto/update-recipe.dto';
 import { UpdateRecipeStatusDto } from './dto/update-recipe-status.dto';
+import { ArchiveCategoryDto, UpdateCategoryDto } from './dto/update-category.dto';
 
 const recipeInclude = { category: true, ingredients: { include: { ingredient: true } }, seasonings: true } satisfies Prisma.RecipeInclude;
 
@@ -21,7 +22,39 @@ export class RecipesService {
 
   async listCategories(userId: string, householdId: string) {
     await this.requireMember(userId, householdId);
-    return { data: await this.prisma.recipeCategory.findMany({ where: { householdId }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }) };
+    return { data: await this.prisma.recipeCategory.findMany({ where: { householdId, archivedAt: null }, orderBy: [{ sortOrder: 'asc' }, { name: 'asc' }] }) };
+  }
+
+  async updateCategory(userId: string, householdId: string, categoryId: string, dto: UpdateCategoryDto) {
+    if (dto.name === undefined && dto.sortOrder === undefined) throw new BadRequestException('请至少修改分类名称或排序');
+    try {
+      return await this.prisma.$transaction(async tx => {
+        const membership = await this.access.require(userId, householdId, 'recipes', 'MANAGE', tx);
+        const current = await tx.recipeCategory.findFirst({ where: { id: categoryId, householdId, archivedAt: null } });
+        if (!current) throw new NotFoundException('菜谱分类不存在');
+        const changed = await tx.recipeCategory.updateMany({ where: { id: categoryId, householdId, archivedAt: null, version: dto.expectedVersion }, data: { name: dto.name, sortOrder: dto.sortOrder, version: { increment: 1 } } });
+        if (!changed.count) throw new ConflictException('菜谱分类已被其他人修改，请刷新后重试');
+        const updated = await tx.recipeCategory.findUniqueOrThrow({ where: { id: categoryId } });
+        await tx.auditLog.create({ data: { householdId, actorMembershipId: membership.id, action: 'RECIPE_CATEGORY_UPDATE', targetId: categoryId, details: { fromVersion: current.version, toVersion: updated.version, fromName: current.name, toName: updated.name, fromSortOrder: current.sortOrder, toSortOrder: updated.sortOrder } } });
+        return { data: updated };
+      });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === 'P2002') throw new ConflictException('家庭内已存在同名菜谱分类');
+      throw error;
+    }
+  }
+
+  async archiveCategory(userId: string, householdId: string, categoryId: string, dto: ArchiveCategoryDto) {
+    return this.prisma.$transaction(async tx => {
+      const membership = await this.access.require(userId, householdId, 'recipes', 'MANAGE', tx);
+      const current = await tx.recipeCategory.findFirst({ where: { id: categoryId, householdId, archivedAt: null } });
+      if (!current) throw new NotFoundException('菜谱分类不存在');
+      const changed = await tx.recipeCategory.updateMany({ where: { id: categoryId, householdId, archivedAt: null, version: dto.expectedVersion }, data: { archivedAt: new Date(), version: { increment: 1 } } });
+      if (!changed.count) throw new ConflictException('菜谱分类已被其他人修改，请刷新后重试');
+      const archived = await tx.recipeCategory.findUniqueOrThrow({ where: { id: categoryId } });
+      await tx.auditLog.create({ data: { householdId, actorMembershipId: membership.id, action: 'RECIPE_CATEGORY_ARCHIVE', targetId: categoryId, details: { name: current.name, fromVersion: current.version, toVersion: archived.version } } });
+      return { data: archived };
+    });
   }
 
   async createCategory(userId: string, householdId: string, dto: CreateCategoryDto) {
@@ -38,7 +71,7 @@ export class RecipesService {
     const membership = await this.requireChef(userId, householdId);
     ensureDistinctIngredients(dto.ingredients);
     if (dto.categoryId) {
-      const category = await this.prisma.recipeCategory.findFirst({ where: { id: dto.categoryId, householdId } });
+      const category = await this.prisma.recipeCategory.findFirst({ where: { id: dto.categoryId, householdId, archivedAt: null } });
       if (!category) throw new NotFoundException('Recipe category was not found');
     }
     const recipe = await this.prisma.$transaction(async (tx) => {
@@ -87,7 +120,7 @@ export class RecipesService {
       const recipe = await tx.recipe.findFirst({ where: { id: recipeId, householdId } });
       if (!recipe) throw new NotFoundException('菜谱不存在');
       if (recipe.version !== dto.expectedVersion) throw new ConflictException('菜谱已被其他人修改，请刷新后重试');
-      if (dto.categoryId && !await tx.recipeCategory.findFirst({ where: { id: dto.categoryId, householdId } })) throw new NotFoundException('菜谱分类不存在');
+      if (dto.categoryId && !await tx.recipeCategory.findFirst({ where: { id: dto.categoryId, householdId, archivedAt: null } })) throw new NotFoundException('菜谱分类不存在');
       const ingredients = await Promise.all(dto.ingredients.map(item => tx.ingredient.upsert({
         where: { householdId_name_kind: { householdId, name: item.name, kind: 'FOOD' } },
         update: { defaultUnit: item.unit }, create: { householdId, name: item.name, defaultUnit: item.unit },

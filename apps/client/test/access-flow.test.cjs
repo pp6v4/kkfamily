@@ -128,13 +128,16 @@ function mealDependencies(overrides={}) {
     mealTypeCodes:{早餐:'BREAKFAST',午餐:'LUNCH',晚餐:'DINNER',加餐:'OTHER'},mealTypeLabel:()=> '晚餐',listMeals:async()=>[],listRecipeCategories:async()=>[],listRecipes:async()=>[],recalculateMeal:async()=>[],listMealSnapshots:async()=>[],...overrides,
   }};
 }
-test('Recipe manager can add a trimmed category and update recipe lifecycle without reloading stale versions',async()=>{
-  const uni=mockUni(),categories=[],statuses=[];
+test('Recipe manager can add, edit, order and archive categories, then update recipe lifecycle',async()=>{
+  const uni=mockUni(),categories=[],categoryUpdates=[],categoryArchives=[],statuses=[];
   const manager={...mealSession,effectivePermissions:{...mealSession.effectivePermissions,recipes:'MANAGE'}};
   const recipe={id:'recipe-a',version:4,name:'烤鱼',status:'PUBLISHED',category:null,ingredients:[],seasonings:[],steps:['烤熟']};
-  const page=loadPage('src/pages/meal/index.vue',mealDependencies({createRecipeCategory:async(name,sortOrder)=>{categories.push({name,sortOrder});return{id:'category-a',name,sortOrder};},updateRecipeStatus:async(value,status)=>{statuses.push({version:value.version,status});return{...value,status,version:value.version+1};}}),uni);
-  page.session.value=manager;page.recipeCategories.value=[{id:'category-old',name:'主食',sortOrder:0}];page.categoryName.value='  海鲜  ';await page.saveCategory();
+  const page=loadPage('src/pages/meal/index.vue',mealDependencies({createRecipeCategory:async(name,sortOrder)=>{categories.push({name,sortOrder});return{id:'category-a',name,sortOrder,version:1};},updateRecipeCategory:async(value,input)=>{categoryUpdates.push({version:value.version,...input});return{...value,...input,version:value.version+1};},archiveRecipeCategory:async value=>{categoryArchives.push(value.version);return{...value,version:value.version+1,archivedAt:'2026-09-03'};},updateRecipeStatus:async(value,status)=>{statuses.push({version:value.version,status});return{...value,status,version:value.version+1};}}),uni);
+  page.session.value=manager;page.recipeCategories.value=[{id:'category-old',name:'主食',sortOrder:0,version:2}];page.categoryName.value='  海鲜  ';await page.saveCategory();
   assert.deepEqual(categories,[{name:'海鲜',sortOrder:1}]);assert.equal(page.categoryName.value,'');assert.equal(page.recipeCategories.value[1].name,'海鲜');
+  page.startCategoryEdit(page.recipeCategories.value[0]);page.categoryEditName.value='  家常菜 ';page.categoryEditOrder.value='5';await page.saveCategoryEdit();
+  assert.deepEqual(categoryUpdates,[{version:2,name:'家常菜',sortOrder:5}]);const edited=page.recipeCategories.value.find(item=>item.id==='category-old');assert.equal(edited.version,3);
+  await page.applyCategoryArchive(edited);assert.deepEqual(categoryArchives,[3]);assert.equal(page.recipeCategories.value.some(item=>item.id==='category-old'),false);
   page.recipes.value=[recipe];await page.applyRecipeStatus(recipe,'ARCHIVED');
   assert.deepEqual(statuses,[{version:4,status:'ARCHIVED'}]);assert.equal(page.recipes.value[0].version,5);assert.equal(page.recipes.value[0].status,'ARCHIVED');
 });
@@ -167,12 +170,14 @@ test('Family API serializes optimistic shopping version instead of a blind statu
   const item={id:'shopping-a',version:9,status:'NEXT_TRIP'};await api.updateShoppingItem(item,'PURCHASED');
   assert.equal(sent.path,'/shopping-lists/items/shopping-a');assert.equal(sent.method,'PATCH');assert.equal(sent.data.expectedVersion,9);assert.equal(sent.data.status,'PURCHASED');
 });
-test('Family API sends category creation and recipe lifecycle versions to their database endpoints',async()=>{
+test('Family API sends category maintenance and recipe lifecycle versions to their database endpoints',async()=>{
   const uni=mockUni(),sent=[];
   const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent.push({path,method,data});return{...data,id:'saved'};}}},uni);
-  await api.createRecipeCategory('海鲜',3);await api.updateRecipeStatus({id:'recipe-a',version:7},'ARCHIVED');
+  const category={id:'category-a',name:'海鲜',sortOrder:3,version:4};await api.createRecipeCategory('海鲜',3);await api.updateRecipeCategory(category,{name:'水产',sortOrder:2});await api.archiveRecipeCategory({...category,version:5});await api.updateRecipeStatus({id:'recipe-a',version:7},'ARCHIVED');
   assert.equal(sent[0].path,'/recipes/categories');assert.equal(sent[0].method,'POST');assert.equal(sent[0].data.name,'海鲜');assert.equal(sent[0].data.sortOrder,3);
-  assert.equal(sent[1].path,'/recipes/recipe-a/status');assert.equal(sent[1].method,'PATCH');assert.equal(sent[1].data.status,'ARCHIVED');assert.equal(sent[1].data.expectedVersion,7);
+  assert.equal(sent[1].path,'/recipes/categories/category-a');assert.equal(sent[1].method,'PATCH');assert.equal(sent[1].data.expectedVersion,4);assert.equal(sent[1].data.name,'水产');assert.equal(sent[1].data.sortOrder,2);
+  assert.equal(sent[2].path,'/recipes/categories/category-a/archive');assert.equal(sent[2].method,'POST');assert.equal(sent[2].data.expectedVersion,5);
+  assert.equal(sent[3].path,'/recipes/recipe-a/status');assert.equal(sent[3].method,'PATCH');assert.equal(sent[3].data.status,'ARCHIVED');assert.equal(sent[3].data.expectedVersion,7);
 });
 test('Family API retries an access-token 401 once with the same household after renewal',async()=>{
   const uni=mockUni(),sent=[];let attempt=0;
