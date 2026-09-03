@@ -114,6 +114,21 @@ test('Calendar navigation preserves date/source, and consumption is scoped and o
   nav.setCalendarTarget({type:'TRIP',date:'2026-09-01',sourceId:'trip-a'});
   assert.equal(nav.takeCalendarTarget('MEAL'),undefined);const target=nav.takeCalendarTarget('TRIP');assert.equal(target.date,'2026-09-01');assert.equal(target.sourceId,'trip-a');assert.equal(nav.takeCalendarTarget('TRIP'),undefined);
 });
+test('Calendar quick actions and event drill-down require the corresponding module permission',()=>{
+  const uni=mockUni(),targets=[],toasts=[];
+  uni.showToast=input=>toasts.push(input.title);
+  const calendarSession={...family,effectivePermissions:{calendar:'VIEW',meals:'EDIT'}};
+  const page=loadPage('src/pages/date-detail/index.vue',{
+    '../../services/session':{canAccess:allowed,refreshAccess:async()=>calendarSession},
+    '../../services/calendar-navigation':{setCalendarTarget:target=>targets.push(target)},
+    '../../services/family-api':{},
+  },uni);
+  page.date.value='2026-09-03';page.session.value=calendarSession;
+  assert.equal(page.canPlanMeal.value,true);assert.equal(page.canPlanTrip.value,false);assert.equal(page.canPlanTask.value,false);assert.equal(page.quickActionCount.value,1);
+  page.planMeal();assert.equal(targets.length,1);assert.equal(targets[0].type,'MEAL');assert.equal(targets[0].date,'2026-09-03');assert.deepEqual(uni.routes,['/pages/meal/index']);
+  page.planTrip();page.planTask();page.openEvent({id:'task-event',type:'TASK',title:'清洗空调',startsAt:'2026-09-03',sourceId:'task-a'});
+  assert.deepEqual(uni.routes,['/pages/meal/index']);assert.deepEqual(toasts,['尚未获得露营编辑权限','尚未获得待办编辑权限','尚未获得待办详情权限']);
+});
 test('My home displays the approved website ICP filing number and supports copying it',()=>{
   const source=fs.readFileSync(path.join(ROOT,'src/pages/profile/index.vue'),'utf8');
   assert.match(source,/辽ICP备2026020161号-1/);
@@ -241,6 +256,20 @@ test('Task client sends optimistic version for content and status updates',async
   await api.updateTask(task,{title:'清洗空调'});await api.updateTaskStatus(task,'IN_PROGRESS');
   assert.equal(sent[0].path,'/tasks/task-a');assert.equal(sent[0].method,'PATCH');assert.equal(sent[0].data.expectedVersion,6);assert.equal(sent[0].data.title,'清洗空调');
   assert.equal(sent[1].path,'/tasks/task-a/status');assert.equal(sent[1].method,'PATCH');assert.equal(sent[1].data.expectedVersion,6);assert.equal(sent[1].data.status,'IN_PROGRESS');
+});
+test('Task reopen requires a non-empty reason before sending and trims the accepted reason',async()=>{
+  const uni=mockUni(),toasts=[],updates=[];
+  uni.showToast=input=>toasts.push(input.title);
+  const taskSession={...family,effectivePermissions:{tasks:'EDIT'}};
+  const completed={id:'task-a',version:6,type:'TODO',title:'清洗空调',description:null,assigneeMembershipId:'member-a',assignee:{id:'member-a',user:{nickname:'小扣'}},createdBy:{id:'member-a',user:{nickname:'小扣'}},priority:'NORMAL',status:'COMPLETED',dueAt:null,reminderAt:null,history:[]};
+  const page=loadPage('src/pages/tasks/index.vue',{
+    '../../services/session':{canAccess:allowed,refreshAccess:async()=>taskSession},
+    '../../services/family-api':{updateTaskStatus:async(task,status,reason)=>{updates.push({task,status,reason});return{...task,status,version:task.version+1};}},
+  },uni);
+  page.session.value=taskSession;page.selected.value=completed;page.reopenReason.value='   ';
+  await page.changeStatus('PENDING',page.reopenReason.value);assert.equal(updates.length,0);assert.equal(page.busy.value,false);assert.deepEqual(toasts,['请填写重新打开原因']);
+  page.reopenReason.value='  还需要再处理一次  ';await page.changeStatus('PENDING',page.reopenReason.value);
+  assert.equal(updates.length,1);assert.equal(updates[0].task.version,6);assert.equal(updates[0].reason,'还需要再处理一次');assert.equal(page.selected.value.status,'PENDING');assert.equal(page.selected.value.version,7);assert.equal(page.reopenReason.value,'');
 });
 test('Favorite client preserves optimistic versions and a stable conversion idempotency key',async()=>{
   const uni=mockUni(),sent=[];

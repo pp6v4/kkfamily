@@ -28,6 +28,11 @@ const eventStamps: Record<CalendarEvent['type'], string> = { ANNIVERSARY: '❤',
 const typeClass: Record<CalendarEvent['type'], string> = { ANNIVERSARY: 'anniversary', MEAL: 'meal', TRIP: 'camping', TASK: 'task' };
 const dateTitle = computed(() => date.value ? `${date.value.slice(0, 4)}年${Number(date.value.slice(5, 7))}月${Number(date.value.slice(8, 10))}日` : '当天安排');
 const canEdit = computed(() => canAccess(session.value, 'calendar', 'EDIT'));
+const canPlanMeal = computed(() => canAccess(session.value, 'meals', 'EDIT'));
+const canPlanTrip = computed(() => canAccess(session.value, 'trips', 'EDIT'));
+const canPlanTask = computed(() => canAccess(session.value, 'tasks', 'EDIT'));
+const quickActionCount = computed(() => [canPlanMeal.value, canPlanTrip.value, canPlanTask.value].filter(Boolean).length);
+const hasQuickAction = computed(() => quickActionCount.value > 0);
 const isLeapDay = computed(() => anniversaryDate.value.slice(5) === '02-29');
 function message(error: unknown) { return error instanceof Error ? error.message : '操作失败'; }
 
@@ -74,17 +79,32 @@ function closeEditor() { adding.value = false; editing.value = null; }
 function pickDate(event: { detail: { value: string } }) { anniversaryDate.value = event.detail.value; }
 
 function openEvent(event: CalendarEvent) {
-  if (event.type === 'MEAL' || event.type === 'TRIP') {
+  if (event.type === 'MEAL') {
+    if (!canAccess(session.value, 'meals')) { uni.showToast({ title: '尚未获得点餐详情权限', icon: 'none' }); return; }
     setCalendarTarget({ type: event.type, date: date.value, sourceId: event.sourceId || undefined, mealType: event.type === 'MEAL' ? event.title : undefined });
-    uni.switchTab({ url: event.type === 'MEAL' ? '/pages/meal/index' : '/pages/camping/index' });
+    uni.switchTab({ url: '/pages/meal/index' });
+  } else if (event.type === 'TRIP') {
+    if (!canAccess(session.value, 'trips')) { uni.showToast({ title: '尚未获得露营详情权限', icon: 'none' }); return; }
+    setCalendarTarget({ type: event.type, date: date.value, sourceId: event.sourceId || undefined });
+    uni.switchTab({ url: '/pages/camping/index' });
   } else if (event.type === 'TASK') {
+    if (!canAccess(session.value, 'tasks')) { uni.showToast({ title: '尚未获得待办详情权限', icon: 'none' }); return; }
     uni.navigateTo({ url: `/pages/tasks/index?id=${encodeURIComponent(event.sourceId || '')}` });
   } else beginEdit(event);
 }
 
-function planMeal() { setCalendarTarget({ type: 'MEAL', date: date.value }); uni.switchTab({ url: '/pages/meal/index' }); }
-function planTrip() { setCalendarTarget({ type: 'TRIP', date: date.value }); uni.switchTab({ url: '/pages/camping/index' }); }
-function planTask() { uni.navigateTo({ url: `/pages/tasks/index?date=${encodeURIComponent(date.value)}` }); }
+function planMeal() {
+  if (!canPlanMeal.value) { uni.showToast({ title: '尚未获得点餐编辑权限', icon: 'none' }); return; }
+  setCalendarTarget({ type: 'MEAL', date: date.value }); uni.switchTab({ url: '/pages/meal/index' });
+}
+function planTrip() {
+  if (!canPlanTrip.value) { uni.showToast({ title: '尚未获得露营编辑权限', icon: 'none' }); return; }
+  setCalendarTarget({ type: 'TRIP', date: date.value }); uni.switchTab({ url: '/pages/camping/index' });
+}
+function planTask() {
+  if (!canPlanTask.value) { uni.showToast({ title: '尚未获得待办编辑权限', icon: 'none' }); return; }
+  uni.navigateTo({ url: `/pages/tasks/index?date=${encodeURIComponent(date.value)}` });
+}
 
 async function saveEvent() {
   if (!title.value.trim()) { uni.showToast({ title: '请输入纪念日名称', icon: 'none' }); return; }
@@ -147,7 +167,7 @@ onShow(loadEvents);
     </view>
     <view v-else-if="canEdit" class="add primary" @tap="beginCreate">+ 添加纪念日</view>
     <view v-else class="permission-tip">当前账号可查看日历，但没有编辑权限</view>
-    <view class="quick-grid"><view class="add" @tap="planMeal">安排当天餐点</view><view class="add" @tap="planTrip">从这天计划出行</view><view class="add wide" @tap="planTask">添加当天待办</view></view>
+    <view v-if="hasQuickAction" class="quick-grid"><view v-if="canPlanMeal" class="add" :class="{wide:quickActionCount===1}" @tap="planMeal">安排当天餐点</view><view v-if="canPlanTrip" class="add" :class="{wide:quickActionCount===1}" @tap="planTrip">从这天计划出行</view><view v-if="canPlanTask" class="add" :class="{wide:quickActionCount===1||quickActionCount===3}" @tap="planTask">添加当天待办</view></view>
   </view>
 </template>
 
