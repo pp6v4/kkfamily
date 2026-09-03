@@ -9,6 +9,7 @@ const entries = [
   { icon: '📮', title: '家庭待办', subtitle: '清洗空调、补充物资等日常安排', tone: 'sky' },
   { icon: '💡', title: '收藏与灵感', subtitle: '收下想做的菜、想去的地方', tone: 'sun' },
   { icon: '📚', title: '家庭档案', subtitle: '一起留下值得记住的小事', tone: 'rose' },
+  { icon: '📊', title: '生活小看板', subtitle: '看看日常，不比较谁更辛苦', tone: 'sky' },
   { icon: '⚙️', title: '设置', subtitle: '家庭资料、消息提醒和账号信息', tone: 'stone' },
 ];
 function open(title: string) {
@@ -27,6 +28,10 @@ function open(title: string) {
   if (title === '家庭档案') {
     if (!canAccess(session.value, 'archive')) { uni.showToast({ title: '尚未获得家庭档案权限', icon: 'none' }); return; }
     uni.navigateTo({ url: '/pages/archive/index' }); return;
+  }
+  if (title === '生活小看板') {
+    if (!canAccess(session.value, 'dashboard')) { uni.showToast({ title: '尚未获得生活看板权限', icon: 'none' }); return; }
+    uni.navigateTo({ url: '/pages/dashboard/index' }); return;
   }
   if (title === '设置') { uni.navigateTo({ url: '/pages/join/index' }); return; }
   uni.showToast({ title: `${title}尚未实现，当前不是可用功能`, icon: 'none' });

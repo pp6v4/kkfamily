@@ -12,6 +12,7 @@
     { "path": "pages/tasks/index", "style": { "navigationBarTitleText": "家庭待办" } }
     ,{ "path": "pages/favorites/index", "style": { "navigationBarTitleText": "收藏与灵感" } }
     ,{ "path": "pages/archive/index", "style": { "navigationBarTitleText": "家庭档案" } }
+    ,{ "path": "pages/dashboard/index", "style": { "navigationBarTitleText": "生活小看板" } }
   ],
   "globalStyle": { "navigationBarTextStyle": "black", "navigationBarBackgroundColor": "#fffdf7", "backgroundColor": "#f7f3e8" },
   "tabBar": {

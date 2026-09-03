@@ -168,3 +168,9 @@ test('Archive client sends separate field and encrypted-value versions without p
   assert.equal(sent[1].path,'/archive/fields/field-a/value');assert.equal(sent[1].method,'PUT');assert.equal(sent[1].data.expectedVersion,7);assert.equal(sent[1].data.value,'虚构联系人 10086');
   assert.equal(sent[2].path,'/archive/fields/field-a/value');assert.ok(!sent.some(item=>item.path.includes('10086')));
 });
+test('Dashboard client URL-encodes both date boundaries',async()=>{
+  const uni=mockUni();let sent;
+  const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent={path,method,data};return{};}}},uni);
+  await api.getDashboardSummary('2026-09-01T00:00:00+08:00','2026-10-01T00:00:00+08:00');
+  assert.match(sent.path,/^\/dashboard\/summary\?from=/);assert.match(sent.path,/%2B08%3A00/);assert.match(sent.path,/&to=/);assert.equal(sent.method,'GET');
+});

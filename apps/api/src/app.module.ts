@@ -18,6 +18,7 @@ import { MediaModule } from './media/media.module';
 import { TasksModule } from './tasks/tasks.module';
 import { FavoritesModule } from './favorites/favorites.module';
 import { ArchiveModule } from './archive/archive.module';
+import { DashboardModule } from './dashboard/dashboard.module';
 
 @Module({
   imports: [
@@ -55,6 +56,7 @@ import { ArchiveModule } from './archive/archive.module';
     TasksModule,
     FavoritesModule,
     ArchiveModule,
+    DashboardModule,
   ],
   controllers: [HealthController],
 })

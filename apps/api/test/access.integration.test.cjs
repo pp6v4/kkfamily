@@ -399,6 +399,23 @@ test('A39/D12: archive field ACL, encryption, versions and audits never expose m
   assert.equal((await call(who,'POST',`/archive/fields/${managerField.id}/archive`,{expectedVersion:managerField.version})).status,201);
   assert.equal((await call(who,'GET',`/archive/fields/${managerField.id}/value`)).status,404);
 });
+test('A40/D12: dashboard hides unauthorized sources, filters trip membership and returns null for an empty task denominator',async()=>{
+  const who=await owner();
+  const viewer=await join(who,['GUEST'],[{module:'dashboard',level:'VIEW',effect:'ALLOW'},{module:'tasks',level:'VIEW',effect:'ALLOW'},{module:'trips',level:'VIEW',effect:'ALLOW'}]);
+  const from='2026-09-01T00:00:00+08:00',to='2026-10-01T00:00:00+08:00',path=`/dashboard/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`;
+  await call(who,'POST','/trips',{title:'不属于查看者的行程',startsAt:'2026-09-12T08:00:00+08:00'});
+  let result=await call(viewer,'GET',path);assert.equal(result.status,200,JSON.stringify(result.body));
+  assert.deepEqual(result.body.data.tasks,{completed:0,total:0,completionRate:null});assert.deepEqual(result.body.data.trips,{visibleTripCount:0,pendingPackingCount:0});
+  assert.equal(result.body.data.recipes,undefined);assert.equal(result.body.data.shopping,undefined);assert.equal(result.body.data.meals,undefined);
+  let done=(await call(who,'POST','/tasks',{type:'TODO',title:'已完成事项',priority:'NORMAL'})).body.data;
+  done=(await call(who,'PATCH',`/tasks/${done.id}/status`,{expectedVersion:done.version,status:'COMPLETED'})).body.data;
+  let cancelled=(await call(who,'POST','/tasks',{type:'TODO',title:'已取消事项',priority:'NORMAL'})).body.data;
+  await call(who,'PATCH',`/tasks/${cancelled.id}/status`,{expectedVersion:cancelled.version,status:'CANCELLED'});
+  result=await call(viewer,'GET',path);assert.deepEqual(result.body.data.tasks,{completed:1,total:1,completionRate:1});
+  assert.equal((await call(viewer,'GET',`/dashboard/summary?from=${encodeURIComponent('2025-01-01T00:00:00Z')}&to=${encodeURIComponent('2026-09-02T00:00:00Z')}`)).status,400);
+  const dashboardOnly=await join(who,['GUEST'],[{module:'dashboard',level:'VIEW',effect:'ALLOW'}]);
+  const hidden=await call(dashboardOnly,'GET',path);assert.deepEqual(Object.keys(hidden.body.data).sort(),['from','to']);
+});
 test('A24/A25/A29: arbitrary template items stay exact, repeat apply skips, assignee remains read-only', async () => {
   const who=await owner(), member=await join(who,['CAMPER']);
   const trip=(await call(who,'POST','/trips',{title:'虚构验证出行',startsAt:'2026-09-01T09:00:00+08:00'})).body.data;

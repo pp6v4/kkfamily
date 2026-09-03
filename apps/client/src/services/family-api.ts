@@ -30,6 +30,7 @@ export interface FavoriteConversion { id:string; targetType:'RECIPE'|'TASK'; tar
 export interface Favorite { id:string; version:number; type:'TEXT'|'IMAGE'|'LINK'; title:string; text:string|null; sourceUrl:string|null; assetIds:string[]; tags:string[]; visibility:'PRIVATE'|'HOUSEHOLD'; createdById:string; createdBy:TaskPerson; conversions:FavoriteConversion[]; createdAt:string; updatedAt:string }
 export interface ArchiveGrant { fieldId?:string; membershipId:string; canRead:boolean; canEdit:boolean }
 export interface ArchiveField { id:string;key:string;label:string;valueType:'TEXT'|'DATE'|'CONTACT'|'ADDRESS';sensitive:boolean;visibility:'MANAGERS'|'MEMBERS'|'SELECTED';version:number;hasValue:boolean;valueVersion:number;updatedAt:string|null;canEdit:boolean;grants?:ArchiveGrant[] }
+export interface DashboardSummary { from:string;to:string;recipes?:{publishedCount:number};meals?:{completedCount:number;frequentRecipes:Array<{recipeId:string;name:string;mealCount:number}>};shopping?:{pendingCount:number;counts:{WISHLIST:number;NEXT_TRIP:number;REPLENISH:number}};trips?:{visibleTripCount:number;pendingPackingCount:number};tasks?:{completed:number;total:number;completionRate:number|null} }
 
 async function request<T>(path: string, method: UniApp.RequestOptions['method'] = 'GET', data?: unknown): Promise<T> {
   const session = await ensureSession();
@@ -124,3 +125,4 @@ export function updateArchiveField(field:ArchiveField,input:{label?:string;value
 export function archiveArchiveField(field:ArchiveField){return request<{id:string;archived:boolean}>(`/archive/fields/${field.id}/archive`,'POST',{expectedVersion:field.version});}
 export function getArchiveValue(fieldId:string){return request<{field:ArchiveField;value:string|null;valueVersion:number;updatedAt:string|null}>(`/archive/fields/${fieldId}/value`);}
 export function setArchiveValue(fieldId:string,value:string,expectedVersion:number){return request<{fieldId:string;valueVersion:number;updatedAt:string}>(`/archive/fields/${fieldId}/value`,'PUT',{value,expectedVersion});}
+export function getDashboardSummary(from:string,to:string){return request<DashboardSummary>(`/dashboard/summary?from=${encodeURIComponent(from)}&to=${encodeURIComponent(to)}`);}
