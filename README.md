@@ -7,7 +7,7 @@
 - Client: uni-app + Vue 3 + TypeScript + Pinia
 - API: NestJS + Fastify + TypeScript
 - Database: PostgreSQL + Prisma（后续启用 PostGIS）
-- Jobs: Redis + BullMQ
+- Jobs: PostgreSQL outbox + 独立通知 worker（Redis保留给后续缓存/队列扩展）
 - Media: Tencent COS（私有桶 + 临时签名 URL）
 - Deployment: Docker Compose + Nginx + Certbot
 
@@ -20,11 +20,13 @@
 
 ## 当前状态
 
-已完成单仓库骨架、API 健康检查、微信登录/JWT 会话、家庭创建及管理员初始授权、菜谱、餐点、库存、购物清单、家庭日历、露营行程基础、自定义行李模板及行程行李协作。客户端已接入对应数据库 API，Docker Compose 中间件和 Nginx `/api/` 反向代理已部署。
+源码已覆盖微信登录/JWT访问会话、共享家庭邀请与角色权限、菜谱、多人点餐与确认快照、手工库存辅助比对、购物清单、权限过滤的家庭日历、露营成员/小组/行李/路线/住宿/照片、家庭待办、收藏与灵感、加密家庭档案、非财务生活看板和站内提醒。客户端均通过REST API读写，不再以页面写死数据充当业务结果。
+
+2026-09-01已确认：一期做饭完成不自动减少库存，购物完成不自动增加库存；库存仅供辅助判断并由家人手工维护。
 
 自定义行李模板没有任何系统内置的“烧烤模块”。“烧烤”只可能是用户自己填写的模板名称；模板物品完全自定义，套用到行程后复制为独立快照，不随模板后续修改。
 
-下一阶段重点是成员邀请与权限管理、露营地图/路线/住宿/交通/照片、按家庭小组分工、家庭待办、收藏、家庭档案、非财务数据看板和订阅消息。代码具备不代表真机业务验收通过。最新设计状态见 [`docs/design-baseline.md`](docs/design-baseline.md)，详细字段、接口和42条待执行用例见 [`docs/design/`](docs/design/README.md)。
+当前不是正式发布版。下一阶段重点是补齐纪念日编辑/删除/按年重复，在隔离PostgreSQL执行13批迁移及44条HTTP集成用例，并完成真实COS、微信双账号、订阅消息、地图供应商、ICP备案/HTTPS和生产部署验收。最新差异见[`docs/implementation-gap-audit.md`](docs/implementation-gap-audit.md)，详细字段、接口和42条验收设计见[`docs/design/`](docs/design/README.md)。
 
 ## 当前 API
 
@@ -40,5 +42,10 @@
 - `/v1/trips/**`：行程基础与成员可见性
 - `/v1/packing-templates/**`：自定义行李模板
 - `/v1/trips/:tripId/packing-items/**`：行程行李快照、负责人和准备状态
+- `/v1/tasks/**`：家庭待办、请求、处理记录和提醒计划
+- `/v1/favorites/**`：收藏、私有图片和草稿转换
+- `/v1/archive/**`：逐字段授权的加密家庭档案
+- `/v1/dashboard/**`：按来源权限聚合的生活看板
+- `/v1/inbox`、`/v1/notification-preferences`：站内提醒与个人设置
 
 除登录和健康检查外，接口均使用 Bearer Token；家庭业务接口另需要 `X-Household-Id`。生产入口为 `https://pp6v4.com/api/v1`，Nginx 将 `/api/` 转发到后端 `/v1`。
