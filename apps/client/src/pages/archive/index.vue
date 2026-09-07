@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
+import { onHide, onShow, onUnload } from '@dcloudio/uni-app';
 import { archiveArchiveField, createArchiveField, getArchiveValue, listArchiveFields, setArchiveValue, updateArchiveField, type ArchiveField, type ArchiveGrant } from '../../services/family-api';
 import { listMembers, type Member } from '../../services/members-api';
 import { canAccess, refreshAccess, type HouseholdContext } from '../../services/session';
@@ -11,6 +11,7 @@ const form=ref({key:'',label:'',typeIndex:0,visibilityIndex:0,sensitive:false,gr
 const types=[{value:'TEXT' as const,label:'文字'},{value:'DATE' as const,label:'日期'},{value:'CONTACT' as const,label:'联系人'},{value:'ADDRESS' as const,label:'地址'}];
 const visibilities=[{value:'MANAGERS' as const,label:'仅管理员'},{value:'MEMBERS' as const,label:'家庭成员'},{value:'SELECTED' as const,label:'指定成员'}];
 const manager=computed(()=>canAccess(session.value,'archive','MANAGE'));
+let viewEpoch=0;
 
 function message(error:unknown){return error instanceof Error?error.message:'操作失败';}
 function typeLabel(field:ArchiveField){return types.find(item=>item.value===field.valueType)?.label||field.valueType;}
@@ -20,17 +21,50 @@ function grantMode(memberId:string){return form.value.grantModes[memberId]||0;}
 function cycleGrant(memberId:string){form.value.grantModes[memberId]=(grantMode(memberId)+1)%3;}
 function grantLabel(memberId:string){return['不授权','可查看','可编辑'][grantMode(memberId)];}
 function grants():ArchiveGrant[]{return Object.entries(form.value.grantModes).filter(([,mode])=>mode>0).map(([membershipId,mode])=>({membershipId,canRead:true,canEdit:mode===2}));}
-async function load(){try{session.value=await refreshAccess();if(!canAccess(session.value,'archive'))return;fields.value=await listArchiveFields();if(manager.value&&canAccess(session.value,'members'))members.value=(await listMembers()).items;if(selected.value){const current=fields.value.find(field=>field.id===selected.value?.id);if(current)selected.value=current;else close();}}catch(error){uni.showToast({title:message(error),icon:'none'});}}
-function open(field:ArchiveField){selected.value=field;showFieldForm.value=false;revealed.value=false;editingValue.value=false;value.value='';valueVersion.value=field.valueVersion;}
-function close(){selected.value=undefined;showFieldForm.value=false;revealed.value=false;editingValue.value=false;}
+async function load(){
+  const previousHousehold=session.value?.householdId,previousField=selected.value?.id;
+  clearPage();const epoch=viewEpoch;busy.value=true;
+  try{
+    const context=await refreshAccess();
+    if(epoch!==viewEpoch||!canAccess(context,'archive'))return false;
+    const [rows,people]=await Promise.all([listArchiveFields(),canAccess(context,'archive','MANAGE')&&canAccess(context,'members')?listMembers().then(result=>result.items):Promise.resolve([])]);
+    if(epoch!==viewEpoch)return false;
+    session.value=context;fields.value=rows;members.value=people;
+    if(context.householdId===previousHousehold){selected.value=rows.find(field=>field.id===previousField);valueVersion.value=selected.value?.valueVersion??0;}
+    return true;
+  }catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});return false;}
+  finally{if(epoch===viewEpoch)busy.value=false;}
+}
+function open(field:ArchiveField){close();selected.value=field;valueVersion.value=field.valueVersion;}
+function close(){viewEpoch++;selected.value=undefined;showFieldForm.value=false;revealed.value=false;editingValue.value=false;value.value='';valueVersion.value=0;busy.value=false;}
+function clearPage(){close();session.value=undefined;fields.value=[];members.value=[];editingField.value=false;form.value={key:'',label:'',typeIndex:0,visibilityIndex:0,sensitive:false,grantModes:{}};}
 function newField(){editingField.value=false;selected.value=undefined;showFieldForm.value=true;form.value={key:'',label:'',typeIndex:0,visibilityIndex:0,sensitive:false,grantModes:{}};}
 function editField(){const field=selected.value;if(!field)return;editingField.value=true;showFieldForm.value=true;const modes:Record<string,number>={};for(const grant of field.grants||[])modes[grant.membershipId]=grant.canEdit?2:grant.canRead?1:0;form.value={key:field.key,label:field.label,typeIndex:Math.max(0,types.findIndex(item=>item.value===field.valueType)),visibilityIndex:Math.max(0,visibilities.findIndex(item=>item.value===field.visibility)),sensitive:field.sensitive,grantModes:modes};}
-async function saveField(){if(!form.value.label.trim()||(!editingField.value&&!form.value.key.trim())){uni.showToast({title:'请填写字段名称和英文标识',icon:'none'});return;}busy.value=true;try{const common={label:form.value.label.trim(),valueType:types[form.value.typeIndex].value,sensitive:form.value.sensitive,visibility:visibilities[form.value.visibilityIndex].value,grants:grants()};const saved=editingField.value&&selected.value?await updateArchiveField(selected.value,common):await createArchiveField({key:form.value.key.trim(),...common});await load();open(saved);uni.showToast({title:'档案字段已保存',icon:'success'});}catch(error){uni.showToast({title:message(error),icon:'none',duration:3000});}finally{busy.value=false;}}
-async function reveal(){const field=selected.value;if(!field)return false;busy.value=true;try{const result=await getArchiveValue(field.id);value.value=result.value||'';valueVersion.value=result.valueVersion;revealed.value=true;return true;}catch(error){uni.showToast({title:message(error),icon:'none'});return false;}finally{busy.value=false;}}
-async function beginEdit(){if(!revealed.value&&!await reveal())return;editingValue.value=true;}
-async function saveValue(){const field=selected.value;if(!field)return;busy.value=true;try{const result=await setArchiveValue(field.id,value.value,valueVersion.value);valueVersion.value=result.valueVersion;revealed.value=true;editingValue.value=false;await load();uni.showToast({title:'档案内容已加密保存',icon:'success'});}catch(error){uni.showToast({title:message(error),icon:'none',duration:3000});}finally{busy.value=false;}}
-function askArchive(){const field=selected.value;if(!field)return;uni.showModal({title:'归档字段？',content:'字段和值会从家庭档案中隐藏，不进行物理删除。',success:async result=>{if(!result.confirm)return;try{await archiveArchiveField(field);close();await load();uni.showToast({title:'已归档',icon:'success'});}catch(error){uni.showToast({title:message(error),icon:'none'});}}});}
+async function saveField(){
+  if(busy.value||!manager.value)return;
+  if(!form.value.label.trim()||(!editingField.value&&!form.value.key.trim())){uni.showToast({title:'请填写字段名称和英文标识',icon:'none'});return;}
+  const epoch=viewEpoch;busy.value=true;
+  try{
+    const common={label:form.value.label.trim(),valueType:types[form.value.typeIndex].value,sensitive:form.value.sensitive,visibility:visibilities[form.value.visibilityIndex].value,grants:grants()};
+    const saved=editingField.value&&selected.value?await updateArchiveField(selected.value,common):await createArchiveField({key:form.value.key.trim(),...common});
+    if(epoch!==viewEpoch||!await load())return;
+    const current=fields.value.find(field=>field.id===saved.id);if(current)open(current);
+    uni.showToast({title:'档案字段已保存',icon:'success'});
+  }catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none',duration:3000});}
+  finally{if(epoch===viewEpoch)busy.value=false;}
+}
+async function reveal(){const field=selected.value;if(!field||busy.value)return false;const epoch=viewEpoch;busy.value=true;try{const result=await getArchiveValue(field.id);if(epoch!==viewEpoch||selected.value?.id!==field.id)return false;value.value=result.value||'';valueVersion.value=result.valueVersion;revealed.value=true;return true;}catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});return false;}finally{if(epoch===viewEpoch)busy.value=false;}}
+async function beginEdit(){if(busy.value||!selected.value?.canEdit)return;if(!revealed.value&&!await reveal())return;editingValue.value=true;}
+async function saveValue(){
+  const field=selected.value;if(!field?.canEdit||busy.value)return;const epoch=viewEpoch;busy.value=true;
+  try{await setArchiveValue(field.id,value.value,valueVersion.value);if(epoch!==viewEpoch||!await load())return;uni.showToast({title:'档案内容已加密保存',icon:'success'});}
+  catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none',duration:3000});}
+  finally{if(epoch===viewEpoch)busy.value=false;}
+}
+function askArchive(){const field=selected.value;if(!field||busy.value||!manager.value)return;const epoch=viewEpoch;uni.showModal({title:'归档字段？',content:'字段和值会从家庭档案中隐藏，不进行物理删除。',success:async result=>{if(!result.confirm||epoch!==viewEpoch)return;busy.value=true;try{await archiveArchiveField(field);if(epoch!==viewEpoch||!await load())return;uni.showToast({title:'已归档',icon:'success'});}catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});}finally{if(epoch===viewEpoch)busy.value=false;}}});}
 onShow(load);
+onHide(clearPage);
+onUnload(clearPage);
 </script>
 
 <template>

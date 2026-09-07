@@ -294,6 +294,52 @@ test('Archive client sends separate field and encrypted-value versions without p
   assert.equal(sent[1].path,'/archive/fields/field-a/value');assert.equal(sent[1].method,'PUT');assert.equal(sent[1].data.expectedVersion,7);assert.equal(sent[1].data.value,'虚构联系人 10086');
   assert.equal(sent[2].path,'/archive/fields/field-a/value');assert.ok(!sent.some(item=>item.path.includes('10086')));
 });
+function archivePage(api={},access=async()=>({...family,effectivePermissions:{archive:'VIEW'}})){
+  const lifecycle={},uni=mockUni();
+  const page=loadPage('src/pages/archive/index.vue',{
+    '@dcloudio/uni-app':{onShow:fn=>lifecycle.show=fn,onHide:fn=>lifecycle.hide=fn,onUnload:fn=>lifecycle.unload=fn},
+    '../../services/session':{canAccess:allowed,refreshAccess:access},
+    '../../services/members-api':{},'../../services/family-api':api,
+  },uni);
+  return{page,lifecycle};
+}
+const archiveField={id:'field-a',valueVersion:7,canEdit:true,label:'家庭联系人'};
+test('Archive permission refresh clears revealed data immediately and stays empty after revocation',async()=>{
+  let resolveAccess,listCalls=0;
+  const {page}=archivePage({listArchiveFields:async()=>{listCalls++;return[archiveField];}},()=>new Promise(resolve=>resolveAccess=resolve));
+  page.session.value=family;page.fields.value=[archiveField];page.open(archiveField);page.value.value='虚构敏感内容';page.revealed.value=true;
+  const pending=page.load();assert.equal(page.value.value,'');assert.equal(page.revealed.value,false);assert.equal(page.selected.value,undefined);assert.equal(page.fields.value.length,0);
+  resolveAccess({...family,effectivePermissions:{}});await pending;
+  assert.equal(listCalls,0);assert.equal(page.fields.value.length,0);assert.equal(page.manager.value,false);assert.equal(page.busy.value,false);
+});
+test('Archive discards a late plaintext response after hiding or choosing another field',async()=>{
+  let resolveValue;const {page,lifecycle}=archivePage({getArchiveValue:()=>new Promise(resolve=>resolveValue=resolve)});
+  page.open(archiveField);const pending=page.reveal();lifecycle.hide();resolveValue({value:'过期明文',valueVersion:8});assert.equal(await pending,false);
+  assert.equal(page.value.value,'');assert.equal(page.selected.value,undefined);assert.equal(page.revealed.value,false);
+  page.open(archiveField);const other=page.reveal();page.open({...archiveField,id:'field-b'});resolveValue({value:'另一个字段明文',valueVersion:9});assert.equal(await other,false);
+  assert.equal(page.selected.value.id,'field-b');assert.equal(page.value.value,'');assert.equal(page.revealed.value,false);
+});
+test('Archive does not restore old household details or a list response arriving after unload',async()=>{
+  let resolveList;const {page,lifecycle}=archivePage({listArchiveFields:()=>new Promise(resolve=>resolveList=resolve)},async()=>({...family,householdId:'house-b',effectivePermissions:{archive:'VIEW'}}));
+  page.session.value=family;page.open(archiveField);
+  const switched=page.load();await new Promise(setImmediate);resolveList([{...archiveField,id:'field-b'}]);await switched;
+  assert.equal(page.session.value.householdId,'house-b');assert.equal(page.selected.value,undefined);assert.equal(page.fields.value[0].id,'field-b');
+  const hidden=page.load();await new Promise(setImmediate);lifecycle.unload();resolveList([archiveField]);await hidden;
+  assert.equal(page.fields.value.length,0);assert.equal(page.session.value,undefined);assert.equal(page.value.value,'');
+});
+test('Archive save refreshes field versions and returns the content to a masked state',async()=>{
+  let current={...archiveField},saved;
+  const {page}=archivePage({listArchiveFields:async()=>[current],getArchiveValue:async()=>({value:'旧内容',valueVersion:7}),setArchiveValue:async(id,value,version)=>{saved={id,value,version};current={...current,valueVersion:8};return{valueVersion:8};}});
+  await page.load();page.open(page.fields.value[0]);await page.beginEdit();assert.equal(page.editingValue.value,true);
+  page.value.value='新内容';await page.saveValue();
+  assert.deepEqual(saved,{id:'field-a',value:'新内容',version:7});assert.equal(page.selected.value.id,'field-a');assert.equal(page.valueVersion.value,8);assert.equal(page.value.value,'');assert.equal(page.revealed.value,false);assert.equal(page.busy.value,false);
+});
+test('Archive ignores a save response after the page is hidden',async()=>{
+  let resolveSave,lists=0;
+  const {page,lifecycle}=archivePage({setArchiveValue:()=>new Promise(resolve=>resolveSave=resolve),listArchiveFields:async()=>{lists++;return[archiveField];}});
+  page.open(archiveField);page.value.value='正在保存的虚构内容';const pending=page.saveValue();lifecycle.hide();resolveSave({valueVersion:8});await pending;
+  assert.equal(lists,0);assert.equal(page.selected.value,undefined);assert.equal(page.value.value,'');assert.equal(page.revealed.value,false);
+});
 test('Dashboard client URL-encodes both date boundaries',async()=>{
   const uni=mockUni();let sent;
   const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent={path,method,data};return{};}}},uni);
