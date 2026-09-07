@@ -353,29 +353,106 @@ function privatePage(name,api,access){
     '../../services/session':{canAccess:allowed,refreshAccess:access},'../../services/family-api':api,
   },uni);return{page,lifecycle,uni};
 }
-for(const name of ['dashboard','notifications','tasks']){
+for(const name of ['dashboard','notifications','tasks','favorites']){
   test(`${name} clears cached household data before permission refresh and rejects late data after hide`,async()=>{
     let denied=true,resolveAccess,resolveData,calls=0;
     const context={...family,effectivePermissions:{[name]:'VIEW'}};
     const fetch=()=>{calls++;return new Promise(resolve=>resolveData=resolve);};
-    const api={getDashboardSummary:fetch,listInbox:fetch,listNotificationPreferences:async()=>[],getPublicNotificationSettings:async()=>({}),listTasks:fetch};
+    const api={getDashboardSummary:fetch,listInbox:fetch,listNotificationPreferences:async()=>[],getPublicNotificationSettings:async()=>({}),listTasks:fetch,listFavorites:fetch};
     const {page,lifecycle}=privatePage(name,api,()=>denied?new Promise(resolve=>resolveAccess=resolve):Promise.resolve(context));
     page.session.value=context;
     if(name==='dashboard')page.summary.value={recipes:{publishedCount:8}};
     if(name==='notifications'){page.inbox.value=[{id:'old-message'}];page.preference.value={enabled:true};page.settings.value={taskReminderTemplateId:'old-template'};}
     if(name==='tasks'){page.tasks.value=[{id:'old-task'}];page.selected.value={id:'old-task'};page.form.value.title='旧家庭内容';}
+    if(name==='favorites'){page.favorites.value=[{id:'old-favorite'}];page.selected.value={id:'old-favorite'};page.previews.value=['old-url'];page.form.value.text='旧家庭内容';}
     const pending=page.load();assert.equal(page.session.value,undefined);
     if(name==='dashboard')assert.equal(page.summary.value,undefined);
     if(name==='notifications'){assert.equal(page.inbox.value.length,0);assert.equal(page.preference.value,undefined);assert.equal(page.settings.value,undefined);}
     if(name==='tasks'){assert.equal(page.tasks.value.length,0);assert.equal(page.selected.value,undefined);assert.equal(page.form.value.title,'');}
+    if(name==='favorites'){assert.equal(page.favorites.value.length,0);assert.equal(page.selected.value,undefined);assert.equal(page.previews.value.length,0);assert.equal(page.form.value.text,'');}
     resolveAccess({...family,effectivePermissions:{}});await pending;assert.equal(calls,0);
     denied=false;const loading=page.load();await new Promise(setImmediate);assert.equal(calls,1);lifecycle.hide();resolveData(name==='dashboard'?{recipes:{publishedCount:9}}:[{id:'late'}]);await loading;
     assert.equal(page.session.value,undefined);
     if(name==='dashboard')assert.equal(page.summary.value,undefined);
     if(name==='notifications')assert.equal(page.inbox.value.length,0);
     if(name==='tasks')assert.equal(page.tasks.value.length,0);
+    if(name==='favorites')assert.equal(page.favorites.value.length,0);
   });
 }
+const favoriteSession={...family,effectivePermissions:{favorites:'EDIT',recipes:'EDIT'}};
+function favoriteRecord(overrides={}){return{id:'favorite-a',version:3,type:'TEXT',title:'早餐灵感',text:'自己记的想法',sourceUrl:null,assetIds:[],tags:[],visibility:'PRIVATE',createdById:'member-a',createdBy:{id:'member-a',user:{nickname:'小扣'}},conversions:[],...overrides};}
+test('Favorite detail requests respect navigation order and lose edit controls after downgrade',async()=>{
+  const responses=[];const {page}=privatePage('favorites',{getFavorite:()=>new Promise(resolve=>responses.push(resolve))},async()=>favoriteSession);
+  page.session.value=favoriteSession;const first=page.openFavorite({id:'a'}),last=page.openFavorite({id:'b'});
+  responses[1](favoriteRecord({id:'b'}));await last;responses[0](favoriteRecord({id:'a'}));await first;assert.equal(page.selected.value.id,'b');assert.equal(page.editable.value,true);
+  page.session.value={...favoriteSession,effectivePermissions:{favorites:'VIEW'}};assert.equal(page.editable.value,false);page.editFavorite();assert.equal(page.showForm.value,false);
+});
+test('Favorite save reloads authorized details and ignores a response after leaving',async()=>{
+  let saved,resolveUpdate;const item=favoriteRecord();
+  const {page,lifecycle}=privatePage('favorites',{createFavorite:async input=>{saved=input;return item;},listFavorites:async()=>[item],getFavorite:async()=>item,updateFavorite:()=>new Promise(resolve=>resolveUpdate=resolve)},async()=>favoriteSession);
+  page.session.value=favoriteSession;page.newFavorite();page.form.value.title=' 早餐 ';page.form.value.text=' 做点什么 ';await page.save();
+  assert.equal(saved.title,'早餐');assert.equal(saved.text,'做点什么');assert.equal(page.selected.value.id,item.id);assert.equal(page.showForm.value,false);
+  page.editFavorite();page.form.value.text='修改中';const pending=page.save();lifecycle.hide();resolveUpdate({...item,version:4});await pending;
+  assert.equal(page.selected.value,undefined);assert.equal(page.form.value.text,'');
+});
+test('Favorite media chooser can hide and restore the page, then upload with the current owner version',async()=>{
+  const calls=[];let choose,current=favoriteRecord();
+  const {page,lifecycle,uni}=privatePage('favorites',{
+    getFavorite:async()=>current,listFavorites:async()=>[current],
+    createMediaUploadIntent:async input=>{calls.push(['intent',input]);return{id:'intent-a',uploadPath:'/upload'};},
+    uploadMediaContent:async(path,bytes,mime)=>{calls.push(['bytes',path,bytes.byteLength,mime]);return{checksumSha256:'checksum'};},
+    confirmMediaAsset:async(id,checksum)=>{calls.push(['confirm',id,checksum]);current={...current,version:5,assetIds:['asset-a']};},
+    getMediaReadUrl:async()=>({path:'/fresh-image'}),publicMediaUrl:path=>path,
+  },async()=>favoriteSession);
+  uni.chooseMedia=input=>choose=input;uni.getFileSystemManager=()=>({readFile:input=>input.success({data:new ArrayBuffer(4)})});
+  page.session.value=favoriteSession;page.selected.value=current;const uploading=page.addImage();assert.equal(page.uploading.value,true);
+  lifecycle.hide();assert.equal(page.selected.value,undefined);assert.equal(page.favorites.value.length,0);
+  await lifecycle.show();current={...current,version:4};choose.success({tempFiles:[{tempFilePath:'chosen.png',size:4}]});await uploading;
+  assert.equal(calls[0][1].ownerId,'favorite-a');assert.equal(calls[0][1].expectedOwnerVersion,4);
+  assert.deepEqual(calls[1],['bytes','/upload',4,'image/png']);assert.deepEqual(calls[2],['confirm','intent-a','checksum']);
+  assert.equal(page.selected.value.version,5);assert.equal(page.previews.value[0],'/fresh-image');assert.equal(page.uploading.value,false);
+});
+for(const mode of ['switched-household','revoked-permission','unloaded']){
+  test(`Favorite upload stops after chooser when ${mode}`,async()=>{
+    let choose,intents=0,context=favoriteSession;const item=favoriteRecord();
+    const {page,lifecycle,uni}=privatePage('favorites',{listFavorites:async()=>[],getFavorite:async()=>item,createMediaUploadIntent:async()=>{intents++;throw Error('must not upload');}},async()=>context);
+    uni.chooseMedia=input=>choose=input;page.session.value=context;page.selected.value=item;const pending=page.addImage();lifecycle.hide();
+    if(mode==='switched-household')context={...favoriteSession,householdId:'house-b',membershipId:'member-b'};
+    if(mode==='revoked-permission')context={...favoriteSession,effectivePermissions:{favorites:'VIEW'}};
+    if(mode==='unloaded')lifecycle.unload();else await lifecycle.show();
+    choose.success({tempFiles:[{tempFilePath:'chosen.png',size:4}]});await pending;
+    assert.equal(intents,0);assert.equal(page.selected.value,undefined);assert.equal(page.previews.value.length,0);assert.equal(page.uploading.value,false);
+  });
+}
+test('Favorite preview renews signed URLs and returns through a fresh authorized load',async()=>{
+  let reads=0,previewed;const item=favoriteRecord({assetIds:['asset-a']});
+  const {page,lifecycle,uni}=privatePage('favorites',{getMediaReadUrl:async()=>({path:`/signed-${++reads}`}),publicMediaUrl:path=>path,listFavorites:async()=>[item],getFavorite:async()=>item},async()=>favoriteSession);
+  page.session.value=favoriteSession;page.selected.value=item;page.previews.value=['expired'];uni.previewImage=input=>{previewed=input;lifecycle.hide();};
+  await page.preview(0);assert.equal(previewed.current,'/signed-1');assert.equal(page.previews.value.length,0);assert.equal(page.selected.value,undefined);
+  await lifecycle.show();assert.equal(page.selected.value.id,item.id);assert.equal(page.previews.value[0],'/signed-2');
+});
+test('Cancelling favorite image selection restores the authorized favorite without uploading',async()=>{
+  let choose,intents=0;const item=favoriteRecord();
+  const {page,lifecycle,uni}=privatePage('favorites',{listFavorites:async()=>[item],getFavorite:async()=>item,createMediaUploadIntent:async()=>intents++},async()=>favoriteSession);
+  uni.chooseMedia=input=>choose=input;page.session.value=favoriteSession;page.selected.value=item;const pending=page.addImage();lifecycle.hide();choose.fail({errMsg:'chooseMedia:fail cancel'});await pending;
+  assert.equal(page.selected.value,undefined);assert.equal(page.uploading.value,false);assert.equal(intents,0);
+  await lifecycle.show();assert.equal(page.selected.value.id,item.id);assert.equal(page.editable.value,true);
+});
+test('Favorite upload completion while hidden stays blank until the next authorized show',async()=>{
+  let choose,lists=0,confirmed=0;const item=favoriteRecord();
+  const {page,lifecycle,uni}=privatePage('favorites',{listFavorites:async()=>{lists++;return[item];},getFavorite:async()=>item,createMediaUploadIntent:async()=>({id:'intent-a',uploadPath:'/upload'}),uploadMediaContent:async()=>({checksumSha256:'checksum'}),confirmMediaAsset:async()=>confirmed++},async()=>favoriteSession);
+  uni.chooseMedia=input=>choose=input;uni.getFileSystemManager=()=>({readFile:input=>input.success({data:new ArrayBuffer(4)})});
+  page.session.value=favoriteSession;page.selected.value=item;const pending=page.addImage();lifecycle.hide();choose.success({tempFiles:[{tempFilePath:'chosen.png',size:4}]});await pending;
+  assert.equal(confirmed,1);assert.equal(lists,0);assert.equal(page.selected.value,undefined);assert.equal(page.session.value,undefined);
+  await lifecycle.show();assert.equal(lists,1);assert.equal(page.selected.value.id,item.id);
+});
+test('Favorite conversion preserves retry identity and never navigates after hiding',async()=>{
+  const keys=[];let fail=true,resolveConversion;const item=favoriteRecord();
+  const {page,lifecycle,uni}=privatePage('favorites',{convertFavorite:async(item,input)=>{keys.push(input.idempotencyKey);if(fail)throw Error('网络中断');return new Promise(resolve=>resolveConversion=resolve);}},async()=>favoriteSession);
+  page.session.value=favoriteSession;page.selected.value=item;page.startConvert();await page.runConvert();assert.notEqual(page.convertKey.value,'');
+  fail=false;const pending=page.runConvert();lifecycle.hide();resolveConversion({targetType:'RECIPE',targetId:'recipe-a'});await pending;
+  assert.equal(keys.length,2);assert.equal(keys[0],keys[1]);assert.equal(uni.routes.length,0);assert.equal(page.convertOpen.value,false);
+});
 test('Dashboard uses the newest range result and allows recipe-only navigation',async()=>{
   const results=[];const {page,uni}=privatePage('dashboard',{getDashboardSummary:()=>new Promise(resolve=>results.push(resolve))},async()=>({...family,effectivePermissions:{dashboard:'VIEW',recipes:'VIEW'}}));
   const first=page.load();await new Promise(setImmediate);page.rangeIndex.value=1;const second=page.load();await new Promise(setImmediate);
