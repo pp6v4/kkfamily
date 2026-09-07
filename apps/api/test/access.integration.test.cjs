@@ -1,6 +1,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID, createHash } = require('node:crypto');
+const { assertIsolatedDatabase } = require('./run-isolated.cjs');
 require('reflect-metadata');
 const { NestFactory } = require('@nestjs/core');
 const { ValidationPipe } = require('@nestjs/common');
@@ -19,7 +20,7 @@ let app, db, jwt;
 const TEST_PNG = Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0x00,0x00,0x00,0x0d,0x49,0x48,0x44,0x52]);
 
 before(async () => {
-  assert.match(process.env.DATABASE_URL || '', /kk-verify-db-[a-f0-9]+:5432\/verify(?:\?|$)/, 'Run only against an isolated verification database');
+  assertIsolatedDatabase(process.env.DATABASE_URL);
   process.env.JWT_ACCESS_SECRET = 'isolated-verification-signing-key-not-for-production';
   app = await NestFactory.create(AppModule, new FastifyAdapter(), { logger: ['error'], abortOnError: false });
   configureImageBodyParser(app);

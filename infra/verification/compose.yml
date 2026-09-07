@@ -1,0 +1,43 @@
+name: kk-verify-${VERIFY_RUN_ID:?verification runner required}
+
+services:
+  database:
+    image: postgres:17-alpine
+    environment:
+      POSTGRES_USER: verify
+      POSTGRES_PASSWORD: ${VERIFY_DB_PASSWORD:?verification runner required}
+      POSTGRES_DB: verify
+    tmpfs:
+      - /var/lib/postgresql/data
+    healthcheck:
+      test: [CMD-SHELL, "pg_isready -U verify -d verify"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+    networks:
+      verification:
+        aliases:
+          - kk-verify-db-${VERIFY_RUN_ID:?verification runner required}
+
+  verify:
+    build:
+      context: ../..
+      dockerfile: apps/api/Dockerfile
+      target: build
+    working_dir: /workspace/apps/api
+    environment:
+      DATABASE_URL: postgresql://verify:${VERIFY_DB_PASSWORD:?verification runner required}@kk-verify-db-${VERIFY_RUN_ID:?verification runner required}:5432/verify?schema=public
+      NODE_ENV: test
+      MEDIA_DRIVER: memory
+      JWT_ACCESS_SECRET: isolated-verification-signing-key-not-for-production
+      WECHAT_APP_ID: ""
+      WECHAT_APP_SECRET: ""
+    command: [node, test/run-isolated.cjs]
+    depends_on:
+      database:
+        condition: service_healthy
+    networks: [verification]
+
+networks:
+  verification:
+    internal: true

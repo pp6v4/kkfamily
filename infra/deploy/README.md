@@ -11,6 +11,8 @@
 
 ## 首次运行
 
+部署前先在Docker主机的仓库根目录执行 `node scripts/verify-database.cjs`。此命令使用独立测试网络和临时PostgreSQL，不读取生产配置；只有迁移及HTTP集成结果通过后才继续。具体证据位置和失败处理见[隔离数据库验收](../verification/README.md)。
+
 ```bash
 cd /opt/family-life
 docker compose -f infra/docker-compose.yml build --no-cache
