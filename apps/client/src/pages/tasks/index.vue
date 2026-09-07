@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { onLoad, onShow } from '@dcloudio/uni-app';
+import { onHide, onLoad, onShow, onUnload } from '@dcloudio/uni-app';
 import { addTaskComment, createTask, getTask, listTaskAssignees, listTasks, updateTask, updateTaskStatus, type Task, type TaskPerson } from '../../services/family-api';
 import { canAccess, refreshAccess, type HouseholdContext } from '../../services/session';
 
@@ -8,13 +8,14 @@ const session=ref<HouseholdContext>(),tasks=ref<Task[]>([]),assignees=ref<TaskPe
 const filter=ref<'OPEN'|'DONE'>('OPEN'),showingForm=ref(false),editing=ref(false),busy=ref(false),initialTaskId=ref(''),initialDate=ref('');
 const form=ref({typeIndex:0,title:'',description:'',assigneeIndex:0,dueDate:'',reminderDate:'',priorityIndex:1});
 const comment=ref(''),reopenReason=ref('');
+let viewEpoch=0;
 const types=[{value:'TODO' as const,label:'家庭待办'},{value:'REQUEST' as const,label:'家庭请求'}];
 const priorities=[{value:'LOW' as const,label:'不着急'},{value:'NORMAL' as const,label:'普通'},{value:'HIGH' as const,label:'重要'}];
 const statusLabels:Record<Task['status'],string>={PENDING:'待开始',IN_PROGRESS:'处理中',COMPLETED:'已完成',CANCELLED:'已取消'};
 const shownTasks=computed(()=>tasks.value.filter(task=>filter.value==='OPEN'?['PENDING','IN_PROGRESS'].includes(task.status):['COMPLETED','CANCELLED'].includes(task.status)));
 const manager=computed(()=>canAccess(session.value,'tasks','MANAGE'));
-const editable=computed(()=>{const task=selected.value;if(!task||!session.value)return false;return manager.value||task.assigneeMembershipId===session.value.membershipId||(task.createdBy.id===session.value.membershipId&&task.status==='PENDING');});
-const statusEditable=computed(()=>Boolean(selected.value&&session.value&&(manager.value||selected.value.assigneeMembershipId===session.value.membershipId)));
+const editable=computed(()=>{const task=selected.value;if(!task||!canAccess(session.value,'tasks','EDIT')||!session.value)return false;return manager.value||task.assigneeMembershipId===session.value.membershipId||(task.createdBy.id===session.value.membershipId&&task.status==='PENDING');});
+const statusEditable=computed(()=>Boolean(selected.value&&session.value&&canAccess(session.value,'tasks','EDIT')&&(manager.value||selected.value.assigneeMembershipId===session.value.membershipId)));
 const reopenReady=computed(()=>Boolean(reopenReason.value.trim())&&!busy.value);
 const selectableAssignees=computed(()=>manager.value?assignees.value:assignees.value.filter(item=>item.id===session.value?.membershipId));
 
@@ -23,17 +24,32 @@ function dateOnly(value:string|null){return value?value.slice(0,10):'';}
 function personName(person:TaskPerson|null){return person?.user.nickname||'未分配';}
 function statusTime(value:string){const date=new Date(value);return `${date.getMonth()+1}月${date.getDate()}日 ${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;}
 function replaceTask(task:Task){const index=tasks.value.findIndex(row=>row.id===task.id);if(index>=0)tasks.value[index]=task;else tasks.value.unshift(task);selected.value=task;}
-async function load(){try{session.value=await refreshAccess();if(!canAccess(session.value,'tasks'))return;const [rows,people]=await Promise.all([listTasks(),canAccess(session.value,'tasks','EDIT')?listTaskAssignees():Promise.resolve([])]);tasks.value=rows;assignees.value=people;if(initialTaskId.value){selected.value=await getTask(initialTaskId.value);initialTaskId.value='';}else if(selected.value)selected.value=await getTask(selected.value.id);else if(initialDate.value&&canAccess(session.value,'tasks','EDIT')){newTask();initialDate.value='';}}catch(error){uni.showToast({title:message(error),icon:'none'});}}
-async function openTask(task:Task){try{selected.value=await getTask(task.id);}catch(error){uni.showToast({title:message(error),icon:'none'});}}
-function closeTask(){selected.value=undefined;showingForm.value=false;editing.value=false;}
-function newTask(){editing.value=false;const own=Math.max(0,selectableAssignees.value.findIndex(person=>person.id===session.value?.membershipId));form.value={typeIndex:0,title:'',description:'',assigneeIndex:own,dueDate:initialDate.value,reminderDate:'',priorityIndex:1};showingForm.value=true;}
+async function load(){
+  const oldHousehold=session.value?.householdId,oldId=selected.value?.id;
+  clearPage();const epoch=viewEpoch;busy.value=true;
+  try{
+    const context=await refreshAccess();if(epoch!==viewEpoch||!canAccess(context,'tasks'))return;
+    const [rows,people]=await Promise.all([listTasks(),canAccess(context,'tasks','EDIT')?listTaskAssignees():Promise.resolve([])]);
+    if(epoch!==viewEpoch)return;
+    const id=initialTaskId.value||(oldHousehold===context.householdId?oldId:undefined);
+    const detail=id?await getTask(id):undefined;if(epoch!==viewEpoch)return;
+    session.value=context;tasks.value=rows;assignees.value=people;selected.value=detail;initialTaskId.value='';
+    if(!detail&&initialDate.value&&canAccess(context,'tasks','EDIT')){busy.value=false;newTask();initialDate.value='';}
+  }catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});}finally{if(epoch===viewEpoch)busy.value=false;}
+}
+async function openTask(task:Task){if(!canAccess(session.value,'tasks'))return;closeTask();const epoch=viewEpoch;busy.value=true;try{const detail=await getTask(task.id);if(epoch===viewEpoch)selected.value=detail;}catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});}finally{if(epoch===viewEpoch)busy.value=false;}}
+function closeTask(){viewEpoch++;selected.value=undefined;showingForm.value=false;editing.value=false;busy.value=false;comment.value='';reopenReason.value='';form.value={typeIndex:0,title:'',description:'',assigneeIndex:0,dueDate:'',reminderDate:'',priorityIndex:1};}
+function clearPage(){closeTask();session.value=undefined;tasks.value=[];assignees.value=[];}
+function newTask(){if(busy.value||!canAccess(session.value,'tasks','EDIT'))return;closeTask();const own=Math.max(0,selectableAssignees.value.findIndex(person=>person.id===session.value?.membershipId));form.value={typeIndex:0,title:'',description:'',assigneeIndex:own,dueDate:initialDate.value,reminderDate:'',priorityIndex:1};showingForm.value=true;}
 function editTask(){const task=selected.value;if(!task)return;editing.value=true;const people=selectableAssignees.value;form.value={typeIndex:Math.max(0,types.findIndex(item=>item.value===task.type)),title:task.title,description:task.description||'',assigneeIndex:Math.max(0,people.findIndex(person=>person.id===task.assigneeMembershipId)),dueDate:dateOnly(task.dueAt),reminderDate:dateOnly(task.reminderAt),priorityIndex:Math.max(0,priorities.findIndex(item=>item.value===task.priority))};showingForm.value=true;}
-async function save(){if(!form.value.title.trim()){uni.showToast({title:'请填写待办标题',icon:'none'});return;}const person=selectableAssignees.value[form.value.assigneeIndex];const input={type:types[form.value.typeIndex].value,title:form.value.title.trim(),description:form.value.description.trim()||undefined,dueAt:form.value.dueDate?`${form.value.dueDate}T18:00:00+08:00`:undefined,priority:priorities[form.value.priorityIndex].value,reminderAt:form.value.reminderDate?`${form.value.reminderDate}T09:00:00+08:00`:undefined};busy.value=true;try{const saved=editing.value&&selected.value?await updateTask(selected.value,{...input,dueAt:input.dueAt??null,reminderAt:input.reminderAt??null,...(manager.value?{assigneeMembershipId:person?.id??null}:{})}):await createTask({...input,...(person?{assigneeMembershipId:person.id}:{})});replaceTask(saved);showingForm.value=false;uni.showToast({title:editing.value?'待办已更新':'待办已创建',icon:'success'});}catch(error){uni.showToast({title:message(error),icon:'none'});}finally{busy.value=false;}}
-async function changeStatus(status:Task['status'],reason?:string){const task=selected.value;if(!task||busy.value)return;const normalizedReason=reason?.trim();if(status==='PENDING'&&['COMPLETED','CANCELLED'].includes(task.status)&&!normalizedReason){uni.showToast({title:'请填写重新打开原因',icon:'none'});return;}busy.value=true;try{replaceTask(await updateTaskStatus(task,status,normalizedReason));reopenReason.value='';}catch(error){uni.showToast({title:message(error),icon:'none'});}finally{busy.value=false;}}
-function cancelTask(){uni.showModal({title:'取消待办',content:'取消后不会再出现在日历中，处理记录仍保留。',success:result=>{if(result.confirm)changeStatus('CANCELLED');}});}
-async function saveComment(){if(!selected.value||!comment.value.trim())return;busy.value=true;try{replaceTask(await addTaskComment(selected.value.id,comment.value.trim()));comment.value='';}catch(error){uni.showToast({title:message(error),icon:'none'});}finally{busy.value=false;}}
+async function save(){if(busy.value||!canAccess(session.value,'tasks','EDIT')||(editing.value&&!editable.value))return;if(!form.value.title.trim()){uni.showToast({title:'请填写待办标题',icon:'none'});return;}const epoch=viewEpoch,person=selectableAssignees.value[form.value.assigneeIndex];const input={type:types[form.value.typeIndex].value,title:form.value.title.trim(),description:form.value.description.trim()||undefined,dueAt:form.value.dueDate?`${form.value.dueDate}T18:00:00+08:00`:undefined,priority:priorities[form.value.priorityIndex].value,reminderAt:form.value.reminderDate?`${form.value.reminderDate}T09:00:00+08:00`:undefined};busy.value=true;try{const saved=editing.value&&selected.value?await updateTask(selected.value,{...input,dueAt:input.dueAt??null,reminderAt:input.reminderAt??null,...(manager.value?{assigneeMembershipId:person?.id??null}:{})}):await createTask({...input,...(person?{assigneeMembershipId:person.id}:{})});if(epoch!==viewEpoch)return;replaceTask(saved);showingForm.value=false;uni.showToast({title:editing.value?'待办已更新':'待办已创建',icon:'success'});}catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});}finally{if(epoch===viewEpoch)busy.value=false;}}
+async function changeStatus(status:Task['status'],reason?:string){const task=selected.value;if(!task||busy.value||!statusEditable.value)return;const normalizedReason=reason?.trim();if(status==='PENDING'&&['COMPLETED','CANCELLED'].includes(task.status)&&!normalizedReason){uni.showToast({title:'请填写重新打开原因',icon:'none'});return;}const epoch=viewEpoch;busy.value=true;try{const saved=await updateTaskStatus(task,status,normalizedReason);if(epoch!==viewEpoch)return;replaceTask(saved);reopenReason.value='';}catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});}finally{if(epoch===viewEpoch)busy.value=false;}}
+function cancelTask(){if(busy.value||!statusEditable.value)return;const epoch=viewEpoch;uni.showModal({title:'取消待办',content:'取消后不会再出现在日历中，处理记录仍保留。',success:result=>{if(result.confirm&&epoch===viewEpoch)changeStatus('CANCELLED');}});}
+async function saveComment(){if(!selected.value||!comment.value.trim()||busy.value||!canAccess(session.value,'tasks','EDIT'))return;const epoch=viewEpoch;busy.value=true;try{const saved=await addTaskComment(selected.value.id,comment.value.trim());if(epoch!==viewEpoch)return;replaceTask(saved);comment.value='';}catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});}finally{if(epoch===viewEpoch)busy.value=false;}}
 onLoad(query=>{initialTaskId.value=String(query.id||'');initialDate.value=String(query.date||'');});
 onShow(load);
+onHide(clearPage);
+onUnload(clearPage);
 </script>
 
 <template>

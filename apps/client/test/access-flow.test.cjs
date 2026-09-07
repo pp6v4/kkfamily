@@ -21,7 +21,7 @@ function evaluate(source, dependencies, uni) {
 function loadPage(relative, dependencies, uni) {
   const filename=path.join(ROOT,relative), {descriptor}=parse(fs.readFileSync(filename,'utf8'),{filename});
   const script=compileScript(descriptor,{id:'component-test',inlineTemplate:false});
-  const module=evaluate(script.content,{'vue':vue,'@dcloudio/uni-app':{onShow(){},onLoad(){}},...dependencies},uni);
+  const module=evaluate(script.content,{'vue':vue,'@dcloudio/uni-app':{onShow(){},onLoad(){},onHide(){},onUnload(){}},...dependencies},uni);
   return module.default.setup({}, {expose(){}});
 }
 function mockUni() {
@@ -345,6 +345,66 @@ test('Dashboard client URL-encodes both date boundaries',async()=>{
   const api=loadTs('src/services/family-api.ts',{'./session':{ensureSession:async()=>family,clearSession(){}},'./config':{API_BASE_URL:'https://example.test/api/v1'},'./transport':{ApiError,rawBinaryRequest:async()=>({}),rawRequest:async(path,method,data)=>{sent={path,method,data};return{};}}},uni);
   await api.getDashboardSummary('2026-09-01T00:00:00+08:00','2026-10-01T00:00:00+08:00');
   assert.match(sent.path,/^\/dashboard\/summary\?from=/);assert.match(sent.path,/%2B08%3A00/);assert.match(sent.path,/&to=/);assert.equal(sent.method,'GET');
+});
+function privatePage(name,api,access){
+  const lifecycle={},uni=mockUni();
+  const page=loadPage(`src/pages/${name}/index.vue`,{
+    '@dcloudio/uni-app':{onShow:fn=>lifecycle.show=fn,onHide:fn=>lifecycle.hide=fn,onUnload:fn=>lifecycle.unload=fn,onLoad:fn=>lifecycle.load=fn},
+    '../../services/session':{canAccess:allowed,refreshAccess:access},'../../services/family-api':api,
+  },uni);return{page,lifecycle,uni};
+}
+for(const name of ['dashboard','notifications','tasks']){
+  test(`${name} clears cached household data before permission refresh and rejects late data after hide`,async()=>{
+    let denied=true,resolveAccess,resolveData,calls=0;
+    const context={...family,effectivePermissions:{[name]:'VIEW'}};
+    const fetch=()=>{calls++;return new Promise(resolve=>resolveData=resolve);};
+    const api={getDashboardSummary:fetch,listInbox:fetch,listNotificationPreferences:async()=>[],getPublicNotificationSettings:async()=>({}),listTasks:fetch};
+    const {page,lifecycle}=privatePage(name,api,()=>denied?new Promise(resolve=>resolveAccess=resolve):Promise.resolve(context));
+    page.session.value=context;
+    if(name==='dashboard')page.summary.value={recipes:{publishedCount:8}};
+    if(name==='notifications'){page.inbox.value=[{id:'old-message'}];page.preference.value={enabled:true};page.settings.value={taskReminderTemplateId:'old-template'};}
+    if(name==='tasks'){page.tasks.value=[{id:'old-task'}];page.selected.value={id:'old-task'};page.form.value.title='旧家庭内容';}
+    const pending=page.load();assert.equal(page.session.value,undefined);
+    if(name==='dashboard')assert.equal(page.summary.value,undefined);
+    if(name==='notifications'){assert.equal(page.inbox.value.length,0);assert.equal(page.preference.value,undefined);assert.equal(page.settings.value,undefined);}
+    if(name==='tasks'){assert.equal(page.tasks.value.length,0);assert.equal(page.selected.value,undefined);assert.equal(page.form.value.title,'');}
+    resolveAccess({...family,effectivePermissions:{}});await pending;assert.equal(calls,0);
+    denied=false;const loading=page.load();await new Promise(setImmediate);assert.equal(calls,1);lifecycle.hide();resolveData(name==='dashboard'?{recipes:{publishedCount:9}}:[{id:'late'}]);await loading;
+    assert.equal(page.session.value,undefined);
+    if(name==='dashboard')assert.equal(page.summary.value,undefined);
+    if(name==='notifications')assert.equal(page.inbox.value.length,0);
+    if(name==='tasks')assert.equal(page.tasks.value.length,0);
+  });
+}
+test('Dashboard uses the newest range result and allows recipe-only navigation',async()=>{
+  const results=[];const {page,uni}=privatePage('dashboard',{getDashboardSummary:()=>new Promise(resolve=>results.push(resolve))},async()=>({...family,effectivePermissions:{dashboard:'VIEW',recipes:'VIEW'}}));
+  const first=page.load();await new Promise(setImmediate);page.rangeIndex.value=1;const second=page.load();await new Promise(setImmediate);
+  results[1]({recipes:{publishedCount:2}});await second;results[0]({recipes:{publishedCount:1}});await first;
+  assert.equal(page.summary.value.recipes.publishedCount,2);page.open('meals');assert.equal(uni.routes.length,0);page.open('recipes');assert.deepEqual(uni.routes,['/pages/meal/index']);
+});
+test('Task day shortcut survives loading and delayed status updates do not reopen a hidden page',async()=>{
+  let resolveStatus;const context={...family,effectivePermissions:{tasks:'EDIT'}};
+  const {page,lifecycle}=privatePage('tasks',{listTasks:async()=>[],listTaskAssignees:async()=>[{id:'member-a',user:{nickname:'小扣'}}],updateTaskStatus:()=>new Promise(resolve=>resolveStatus=resolve)},async()=>context);
+  lifecycle.load({date:'2026-09-07'});await page.load();assert.equal(page.showingForm.value,true);assert.equal(page.form.value.dueDate,'2026-09-07');assert.equal(page.busy.value,false);
+  const task={id:'task-a',status:'PENDING',assigneeMembershipId:'member-a',createdBy:{id:'member-a'},version:3};page.selected.value=task;
+  const pending=page.changeStatus('COMPLETED');lifecycle.hide();resolveStatus({...task,status:'COMPLETED',version:4});await pending;
+  assert.equal(page.selected.value,undefined);assert.equal(page.tasks.value.length,0);assert.equal(page.showingForm.value,false);
+});
+test('Task detail opened last wins and a cancelled confirmation cannot affect a different task',async()=>{
+  const details=[];let modal,statusCalls=0;
+  const {page,uni}=privatePage('tasks',{getTask:()=>new Promise(resolve=>details.push(resolve)),updateTaskStatus:async()=>{statusCalls++;}},async()=>family);
+  page.session.value={...family,effectivePermissions:{tasks:'MANAGE'}};uni.showModal=input=>modal=input;
+  const first=page.openTask({id:'task-a'}),second=page.openTask({id:'task-b'});
+  details[1]({id:'task-b',status:'PENDING'});await second;details[0]({id:'task-a',status:'PENDING'});await first;assert.equal(page.selected.value.id,'task-b');
+  page.cancelTask();page.closeTask();await modal.success({confirm:true});assert.equal(statusCalls,0);
+});
+test('Notification read and preference responses cannot navigate or refill a hidden page',async()=>{
+  let resolveRead,resolvePreference;
+  const context={...family,effectivePermissions:{notifications:'VIEW',tasks:'VIEW'}};
+  const {page,lifecycle,uni}=privatePage('notifications',{readInboxItem:()=>new Promise(resolve=>resolveRead=resolve),updateNotificationPreference:()=>new Promise(resolve=>resolvePreference=resolve)},async()=>context);
+  const item={id:'message-a',sourceType:'TASK',sourceId:'task-a',version:1,readAt:null};page.session.value=context;page.inbox.value=[item];
+  const reading=page.open(item);lifecycle.hide();resolveRead({version:2,readAt:'2026-09-07'});await reading;assert.equal(uni.routes.length,0);assert.equal(page.inbox.value.length,0);
+  page.session.value=context;page.preference.value={version:1,enabled:true};const saving=page.toggle(false);lifecycle.hide();resolvePreference({version:2,enabled:false});await saving;assert.equal(page.preference.value,undefined);
 });
 test('Notification client uses optimistic versions for preferences and inbox reads',async()=>{
   const uni=mockUni(),sent=[];

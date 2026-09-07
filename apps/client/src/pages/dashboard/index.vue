@@ -1,18 +1,22 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
+import { onHide, onShow, onUnload } from '@dcloudio/uni-app';
 import { getDashboardSummary, type DashboardSummary } from '../../services/family-api';
 import { canAccess, refreshAccess, type HouseholdContext } from '../../services/session';
 
 const session=ref<HouseholdContext>(),summary=ref<DashboardSummary>(),loading=ref(false),rangeIndex=ref(0);
+let viewEpoch=0;
+function clearPage(){viewEpoch++;session.value=undefined;summary.value=undefined;loading.value=false;}
 const ranges=[{label:'近30天',days:30},{label:'近90天',days:90},{label:'近一年',days:365}];
 const taskText=computed(()=>{const tasks=summary.value?.tasks;if(!tasks)return'';return tasks.total?`${tasks.completed} / ${tasks.total} · ${Math.round((tasks.completionRate||0)*100)}%`:'暂无任务';});
 function message(error:unknown){return error instanceof Error?error.message:'读取看板失败';}
 function dateRange(){const to=new Date();to.setHours(0,0,0,0);to.setDate(to.getDate()+1);const from=new Date(to);from.setDate(from.getDate()-ranges[rangeIndex.value].days);return{from:from.toISOString(),to:to.toISOString()};}
-async function load(){loading.value=true;try{session.value=await refreshAccess();if(!canAccess(session.value,'dashboard'))return;const range=dateRange();summary.value=await getDashboardSummary(range.from,range.to);}catch(error){uni.showToast({title:message(error),icon:'none'});}finally{loading.value=false;}}
+async function load(){clearPage();const epoch=viewEpoch,range=dateRange();loading.value=true;try{const context=await refreshAccess();if(epoch!==viewEpoch||!canAccess(context,'dashboard'))return;const result=await getDashboardSummary(range.from,range.to);if(epoch!==viewEpoch)return;session.value=context;summary.value=result;}catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});}finally{if(epoch===viewEpoch)loading.value=false;}}
 function changeRange(event:{detail:{value:string|number}}){rangeIndex.value=Number(event.detail.value);load();}
-function open(source:'meals'|'shopping'|'trips'|'tasks'){if(source==='meals')uni.switchTab({url:'/pages/meal/index'});else if(source==='shopping')uni.switchTab({url:'/pages/shopping/index'});else if(source==='trips')uni.switchTab({url:'/pages/camping/index'});else uni.navigateTo({url:'/pages/tasks/index'});}
+function open(source:'recipes'|'meals'|'shopping'|'trips'|'tasks'){if(!canAccess(session.value,source))return;if(source==='meals'||source==='recipes')uni.switchTab({url:'/pages/meal/index'});else if(source==='shopping')uni.switchTab({url:'/pages/shopping/index'});else if(source==='trips')uni.switchTab({url:'/pages/camping/index'});else uni.navigateTo({url:'/pages/tasks/index'});}
 onShow(load);
+onHide(clearPage);
+onUnload(clearPage);
 </script>
 
 <template>
@@ -21,7 +25,7 @@ onShow(load);
     <text class="subtitle">只展示你有权查看的来源，不统计花费，也不比较谁做得多。</text>
     <text v-if="loading&&!summary" class="loading">正在整理家庭近况…</text>
     <view v-if="summary" class="grid">
-      <view v-if="summary.recipes" class="metric recipe" @tap="open('meals')"><text class="icon">🍲</text><text class="number">{{summary.recipes.publishedCount}}</text><text class="label">已发布菜谱</text><text class="hint">去看看吃什么 ›</text></view>
+      <view v-if="summary.recipes" class="metric recipe" @tap="open('recipes')"><text class="icon">🍲</text><text class="number">{{summary.recipes.publishedCount}}</text><text class="label">已发布菜谱</text><text class="hint">去看看吃什么 ›</text></view>
       <view v-if="summary.meals" class="metric meal" @tap="open('meals')"><text class="icon">🥢</text><text class="number">{{summary.meals.completedCount}}</text><text class="label">完成餐次</text><text class="hint">按一餐计算 ›</text></view>
       <view v-if="summary.shopping" class="metric shop" @tap="open('shopping')"><text class="icon">🛒</text><text class="number">{{summary.shopping.pendingCount}}</text><text class="label">当前待购</text><text class="hint">购物袋与补货 ›</text></view>
       <view v-if="summary.trips" class="metric trip" @tap="open('trips')"><text class="icon">🏕️</text><text class="number">{{summary.trips.visibleTripCount}}</text><text class="label">可见行程</text><text class="hint">{{summary.trips.pendingPackingCount}} 件待准备 ›</text></view>
