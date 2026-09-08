@@ -1,6 +1,9 @@
 **/.env
 **/.env.*
 **/*private*
+# This tracked SQL migration is application source, not private key material.
+!apps/api/prisma/migrations/202609010002_private_media/
+!apps/api/prisma/migrations/202609010002_private_media/migration.sql
 **/*.pem
 **/*.key
 **/id_rsa*

@@ -318,18 +318,21 @@ test('A10: trim precedes validation; empty names and negative recipe quantities 
 
 test('A46: recipe managers can version, reorder and archive categories while recipes keep historical names', async () => {
   const who=await owner();
-  const created=await call(who,'POST','/recipes/categories',{name:'  海鲜  ',sortOrder:3});
-  assert.equal(created.status,201,JSON.stringify(created.body));assert.equal(created.body.data.name,'海鲜');assert.equal(created.body.data.sortOrder,3);assert.equal(created.body.data.version,1);
-  const duplicate=await call(who,'POST','/recipes/categories',{name:'海鲜',sortOrder:4});
-  assert.equal(duplicate.status,409,JSON.stringify(duplicate.body));assert.equal(await db.recipeCategory.count({where:{householdId:who.householdId,name:'海鲜'}}),1);
+  const initial=await call(who,'GET','/recipes/categories');assert.equal(initial.status,200);
+  const initialIds=initial.body.data.map(row=>row.id).sort();assert.equal(initialIds.length,6);
+  assert.equal((await call(who,'POST','/recipes/categories',{name:' 海鲜 ',sortOrder:4})).status,409,'default categories also reserve normalized names');
+  const created=await call(who,'POST','/recipes/categories',{name:'  家庭烧烤  ',sortOrder:3});
+  assert.equal(created.status,201,JSON.stringify(created.body));assert.equal(created.body.data.name,'家庭烧烤');assert.equal(created.body.data.sortOrder,3);assert.equal(created.body.data.version,1);
+  const duplicate=await call(who,'POST','/recipes/categories',{name:'家庭烧烤',sortOrder:4});
+  assert.equal(duplicate.status,409,JSON.stringify(duplicate.body));assert.equal(await db.recipeCategory.count({where:{householdId:who.householdId,name:'家庭烧烤'}}),1);
   const recipe=await call(who,'POST','/recipes',{name:'烤鱼',categoryId:created.body.data.id,ingredients:[{name:'鱼',quantity:1,unit:'条'}],seasonings:['盐'],steps:['烤熟']});
-  assert.equal(recipe.status,201,JSON.stringify(recipe.body));assert.equal(recipe.body.data.category.name,'海鲜');
+  assert.equal(recipe.status,201,JSON.stringify(recipe.body));assert.equal(recipe.body.data.category.name,'家庭烧烤');
   const updated=await call(who,'PATCH',`/recipes/categories/${created.body.data.id}`,{expectedVersion:1,name:'水产',sortOrder:1});
   assert.equal(updated.status,200,JSON.stringify(updated.body));assert.equal(updated.body.data.name,'水产');assert.equal(updated.body.data.sortOrder,1);assert.equal(updated.body.data.version,2);
   assert.equal((await call(who,'PATCH',`/recipes/categories/${created.body.data.id}`,{expectedVersion:1,name:'过期修改'})).status,409);
   const archived=await call(who,'POST',`/recipes/categories/${created.body.data.id}/archive`,{expectedVersion:2});
   assert.equal(archived.status,201,JSON.stringify(archived.body));assert.equal(archived.body.data.version,3);assert.ok(archived.body.data.archivedAt);
-  assert.equal((await call(who,'GET','/recipes/categories')).body.data.length,0);
+  assert.deepEqual((await call(who,'GET','/recipes/categories')).body.data.map(row=>row.id).sort(),initialIds,'archiving a custom category preserves default categories');
   const preserved=await call(who,'PATCH',`/recipes/${recipe.body.data.id}`,{expectedVersion:recipe.body.data.version,name:'烤鱼新版',ingredients:[{name:'鱼',quantity:1,unit:'条'}],seasonings:['盐'],steps:['烤熟']});
   assert.equal(preserved.status,200,JSON.stringify(preserved.body));assert.equal(preserved.body.data.category.name,'水产');
   const cleared=await call(who,'PATCH',`/recipes/${recipe.body.data.id}`,{expectedVersion:preserved.body.data.version,name:'烤鱼新版',categoryId:null,ingredients:[{name:'鱼',quantity:1,unit:'条'}],seasonings:['盐'],steps:['烤熟']});
@@ -508,6 +511,12 @@ test('A41/D13: task outbox produces an authorized inbox reminder, cancellation a
   let cancelled=(await call(who,'POST','/tasks',{type:'TODO',title:'取消后不提醒',assigneeMembershipId:who.memberId,dueAt,reminderAt,priority:'NORMAL'})).body.data;
   cancelled=(await call(who,'PATCH',`/tasks/${cancelled.id}/status`,{expectedVersion:cancelled.version,status:'CANCELLED'})).body.data;
   assert.equal(cancelled.status,'CANCELLED');assert.equal(await db.notificationJob.count({where:{sourceId:cancelled.id,status:'PENDING'}}),0);assert.equal(await db.outboxEvent.count({where:{aggregateId:cancelled.id}}),2);
+  const enabled=await call(member,'PATCH','/notification-preferences',{eventType:'TASK_REMINDER',expectedVersion:disabled.body.data.version,enabled:true,leadMinutes:0,quietStart:null,quietEnd:null});assert.equal(enabled.status,200);
+  const night=(await call(who,'POST','/tasks',{type:'TODO',title:'明确关闭安静时段',assigneeMembershipId:member.memberId,dueAt,reminderAt:'2026-09-10T23:00:00+08:00',priority:'NORMAL'})).body.data;
+  const quiet=(await call(who,'POST','/tasks',{type:'TODO',title:'遵循默认安静时段',assigneeMembershipId:who.memberId,dueAt,reminderAt:'2026-09-10T23:00:00+08:00',priority:'NORMAL'})).body.data;
+  await worker.runDue(new Date('2026-09-10T23:30:00+08:00'));
+  assert.equal(await db.inboxItem.count({where:{sourceId:night.id,invalidatedAt:null}}),1,'explicit null quiet hours must not restore defaults');
+  const deferred=await db.notificationJob.findFirst({where:{sourceId:quiet.id}});assert.equal(deferred.status,'PENDING');assert.equal(deferred.scheduledAt.toISOString(),'2026-09-11T00:00:00.000Z');
 });
 test('A24/A25/A29: arbitrary template items stay exact, repeat apply skips, assignee remains read-only', async () => {
   const who=await owner(), member=await join(who,['CAMPER']);

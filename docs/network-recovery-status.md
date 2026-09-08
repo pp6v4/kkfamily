@@ -26,7 +26,7 @@
 - Git transport：项目根上级 `work/git_ssh_paramiko.py`，设置GIT_SSH_COMMAND为Python加该脚本，并设置GIT_SSH_VARIANT=ssh。
 - 普通Windows curl在此沙箱出现 `SEC_E_NO_CREDENTIALS`；改用Python标准SSL校验成功，不要用 `-k` 关闭证书校验来掩盖本机Schannel问题。
 - 本轮开始普通沙箱已恢复读取部署密钥和依赖。不要把某次普通账号的ACL读取失败误判为服务器认证失败，更不要放宽整个用户目录权限。
-- 跨任务记忆目录写入权限申请未获授权；暂仅保存本项目记录，尚未声称已写入记忆。
+- 用户随后完成目录写入授权；2026-09-09已新增记忆记录 `C:\Users\10353\.codex\memories\extensions\ad_hoc\notes\20260909T005100-family-life-network-recovery.md`，并核实文件存在。不包含密码、私钥或令牌。
 
 ## 修复前实测（历史证据，已由上述结果更新）
 

@@ -1,4 +1,4 @@
-import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common';
+import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { NotificationEventType } from '@prisma/client';
 import { AccessService } from '../access/access.service';
@@ -83,19 +83,25 @@ export class NotificationsService {
   }
 
   private async processClaimed(jobId: string, now: Date) {
-    const job = await this.prisma.notificationJob.findUnique({ where: { id: jobId }, include: { outbox: true, recipient: { include: { user: true } } } });
-    if (!job || job.status !== 'PROCESSING') return;
-    if (job.channel !== 'INBOX' || job.sourceType !== 'TASK' || job.recipient.status !== 'ACTIVE') { await this.cancelJob(jobId); return; }
-    const task = await this.prisma.task.findFirst({ where: { id: job.sourceId, householdId: job.outbox.householdId, archivedAt: null } });
-    if (!task || task.version !== job.scheduleVersion || task.assigneeMembershipId !== job.recipientMembershipId || !['PENDING', 'IN_PROGRESS'].includes(task.status)) { await this.cancelJob(jobId); return; }
-    try { await this.access.require(job.recipient.userId, job.outbox.householdId, 'tasks'); } catch { await this.cancelJob(jobId); return; }
-    const preference = await this.prisma.notificationPreference.findUnique({ where: { membershipId_eventType: { membershipId: job.recipientMembershipId, eventType: job.eventType } } });
-    if (preference && !preference.enabled) { await this.cancelJob(jobId); return; }
-    const quietEnd = this.quietEnd(now, preference?.quietStart ?? defaultPreference.quietStart, preference?.quietEnd ?? defaultPreference.quietEnd);
-    if (quietEnd) { await this.prisma.notificationJob.update({ where: { id: jobId }, data: { status: 'PENDING', scheduledAt: quietEnd, lockedAt: null } }); return; }
     await serializable(this.prisma, async tx => {
-      const current = await tx.notificationJob.findUnique({ where: { id: jobId } });
-      if (!current || current.status !== 'PROCESSING') return;
+      const job = await tx.notificationJob.findUnique({ where: { id: jobId }, include: { outbox: true, recipient: true } });
+      if (!job || job.status !== 'PROCESSING' || job.lockedAt?.getTime() !== now.getTime()) return;
+      const claimed = { id: jobId, status: 'PROCESSING' as const, lockedAt: now };
+      const cancel = () => tx.notificationJob.updateMany({ where: claimed, data: { status: 'CANCELLED', lockedAt: null } });
+      if (job.channel !== 'INBOX' || job.sourceType !== 'TASK' || job.recipient.status !== 'ACTIVE') { await cancel(); return; }
+      const task = await tx.task.findFirst({ where: { id: job.sourceId, householdId: job.outbox.householdId, archivedAt: null } });
+      if (!task || task.version !== job.scheduleVersion || task.assigneeMembershipId !== job.recipientMembershipId || !['PENDING', 'IN_PROGRESS'].includes(task.status)) { await cancel(); return; }
+      try {
+        await this.access.require(job.recipient.userId, job.outbox.householdId, 'tasks', 'VIEW', tx);
+        await this.access.require(job.recipient.userId, job.outbox.householdId, 'notifications', 'VIEW', tx);
+      } catch (error) {
+        if (!(error instanceof ForbiddenException)) throw error;
+        await cancel(); return;
+      }
+      const preference = await tx.notificationPreference.findUnique({ where: { membershipId_eventType: { membershipId: job.recipientMembershipId, eventType: job.eventType } } });
+      if (preference && !preference.enabled) { await cancel(); return; }
+      const quietEnd = this.quietEnd(now, preference ? preference.quietStart : defaultPreference.quietStart, preference ? preference.quietEnd : defaultPreference.quietEnd);
+      if (quietEnd) { await tx.notificationJob.updateMany({ where: claimed, data: { status: 'PENDING', scheduledAt: quietEnd, lockedAt: null } }); return; }
       await tx.inboxItem.upsert({ where: { jobId }, update: {}, create: { jobId, recipientMembershipId: job.recipientMembershipId, sourceType: job.sourceType, sourceId: job.sourceId, titleRedacted: '家庭待办提醒' } });
       await tx.notificationJob.update({ where: { id: jobId }, data: { status: 'SENT', attempts: { increment: 1 }, sentAt: now, lockedAt: null, lastError: null } });
     });
@@ -114,12 +120,11 @@ export class NotificationsService {
   }
 
   private async retryOrFail(jobId: string, now: Date, error: unknown) {
-    const job = await this.prisma.notificationJob.findUnique({ where: { id: jobId }, select: { attempts: true, status: true } });
-    if (!job || job.status !== 'PROCESSING') return;
+    const job = await this.prisma.notificationJob.findUnique({ where: { id: jobId }, select: { attempts: true, status: true, lockedAt: true } });
+    if (!job || job.status !== 'PROCESSING' || job.lockedAt?.getTime() !== now.getTime()) return;
     const attempts = job.attempts + 1, delays = [1, 5, 15], failed = attempts > 3;
-    await this.prisma.notificationJob.update({ where: { id: jobId }, data: { status: failed ? 'FAILED' : 'PENDING', attempts, scheduledAt: failed ? undefined : new Date(now.getTime() + delays[attempts - 1] * 60_000), lockedAt: null, lastError: error instanceof Error ? error.name.slice(0, 120) : 'UNKNOWN' } });
+    await this.prisma.notificationJob.updateMany({ where: { id: jobId, status: 'PROCESSING', lockedAt: now }, data: { status: failed ? 'FAILED' : 'PENDING', attempts, scheduledAt: failed ? undefined : new Date(now.getTime() + delays[attempts - 1] * 60_000), lockedAt: null, lastError: error instanceof Error ? error.name.slice(0, 120) : 'UNKNOWN' } });
   }
 
-  private async cancelJob(jobId: string) { await this.prisma.notificationJob.updateMany({ where: { id: jobId, status: 'PROCESSING' }, data: { status: 'CANCELLED', lockedAt: null } }); }
   private async invalidate(itemId: string) { await this.prisma.inboxItem.updateMany({ where: { id: itemId, invalidatedAt: null }, data: { invalidatedAt: new Date(), version: { increment: 1 } } }); }
 }
