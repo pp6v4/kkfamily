@@ -35,7 +35,9 @@ SELECT
     'legacy_' || event."id",
     event."householdId",
     event."title",
-    to_char(event."startsAt" AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD'),
+    -- Prisma's TIMESTAMP(3) stores UTC without a timezone annotation.
+    -- Interpret it as UTC first, then derive the Shanghai calendar date.
+    to_char((event."startsAt" AT TIME ZONE 'UTC') AT TIME ZONE 'Asia/Shanghai', 'YYYY-MM-DD'),
     'ONCE'::"AnniversaryRecurrence",
     'FEB_28'::"AnniversaryLeapPolicy",
     member."id",

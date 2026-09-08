@@ -24,6 +24,7 @@ function main() {
     ['migrate-deploy', [require.resolve('prisma/build/index.js'), 'migrate', 'deploy']],
     ['migrate-status', [require.resolve('prisma/build/index.js'), 'migrate', 'status']],
     ['schema-drift', [require.resolve('prisma/build/index.js'), 'migrate', 'diff', '--from-schema-datasource', 'prisma/schema.prisma', '--to-schema-datamodel', 'prisma/schema.prisma', '--exit-code']],
+    ['legacy-upgrade', ['--test', '--test-reporter=tap', 'test/legacy-upgrade.test.cjs']],
     ['notification-unit', ['--test', '--test-reporter=tap', 'test/notifications.unit.test.cjs']],
     ['http-integration', ['--test', '--test-reporter=tap', 'test/access.integration.test.cjs']],
   ];
