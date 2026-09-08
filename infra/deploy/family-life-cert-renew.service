@@ -1,0 +1,10 @@
+[Unit]
+Description=Renew family-life TLS certificate and reload Nginx
+Requires=docker.service
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=/bin/sh /opt/family-life/infra/scripts/renew-certificates.sh
+TimeoutStartSec=15min

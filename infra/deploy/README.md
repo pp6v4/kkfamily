@@ -25,4 +25,21 @@ curl --fail https://pp6v4.com/api/v1/health
 
 所有密钥仅保存在服务器 `.env`，不提交 Git。
 
+## 证书自动续期
+
+首次证书签发成功后安装 systemd 单元（按服务器时区每天检查两次，附加随机延迟）：
+
+```bash
+sudo install -m 644 /opt/family-life/infra/deploy/family-life-cert-renew.service /etc/systemd/system/
+sudo install -m 644 /opt/family-life/infra/deploy/family-life-cert-renew.timer /etc/systemd/system/
+sudo systemctl daemon-reload
+sudo systemctl enable --now family-life-cert-renew.timer
+sudo systemctl start family-life-cert-renew.service
+sudo systemctl show family-life-cert-renew.service -p Result -p ExecMainStatus
+cd /opt/family-life/infra
+sudo docker compose --profile certbot run --rm certbot renew --dry-run --non-interactive
+```
+
+执行日志用 `journalctl -u family-life-cert-renew.service` 查看。生产 `nginx.conf` 已切换 HTTPS；新服务器首次签发前仍须使用 `bootstrap.conf`，不得在已有证书的服务器上误覆盖回 HTTP 配置。API 需要同时加入 `internal` 与 `edge` 网络以访问微信/COS；PostgreSQL、Redis 保持仅内部访问。
+
 `notification-worker` 会等待 API 健康检查通过后启动，每30秒领取到期的站内提醒；完成、取消、改派或版本变化会使旧任务失效。微信订阅发送仍须先在微信后台取得模板并完成模板字段联调，未配置时站内提醒正常工作。
