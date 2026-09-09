@@ -560,16 +560,22 @@ test('Calendar navigation preserves date/source, and consumption is scoped and o
   nav.setCalendarTarget({type:'TRIP',date:'2026-09-01',sourceId:'trip-a'});
   assert.equal(nav.takeCalendarTarget('MEAL'),undefined);const target=nav.takeCalendarTarget('TRIP');assert.equal(target.date,'2026-09-01');assert.equal(target.sourceId,'trip-a');assert.equal(nav.takeCalendarTarget('TRIP'),undefined);
 });
-test('Calendar quick actions and event drill-down require the corresponding module permission',()=>{
+test('Calendar quick actions and event drill-down require the corresponding module permission',async()=>{
   const uni=mockUni(),targets=[],toasts=[];
   uni.showToast=input=>toasts.push(input.title);
   const calendarSession={...family,effectivePermissions:{calendar:'VIEW',meals:'EDIT'}};
+  const calendarDates=loadTs('src/services/calendar-dates.ts',{'./trip-form':tripForm},uni);
+  let show;
   const page=loadPage('src/pages/date-detail/index.vue',{
-    '../../services/session':{canAccess:allowed,refreshAccess:async()=>calendarSession},
+    '@dcloudio/uni-app':{onLoad(){},onShow:fn=>show=fn,onHide(){},onUnload(){}},
+    '../../services/session':{canAccess:allowed,getStoredSession:()=>calendarSession,refreshAccess:async()=>calendarSession},
+    '../../services/trip-form':tripForm,
+    '../../services/calendar-dates':calendarDates,
+    '../../services/transport':{ApiError},
     '../../services/calendar-navigation':{setCalendarTarget:target=>targets.push(target)},
-    '../../services/family-api':{},
+    '../../services/family-api':{listCalendarEvents:async()=>[]},
   },uni);
-  page.date.value='2026-09-03';page.session.value=calendarSession;
+  page.date.value='2026-09-03';await show();
   assert.equal(page.canPlanMeal.value,true);assert.equal(page.canPlanTrip.value,false);assert.equal(page.canPlanTask.value,false);assert.equal(page.quickActionCount.value,1);
   page.planMeal();assert.equal(targets.length,1);assert.equal(targets[0].type,'MEAL');assert.equal(targets[0].date,'2026-09-03');assert.deepEqual(uni.routes,['/pages/meal/index']);
   page.planTrip();page.planTask();page.openEvent({id:'task-event',type:'TASK',title:'清洗空调',startsAt:'2026-09-03',sourceId:'task-a'});

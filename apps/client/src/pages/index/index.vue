@@ -1,45 +1,70 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
+import { onHide, onShow, onUnload } from '@dcloudio/uni-app';
 import { listCalendarEvents, type CalendarEvent } from '../../services/family-api';
-import { refreshAccess, type HouseholdContext } from '../../services/session';
+import { canAccess, getStoredSession, refreshAccess, type HouseholdContext } from '../../services/session';
+import { gridRange, monthGrid, overlapsDay, shiftMonth, todayInShanghai } from '../../services/calendar-dates';
+import { isCalendarDate } from '../../services/trip-form';
 
-const now = new Date();
-const current = ref(new Date(now.getFullYear(), now.getMonth(), 1));
-const selected = ref(format(now));
+const today = ref(todayInShanghai());
+const current = ref(`${today.value.slice(0, 7)}-01`);
+const selected = ref(today.value);
 const events = ref<CalendarEvent[]>([]);
 const loading = ref(false);
+const loadError = ref('');
 const session = ref<HouseholdContext>();
+const pageVisible = ref(false);
+let epoch = 0;
+let disposed = false;
 const weekdays = ['日', '一', '二', '三', '四', '五', '六'];
 const eventStamps: Record<CalendarEvent['type'], string> = { ANNIVERSARY: '❤', MEAL: '🍲', TRIP: '⛺', TASK: '✓' };
 const typeClass: Record<CalendarEvent['type'], string> = { ANNIVERSARY: 'anniversary', MEAL: 'meal', TRIP: 'camping', TASK: 'task' };
-const today = format(now);
-const pad = (value: number) => String(value).padStart(2, '0');
-function format(date: Date) { return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
-function localDate(iso: string) { const value = new Date(iso); return `${value.getFullYear()}-${pad(value.getMonth() + 1)}-${pad(value.getDate())}`; }
 function message(error: unknown) { return error instanceof Error ? error.message : '日历加载失败'; }
-function overlapsDay(event: CalendarEvent, day: string) {
-  const start = new Date(`${day}T00:00:00+08:00`).getTime(), end = start + 86400_000;
-  const eventStart = new Date(event.startsAt).getTime(), eventEnd = event.endsAt ? new Date(event.endsAt).getTime() : eventStart;
-  return eventStart < end && (eventEnd > eventStart ? eventEnd > start : eventStart >= start);
+function sameIdentity(a?: HouseholdContext, b?: HouseholdContext) {
+  return Boolean(a && b && a.householdId === b.householdId && a.membershipId === b.membershipId);
 }
+function alive(token: number) { return !disposed && pageVisible.value && token === epoch; }
+function clearPrivate() { events.value = []; session.value = undefined; }
+function leave() { pageVisible.value = false; epoch++; clearPrivate(); loading.value = false; loadError.value = ''; }
 
-const title = computed(() => `${current.value.getFullYear()} 年 ${current.value.getMonth() + 1} 月`);
-const days = computed(() => {
-  const year = current.value.getFullYear(); const month = current.value.getMonth(); const firstDay = new Date(year, month, 1); const first = new Date(year, month, 1 - firstDay.getDay());
-  return Array.from({ length: 42 }, (_, index) => { const date = new Date(first); date.setDate(first.getDate() + index); const key = format(date); return { key, day: date.getDate(), isCurrent: date.getMonth() === month, events: events.value.filter((event) => overlapsDay(event,key)) }; });
-});
+const title = computed(() => `${Number(current.value.slice(0, 4))} 年 ${Number(current.value.slice(5, 7))} 月`);
+const days = computed(() => monthGrid(current.value).map(day => ({ ...day, events: events.value.filter(event => overlapsDay(event, day.key)) })));
 async function loadMonth() {
+  if (disposed || !pageVisible.value) return;
+  const token = ++epoch, identity = getStoredSession(), month = current.value;
+  clearPrivate(); loadError.value = '';
   loading.value = true;
-  const year = current.value.getFullYear(); const month = current.value.getMonth(); const from = new Date(year, month, 1); const to = new Date(year, month + 1, 1);
-  events.value = [];
-  try { session.value = await refreshAccess(); events.value = await listCalendarEvents(from.toISOString(), to.toISOString()); }
-  catch (error) { events.value=[]; uni.showToast({ title: message(error), icon: 'none', duration: 3000 }); }
-  finally { loading.value = false; }
+  try {
+    const refreshed = await refreshAccess();
+    if (!alive(token)) return;
+    if ((identity && !sameIdentity(identity, refreshed)) || !sameIdentity(refreshed, getStoredSession())) { loadError.value = '账号或家庭已变化，请重新加载'; return; }
+    if (!canAccess(refreshed, 'calendar')) { loadError.value = '尚未获得日历查看权限'; return; }
+    session.value = refreshed;
+    const { from, to } = gridRange(month);
+    const rows = await listCalendarEvents(from, to);
+    if (alive(token) && sameIdentity(refreshed, getStoredSession())) events.value = rows;
+  } catch (error) {
+    if (!alive(token)) return;
+    clearPrivate(); loadError.value = message(error);
+  } finally {
+    if (alive(token)) {
+      if (session.value && !sameIdentity(session.value, getStoredSession())) { clearPrivate(); loadError.value = '账号或家庭已变化，请重新加载'; }
+      loading.value = false;
+    }
+  }
 }
-async function changeMonth(delta: number) { current.value = new Date(current.value.getFullYear(), current.value.getMonth() + delta, 1); await loadMonth(); }
-function selectDay(key: string) { selected.value = key; uni.navigateTo({ url: `/pages/date-detail/index?date=${key}` }); }
-onShow(loadMonth);
+async function changeMonth(delta: number) {
+  if (!pageVisible.value || disposed) return;
+  current.value = shiftMonth(current.value, delta); await loadMonth();
+}
+function selectDay(key: string) {
+  if (!pageVisible.value || disposed || loading.value || loadError.value || !isCalendarDate(key)) return;
+  if (!sameIdentity(session.value, getStoredSession()) || !canAccess(session.value, 'calendar')) { clearPrivate(); loadError.value = '请重新加载日历以确认权限'; return; }
+  selected.value = key; uni.navigateTo({ url: `/pages/date-detail/index?date=${key}` });
+}
+onShow(() => { if (disposed) return; pageVisible.value = true; today.value = todayInShanghai(); return loadMonth(); });
+onHide(leave);
+onUnload(() => { disposed = true; leave(); });
 </script>
 
 <template>
@@ -47,7 +72,9 @@ onShow(loadMonth);
     <view class="top"><view><text class="eyebrow">{{session?.householdName||'扣扣的家'}}</text><text class="headline">家庭日历</text></view><view class="avatar">🏡</view></view>
     <view class="calendar-card"><view class="month"><text class="arrow" @tap="changeMonth(-1)">‹</text><text class="month-title">{{ title }}</text><text class="arrow" @tap="changeMonth(1)">›</text></view><view class="weekdays"><text v-for="day in weekdays" :key="day">{{ day }}</text></view><view class="days"><view v-for="item in days" :key="item.key" class="day" :class="{ muted: !item.isCurrent, today: item.key === today, selected: item.key === selected }" @tap="selectDay(item.key)"><text class="date">{{ item.day }}</text><view class="stamps"><text v-for="event in item.events.slice(0, 3)" :key="event.id" class="stamp" :class="typeClass[event.type]">{{ eventStamps[event.type] }}</text><text v-if="item.events.length > 3" class="more">+{{ item.events.length - 3 }}</text></view></view></view></view>
     <view class="legend"><view><text class="legend-stamp anniversary">❤</text><text>纪念日</text></view><view><text class="legend-stamp meal">🍲</text><text>吃什么</text></view><view><text class="legend-stamp camping">⛺</text><text>去露营</text></view><view><text class="legend-stamp task">✓</text><text>待办</text></view></view>
-    <view class="tip" @tap="selectDay(selected)"><text>当天安排</text><text class="tip-copy">{{ loading ? '正在读取数据库…' : '查看或添加事件 ›' }}</text></view>
+    <view v-if="loading" class="tip"><text>正在加载日历…</text></view>
+    <view v-else-if="loadError" class="tip" @tap="loadMonth"><text>{{ loadError }}</text><text class="tip-copy">重试 ›</text></view>
+    <view v-else class="tip" @tap="selectDay(selected)"><text>当天安排</text><text class="tip-copy">查看或添加事件 ›</text></view>
   </view>
 </template>
 
