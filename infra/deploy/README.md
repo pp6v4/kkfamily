@@ -13,6 +13,8 @@
 
 部署前先在Docker主机的仓库根目录执行 `node scripts/verify-database.cjs`。此命令使用独立测试网络和临时PostgreSQL，不读取生产配置；只有迁移及HTTP集成结果通过后才继续。具体证据位置和失败处理见[隔离数据库验收](../verification/README.md)。
 
+隔离验收的build-stage镜像不等于最终运行镜像。上线前还必须对实际runtime镜像使用独立临时数据库、测试凭证执行production模式冒烟，确认默认启动命令、迁移、健康接口、未登录权限保护与worker启动；记录镜像摘要。已有生产环境升级前，重新备份数据库和私有配置，核对已应用迁移校验和及源码与测试快照的一致性，保留旧镜像。升级后检查迁移状态、结构差异、API/worker实际镜像与健康状态以及外部HTTPS。不要将下面的首次安装步骤原样用于已有数据的升级，也不要自动重置数据库或覆盖.env。已执行实例见[2026-09-09部署记录](../../docs/deployment-20260909.md)。
+
 ```bash
 cd /opt/family-life
 docker compose -f infra/docker-compose.yml build --no-cache

@@ -31,6 +31,21 @@ function mockUni() {
 const family={householdId:'house-a',householdName:'虚构家庭',membershipId:'member-a',roles:['ADMIN'],accessToken:'fictional-token',version:1,effectivePermissions:{members:'MANAGE'}};
 function allowed(context,module,level='VIEW') {const ranks={VIEW:1,EDIT:2,MANAGE:3};return (ranks[context?.effectivePermissions?.[module]]||0)>=ranks[level];}
 
+test('JSON and binary requests directly use the verified HTTPS API without redirects',async()=>{
+  const config=loadTs('src/services/config.ts',{},{});
+  assert.equal(config.API_BASE_URL,'https://pp6v4.com/api/v1');
+  const requests=[],uni={request(options){requests.push(options);options.success({statusCode:200,data:{data:{ok:true}}});}};
+  const transport=loadTs('src/services/transport.ts',{'./config':config},uni);
+  await transport.rawRequest('/auth/wechat/login','POST',{code:'fictional-code'});
+  await transport.rawBinaryRequest('/media/uploads/fictional','PUT',new ArrayBuffer(4),'image/png');
+  assert.deepEqual(requests.map(row=>[row.url,row.method]),[
+    ['https://pp6v4.com/api/v1/auth/wechat/login','POST'],
+    ['https://pp6v4.com/api/v1/media/uploads/fictional','PUT'],
+  ]);
+  assert.equal(requests[0].data.code,'fictional-code');
+  assert.equal(requests[1].data.byteLength,4);
+});
+
 test('New identity is directed to join, never automatically creates a separate household',async()=>{
   const uni=mockUni(),calls=[];
   const session=loadTs('src/services/session.ts',{'./transport':{ApiError,rawRequest:async(path,method)=>{calls.push([path,method]);return {accessToken:'fictional-token',user:{households:[]}};}}},uni);
