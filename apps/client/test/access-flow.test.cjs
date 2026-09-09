@@ -612,8 +612,13 @@ test('Recipe editor preserves an archived historical category unless the user ex
   const uni=mockUni(),updates=[];
   const archived={id:'category-old',name:'旧分类',sortOrder:4,version:3,archivedAt:'2026-09-03T00:00:00.000Z'};
   const recipe={id:'recipe-a',version:6,name:'旧菜',status:'DRAFT',coverAssetId:null,category:archived,ingredients:[{ingredientId:'food-a',quantity:'1',unit:'份',optional:false,ingredient:{id:'food-a',name:'食材'}}],seasonings:[],steps:['完成']};
-  const page=loadPage('src/pages/recipe-editor/index.vue',{'../../services/family-api':{listRecipeCategories:async()=>[],getRecipe:async()=>recipe,updateRecipe:async(id,input)=>{updates.push({id,input});return{...recipe,...input,version:input.expectedVersion+1};}}},uni);
-  await page.loadPage({id:recipe.id});assert.match(page.categoryName.value,/旧分类.*已归档/);page.name.value='旧菜新做法';await page.persist(false);
+  const context={...family,effectivePermissions:{recipes:'EDIT'}},life={};
+  const page=loadPage('src/pages/recipe-editor/index.vue',{
+    '@dcloudio/uni-app':{onLoad:fn=>life.load=fn,onShow:fn=>life.show=fn,onHide(){},onUnload(){}},
+    '../../services/session':{canAccess:allowed,getStoredSession:()=>context,refreshAccess:async()=>context},
+    '../../services/transport':{ApiError},
+    '../../services/family-api':{listRecipeCategories:async()=>[],getRecipe:async()=>recipe,updateRecipe:async(id,input)=>{updates.push({id,input});return{...recipe,...input,version:input.expectedVersion+1};}}},uni);
+  life.load({id:recipe.id});await life.show();assert.match(page.categoryName.value,/旧分类.*已归档/);page.name.value='旧菜新做法';await page.persist(false);
   assert.equal(Object.prototype.hasOwnProperty.call(updates[0].input,'categoryId'),false);assert.equal(page.originalCategoryId.value,'category-old');
   page.categoryIndex.value=0;await page.persist(false);assert.equal(updates[1].input.categoryId,null);assert.equal(page.originalCategoryId.value,null);
 });
