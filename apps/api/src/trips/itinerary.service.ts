@@ -243,8 +243,15 @@ export class ItineraryService {
   }
 
   private accommodationDates(checkIn: string, checkOut: string) {
-    const checkInDate = new Date(`${checkIn}T00:00:00.000Z`), checkOutDate = new Date(`${checkOut}T00:00:00.000Z`);
-    if (Number.isNaN(checkInDate.valueOf()) || Number.isNaN(checkOutDate.valueOf()) || checkOutDate <= checkInDate) throw new BadRequestException('退房日期必须晚于入住日期');
+    const parse = (value: string) => {
+      const date = new Date(`${value}T00:00:00.000Z`);
+      if (!/^\d{4}-\d{2}-\d{2}$/.test(value) || !Number.isFinite(date.valueOf()) || date.toISOString().slice(0, 10) !== value) {
+        throw new BadRequestException('住宿日期必须是有效的YYYY-MM-DD日期');
+      }
+      return date;
+    };
+    const checkInDate = parse(checkIn), checkOutDate = parse(checkOut);
+    if (checkOutDate <= checkInDate) throw new BadRequestException('退房日期必须晚于入住日期');
     return { checkInDate, checkOutDate };
   }
 

@@ -593,6 +593,36 @@ test('D09: itinerary versions, route staleness and confirmed stop removal preser
   const removed=await call(who,'DELETE',`/trips/${trip.id}/stops/${second.body.data.stop.id}?expectedVersion=1&expectedTripVersion=6&confirm=true`);assert.equal(removed.status,200);assert.equal(removed.body.data.tripVersion,7);
   itinerary=await call(who,'GET',`/trips/${trip.id}/itinerary`);assert.equal(itinerary.body.data.stops.length,1);assert.equal(itinerary.body.data.legs.length,0);assert.equal(itinerary.body.data.accommodations[0].stopId,null,'Lodging survives as trip-level record');
 });
+test('D09: accommodation calendar validation rejects impossible dates without changing rows, versions or audit history',async()=>{
+  const who=await owner();
+  const created=await call(who,'POST','/trips',{title:'日期边界验证',startsAt:'2028-02-28T08:00:00+08:00'});
+  assert.equal(created.status,201,JSON.stringify(created.body));const trip=created.body.data;
+  const snapshot=async()=>({
+    trip:await db.trip.findUnique({where:{id:trip.id},select:{version:true,updatedAt:true}}),
+    stays:await db.accommodation.findMany({where:{tripId:trip.id},orderBy:{id:'asc'}}),
+    auditCount:await db.auditLog.count({where:{householdId:who.householdId}}),
+  });
+  const empty=await snapshot();
+  for(const [checkInDate,checkOutDate] of [['2026-02-29','2026-03-03'],['2028-02-30','2028-03-03'],['2100-02-29','2100-03-03'],['2028-02-28','2028-02-30'],['2028-04-31','2028-05-03'],['2028-03-02','2028-03-02'],['2028-03-03','2028-03-02']]){
+    const rejected=await call(who,'POST',`/trips/${trip.id}/accommodations`,{expectedTripVersion:1,name:'无效日期不得保存',checkInDate,checkOutDate});
+    assert.equal(rejected.status,400,`${checkInDate}/${checkOutDate}: ${JSON.stringify(rejected.body)}`);assert.deepEqual(await snapshot(),empty);
+  }
+  const valid=await call(who,'POST',`/trips/${trip.id}/accommodations`,{expectedTripVersion:1,name:'闰日住宿',checkInDate:'2028-02-29',checkOutDate:'2028-03-01',address:'原地址',contact:'原联系人',reservationNote:'原备注'});
+  assert.equal(valid.status,201,JSON.stringify(valid.body));assert.equal(valid.body.data.tripVersion,2);
+  const stay=valid.body.data.accommodation;assert.equal(stay.checkInDate,'2028-02-29T00:00:00.000Z');assert.equal(stay.checkOutDate,'2028-03-01T00:00:00.000Z');
+  const baseline=await snapshot();
+  for(const patch of [{checkInDate:'2028-02-30'},{checkOutDate:'2028-02-30'},{checkInDate:'2026-02-29'},{checkOutDate:'2028-02-29'}]){
+    const rejected=await call(who,'PATCH',`/trips/${trip.id}/accommodations/${stay.id}`,{expectedTripVersion:2,expectedVersion:stay.version,...patch});
+    assert.equal(rejected.status,400,JSON.stringify(rejected.body));assert.deepEqual(await snapshot(),baseline);
+  }
+  const edited=await call(who,'PATCH',`/trips/${trip.id}/accommodations/${stay.id}`,{expectedTripVersion:2,expectedVersion:stay.version,name:'改名保留原日期',address:'',contact:'',reservationNote:''});
+  assert.equal(edited.status,200,JSON.stringify(edited.body));assert.equal(edited.body.data.tripVersion,3);
+  const saved=edited.body.data.accommodation;assert.equal(saved.version,stay.version+1);assert.equal(saved.checkInDate,stay.checkInDate);assert.equal(saved.checkOutDate,stay.checkOutDate);assert.equal(saved.address,null);assert.equal(saved.contact,null);assert.equal(saved.reservationNote,null);
+  const afterEdit=await snapshot();assert.equal(afterEdit.trip.version,3);assert.equal(afterEdit.auditCount,baseline.auditCount+1);
+  const conflict=await call(who,'PATCH',`/trips/${trip.id}/accommodations/${stay.id}`,{expectedTripVersion:2,expectedVersion:stay.version,name:'过期修改'});
+  assert.equal(conflict.status,409);assert.deepEqual(await snapshot(),afterEdit);
+});
+
 test('D09: route endpoints reject stops from another trip',async()=>{
   const who=await owner();
   const one=(await call(who,'POST','/trips',{title:'行程甲',startsAt:'2026-09-16T08:00:00+08:00'})).body.data,two=(await call(who,'POST','/trips',{title:'行程乙',startsAt:'2026-09-17T08:00:00+08:00'})).body.data;

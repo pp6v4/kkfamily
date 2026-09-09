@@ -26,6 +26,7 @@ function main() {
     ['schema-drift', [require.resolve('prisma/build/index.js'), 'migrate', 'diff', '--from-schema-datasource', 'prisma/schema.prisma', '--to-schema-datamodel', 'prisma/schema.prisma', '--exit-code']],
     ['legacy-upgrade', ['--test', '--test-reporter=tap', 'test/legacy-upgrade.test.cjs']],
     ['notification-unit', ['--test', '--test-reporter=tap', 'test/notifications.unit.test.cjs']],
+    ['itinerary-unit', ['--test', '--test-reporter=tap', 'test/itinerary.unit.test.cjs']],
     ['http-integration', ['--test', '--test-reporter=tap', 'test/access.integration.test.cjs']],
   ];
   for (const [phase, args] of steps) {
