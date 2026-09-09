@@ -1,10 +1,15 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
-import { canAccess, refreshAccess, type HouseholdContext } from '../../services/session';
+import { onHide, onShow, onUnload } from '@dcloudio/uni-app';
+import { canAccess, getStoredSession, refreshAccess, type HouseholdContext } from '../../services/session';
+import { ApiError } from '../../services/transport';
+import { isCalendarDate, shanghaiDate } from '../../services/trip-form';
 import { addShoppingItem, listInventory, listShoppingLists, setInventoryItem, updateShoppingItem, repeatShoppingItem, type InventoryItem, type ShoppingItem, type SetInventoryInput } from '../../services/family-api';
 const active=ref<'shopping'|'inventory'>('shopping'),items=ref<ShoppingItem[]>([]),inventory=ref<InventoryItem[]>([]),loading=ref(false),errorText=ref('');
 const session=ref<HouseholdContext>();
+const pageVisible=ref(false),writing=ref(false),reloadRequired=ref(false);
+const busy=computed(()=>loading.value||writing.value);
+let epoch=0,disposed=false;
 const statusLabels:Record<string,string>={ALL:'全部',WISHLIST:'以后想买',NEXT_TRIP:'下次超市',REPLENISH:'常备补货',PURCHASED:'已购买'};
 const statusOptions=['WISHLIST','NEXT_TRIP','REPLENISH'];
 const filter=ref('ALL'),newStatus=ref(1),newItem=ref({name:'',quantity:'',unit:''});
@@ -13,70 +18,140 @@ const stockItem=ref(emptyStock()),editingStock=ref<InventoryItem>();
 const repeatRequests=new Map<string,string>();
 const pendingCount=computed(()=>items.value.filter(i=>i.status!=='PURCHASED').length);
 const visibleItems=computed(()=>items.value.filter(i=>filter.value==='ALL'||i.status===filter.value));
-function fail(error:unknown){errorText.value=error instanceof Error?error.message:'操作失败';uni.showToast({title:errorText.value,icon:'none'});}
+function identity(value?:HouseholdContext){return value?value.householdId+':'+value.membershipId:'';}
+function clearPrivate(){items.value=[];inventory.value=[];session.value=undefined;newItem.value={name:'',quantity:'',unit:''};newStatus.value=1;resetStock(true);filter.value='ALL';errorText.value='';reloadRequired.value=false;}
+function current(token:number,owner:string){
+  if(disposed||!pageVisible.value||token!==epoch)return false;
+  if(identity(getStoredSession())!==owner){++epoch;clearPrivate();loading.value=false;errorText.value='账号或家庭已变化，请刷新';return false;}
+  return true;
+}
+function fail(error:unknown){
+  if(error instanceof ApiError&&[401,403].includes(error.statusCode)){++epoch;clearPrivate();loading.value=false;}
+  errorText.value=error instanceof Error?error.message:'操作失败';uni.showToast({title:errorText.value,icon:'none'});
+}
 function quantityText(value:string|number|null,unit:string|null){return value===null?'数量待确认':Number(value)+(unit?' '+unit:'');}
-async function loadShopping(){items.value=(await listShoppingLists()).flatMap(l=>l.items);}
-async function loadStock(){inventory.value=await listInventory();}
+function stockText(item:InventoryItem){
+  const label={PRESENT:'有',ABSENT:'无',UNKNOWN:'待确认'}[item.availability];
+  if(item.ingredient.kind==='SEASONING')return label;
+  return item.quantity===null?label+' · 数量待确认':quantityText(item.quantity,item.unit);
+}
+async function readLists(token:number,owner:string,access:HouseholdContext){
+  const [shopping,stock]=await Promise.all([canAccess(access,'shopping')?listShoppingLists():Promise.resolve([]),canAccess(access,'inventory')?listInventory():Promise.resolve([])]);
+  if(!current(token,owner))return;
+  items.value=shopping.flatMap(list=>list.items);inventory.value=stock;reloadRequired.value=false;
+}
 async function loadPage(){
-  loading.value=true;items.value=[];inventory.value=[];session.value=undefined;errorText.value='';
-  try{session.value=await refreshAccess();await Promise.all([canAccess(session.value,'shopping')?loadShopping():Promise.resolve(),canAccess(session.value,'inventory')?loadStock():Promise.resolve()]);}
-  catch(error){items.value=[];inventory.value=[];fail(error);}finally{loading.value=false;}
+  if(disposed||!pageVisible.value)return;
+  const token=++epoch,owner=identity(getStoredSession());clearPrivate();loading.value=true;
+  try{
+    const access=await refreshAccess();if(!current(token,owner))return;
+    if(identity(access)!==owner){clearPrivate();errorText.value='账号或家庭已变化，请刷新';return;}
+    session.value=access;
+    if(!canAccess(access,active.value))active.value=canAccess(access,'shopping')?'shopping':'inventory';
+    await readLists(token,owner,access);
+  }catch(error){if(current(token,owner)){items.value=[];inventory.value=[];reloadRequired.value=true;fail(error);}}
+  finally{if(current(token,owner))loading.value=false;}
 }
+function ready(module:'shopping'|'inventory'){
+  if(busy.value||reloadRequired.value||!current(epoch,identity(session.value)))return false;
+  if(!canAccess(session.value,module,'EDIT')||!canAccess(getStoredSession(),module,'EDIT')){fail(new ApiError('尚未获得编辑权限',403));return false;}
+  return true;
+}
+async function write(operation:()=>Promise<unknown>,done:()=>void,message:string){
+  const token=epoch,owner=identity(session.value),access=session.value!;writing.value=true;errorText.value='';let saved=false;
+  try{
+    await operation();saved=true;if(!current(token,owner))return;
+    done();await readLists(token,owner,access);
+    if(current(token,owner))uni.showToast({title:message,icon:'none'});
+  }catch(error){if(current(token,owner)){
+    if(saved){items.value=[];inventory.value=[];reloadRequired.value=true;fail(error instanceof ApiError&&[401,403].includes(error.statusCode)?error:new Error('已保存，但刷新失败，请刷新数据后再操作'));}
+    else fail(error);
+  }}finally{
+    writing.value=false;
+    // A returning view may have read before the abandoned write committed.
+    if(!disposed&&pageVisible.value&&token!==epoch&&identity(session.value)===owner&&identity(getStoredSession())===owner){
+      ++epoch;loading.value=false;items.value=[];inventory.value=[];reloadRequired.value=true;errorText.value='离开前的操作已结束，请刷新数据确认结果后再操作';
+    }
+  }
+}
+function selectedItem(item:ShoppingItem){return items.value.find(row=>row.id===item.id&&row.version===item.version);}
 async function setStatus(item:ShoppingItem,status:ShoppingItem['status']){
-  if(loading.value)return;loading.value=true;errorText.value='';
-  try{await updateShoppingItem(item,status);await loadShopping();}catch(error){fail(error);}finally{loading.value=false;}
+  if(!ready('shopping'))return;
+  const row=selectedItem(item);if(!row||!['PURCHASED','NEXT_TRIP'].includes(status)||row.status===status)return;
+  const snapshot={...row};await write(()=>updateShoppingItem(snapshot,status),()=>{},'清单已更新');
 }
+function quantity(value:string,allowZero:boolean){
+  const text=value.trim();if(!text)return undefined;
+  if(!/^\d+(\.\d{1,3})?$/.test(text)||!Number.isFinite(Number(text))||Number(text)>999999999.999||Number(text)<(allowZero?0:0.001))throw new Error(allowZero?'库存数量须为0至999999999.999，最多3位小数':'购买数量须为0.001至999999999.999，最多3位小数');
+  return Number(text);
+}
+function textField(value:string,label:string,max:number,required=false){const text=value.trim();if((required&&!text)||text.length>max)throw new Error(label+'须为'+(required?'1':'0')+'至'+max+'个字符');return text;}
 async function createItem(){
-  if(loading.value)return;loading.value=true;errorText.value='';
-  try{await addShoppingItem({name:newItem.value.name.trim(),quantity:newItem.value.quantity===''?undefined:Number(newItem.value.quantity),unit:newItem.value.unit.trim()||undefined,status:statusOptions[newStatus.value] as 'WISHLIST'|'NEXT_TRIP'|'REPLENISH'});newItem.value={name:'',quantity:'',unit:''};await loadShopping();}
-  catch(error){fail(error);}finally{loading.value=false;}
+  if(!ready('shopping'))return;
+  try{
+    const status=statusOptions[newStatus.value] as 'WISHLIST'|'NEXT_TRIP'|'REPLENISH';if(!status)throw new Error('请选择购物分类');
+    const input={name:textField(newItem.value.name,'名称',80,true),quantity:quantity(newItem.value.quantity,false),unit:textField(newItem.value.unit,'单位',12)||undefined,status};
+    await write(()=>addShoppingItem(input),()=>{newItem.value={name:'',quantity:'',unit:''};},'已记到清单');
+  }catch(error){fail(error);}
 }
 async function repeat(item:ShoppingItem){
-  if(loading.value)return;loading.value=true;errorText.value='';
-  const requestId=repeatRequests.get(item.id)??('repeat-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2));repeatRequests.set(item.id,requestId);
-  try{await repeatShoppingItem(item.id,requestId);repeatRequests.delete(item.id);await loadShopping();uni.showToast({title:'已新建待购项，历史保留',icon:'none'});}catch(error){fail(error);}finally{loading.value=false;}
+  if(!ready('shopping'))return;
+  const row=selectedItem(item);if(!row||row.status!=='PURCHASED')return;
+  // Scope uncertain retries to the same household/member/item; never share across accounts.
+  const key=identity(session.value)+':'+row.id,requestId=repeatRequests.get(key)??('repeat-'+Date.now().toString(36)+'-'+Math.random().toString(36).slice(2));repeatRequests.set(key,requestId);
+  await write(async()=>{await repeatShoppingItem(row.id,requestId);repeatRequests.delete(key);},()=>{},'已新建待购项，历史保留');
 }
 function editStock(item:InventoryItem){
-  editingStock.value=item;stockItem.value={name:item.ingredient.name,quantity:item.quantity===null?'':String(Number(item.quantity)),unit:item.unit,location:item.location??'',kind:item.ingredient.kind,availability:item.availability,expiresAt:item.expiresAt?.slice(0,10)??''};
+  if(!ready('inventory')||!inventory.value.some(row=>row.id===item.id&&row.version===item.version))return;
+  editingStock.value={...item};stockItem.value={name:item.ingredient.name,quantity:item.quantity===null?'':String(Number(item.quantity)),unit:item.unit,location:item.location??'',kind:item.ingredient.kind,availability:item.availability,expiresAt:item.expiresAt?shanghaiDate(item.expiresAt):''};
 }
-function resetStock(){editingStock.value=undefined;stockItem.value=emptyStock();}
-function chooseKind(kind:'FOOD'|'SEASONING'){if(editingStock.value)return;stockItem.value.kind=kind;stockItem.value.quantity='';stockItem.value.unit=kind==='FOOD'?'g':'';stockItem.value.availability='UNKNOWN';}
+function resetStock(force=false){if(busy.value&&!force)return;editingStock.value=undefined;stockItem.value=emptyStock();}
+function chooseKind(kind:'FOOD'|'SEASONING'){if(busy.value||editingStock.value)return;stockItem.value.kind=kind;stockItem.value.quantity='';stockItem.value.unit=kind==='FOOD'?'g':'';stockItem.value.availability='UNKNOWN';}
+function chooseAvailability(value:'PRESENT'|'ABSENT'|'UNKNOWN'){if(!busy.value)stockItem.value.availability=value;}
+function chooseExpiry(value:string){if(!busy.value)stockItem.value.expiresAt=value;}
+function switchView(value:'shopping'|'inventory'){if(busy.value||!canAccess(session.value,value))return;active.value=value;resetStock();newItem.value={name:'',quantity:'',unit:''};}
 async function saveStock(){
-  if(loading.value)return;loading.value=true;errorText.value='';
+  if(!ready('inventory'))return;
   try{
-    const form=stockItem.value;
-    const input:SetInventoryInput={name:form.name.trim(),kind:form.kind,unit:form.kind==='FOOD'?form.unit.trim():undefined,quantity:form.kind==='FOOD'&&form.quantity!==''?Number(form.quantity):undefined,location:form.location.trim()||undefined,
-      availability:form.kind==='SEASONING'||form.quantity===''?form.availability:undefined,expiresAt:form.expiresAt?form.expiresAt+'T23:59:59+08:00':undefined,id:editingStock.value?.id,expectedVersion:editingStock.value?.version};
-    await setInventoryItem(input);resetStock();await loadStock();uni.showToast({title:'库存已保存',icon:'success'});
-  }catch(error){fail(error);}finally{loading.value=false;}
+    const form={...stockItem.value},editing=editingStock.value;
+    if(editing&&!inventory.value.some(row=>row.id===editing.id&&row.version===editing.version))throw new Error('库存版本已变化，请刷新');
+    if(!['FOOD','SEASONING'].includes(form.kind)||!['PRESENT','ABSENT','UNKNOWN'].includes(form.availability))throw new Error('请选择有效库存类型和状态');
+    if(form.expiresAt&&!isCalendarDate(form.expiresAt))throw new Error('请选择有效到期日');
+    const amount=form.kind==='FOOD'?quantity(form.quantity,true):undefined;
+    const input:SetInventoryInput={name:textField(form.name,'名称',60,true),kind:form.kind,unit:form.kind==='FOOD'?textField(form.unit,'单位',12,true):undefined,quantity:amount,location:textField(form.location,'位置',60)||undefined,
+      availability:amount===undefined?form.availability:undefined,expiresAt:form.expiresAt?form.expiresAt+'T23:59:59+08:00':undefined,id:editing?.id,expectedVersion:editing?.version};
+    await write(()=>setInventoryItem(input),()=>resetStock(true),'库存已保存');
+  }catch(error){fail(error);}
 }
-onShow(loadPage);
+function leave(){pageVisible.value=false;++epoch;clearPrivate();loading.value=false;}
+onShow(()=>{if(disposed)return;pageVisible.value=true;return loadPage();});
+onHide(leave);onUnload(()=>{disposed=true;leave();repeatRequests.clear();});
 </script>
 <template>
   <view class="page">
     <view class="heading"><text class="label">买东西</text><text class="title">{{active==='shopping'?'记下想买的小东西':'家中食材与调料'}}</text></view>
-    <view class="tabs"><view class="tab" :class="{selected:active==='shopping'}" @tap="active='shopping'">购物清单</view><view v-if="canAccess(session,'inventory')" class="tab" :class="{selected:active==='inventory'}" @tap="active='inventory'">家中库存</view></view>
-    <view v-if="errorText" class="error">{{errorText}}<button @tap="loadPage">刷新数据</button></view><view v-if="loading" class="hint">正在同步…</view>
+    <view class="tabs"><view class="tab" :class="{selected:active==='shopping'}" @tap="switchView('shopping')">购物清单</view><view v-if="canAccess(session,'inventory')" class="tab" :class="{selected:active==='inventory'}" @tap="switchView('inventory')">家中库存</view></view>
+    <view v-if="errorText" class="error">{{errorText}}<button :disabled="busy" @tap="loadPage">刷新数据</button></view><view v-if="busy" class="hint">{{writing?'正在保存…':'正在同步…'}}</view>
     <view v-if="active==='shopping'">
       <view class="bag">🛍️ 待购买 {{pendingCount}} 件</view>
-      <view v-if="canAccess(session,'shopping','EDIT')" class="stock-form"><input v-model="newItem.name" class="input" placeholder="想买什么" /><view class="form-row"><input v-model="newItem.quantity" type="digit" class="input" placeholder="数量，可不填" /><input v-model="newItem.unit" class="input" placeholder="单位" /></view><picker :range="statusOptions.map(s=>statusLabels[s])" :value="newStatus" @change="newStatus=Number($event.detail.value)"><text class="hint">放入：{{statusLabels[statusOptions[newStatus]]}} ›</text></picker><button :disabled="loading" @tap="createItem">记到清单</button></view>
+      <view v-if="canAccess(session,'shopping','EDIT')" class="stock-form"><input :disabled="busy" v-model="newItem.name" class="input" placeholder="想买什么" /><view class="form-row"><input :disabled="busy" v-model="newItem.quantity" type="digit" class="input" placeholder="数量，可不填" /><input :disabled="busy" v-model="newItem.unit" class="input" placeholder="单位" /></view><picker :disabled="busy" :range="statusOptions.map(s=>statusLabels[s])" :value="newStatus" @change="newStatus=Number($event.detail.value)"><text class="hint">放入：{{statusLabels[statusOptions[newStatus]]}} ›</text></picker><button :disabled="busy||reloadRequired" @tap="createItem">记到清单</button></view>
       <view class="filters"><text v-for="(label,key) in statusLabels" :key="key" class="filter" :class="{selected:filter===key}" @tap="filter=key">{{label}}</text></view>
-      <view v-if="!loading&&!visibleItems.length" class="empty">{{canAccess(session,'shopping')?'这里还没有物品':'尚未获得购物权限'}}</view>
+      <view v-if="!busy&&!errorText&&!visibleItems.length" class="empty">{{canAccess(session,'shopping')?'这里还没有物品':'尚未获得购物权限'}}</view>
       <view v-for="item in visibleItems" :key="item.id" class="item"><text class="box" :class="{done:item.status==='PURCHASED'}">{{item.status==='PURCHASED'?'✓':''}}</text><view class="item-info"><text class="item-name" :class="{cross:item.status==='PURCHASED'}">{{item.name}}</text><text class="category">{{statusLabels[item.status]}} · {{quantityText(item.quantity,item.unit)}}</text><text v-if="item.sourceType==='MEAL_SHORTAGE'" class="category">餐单缺料 · 菜单快照{{item.sourceVersion}}版</text><text v-if="item.previousItemId" class="category">复购项，原购买记录已保留</text><text v-if="item.purchasedAt" class="category">购买记录：{{item.purchasedAt}}</text>
-        <view v-if="canAccess(session,'shopping','EDIT')" class="actions"><button v-if="item.status!=='PURCHASED'" :disabled="loading" @tap="setStatus(item,'PURCHASED')">买到了</button><button v-if="item.status==='WISHLIST'" :disabled="loading" @tap="setStatus(item,'NEXT_TRIP')">下次买</button><button v-if="item.status==='PURCHASED'" :disabled="loading" @tap="repeat(item)">再买一次</button><button v-if="item.status==='PURCHASED'" :disabled="loading" @tap="setStatus(item,'NEXT_TRIP')">撤销勾选</button></view>
+        <view v-if="canAccess(session,'shopping','EDIT')" class="actions"><button v-if="item.status!=='PURCHASED'" :disabled="busy||reloadRequired" @tap="setStatus(item,'PURCHASED')">买到了</button><button v-if="item.status==='WISHLIST'" :disabled="busy||reloadRequired" @tap="setStatus(item,'NEXT_TRIP')">下次买</button><button v-if="item.status==='PURCHASED'" :disabled="busy||reloadRequired" @tap="repeat(item)">再买一次</button><button v-if="item.status==='PURCHASED'" :disabled="busy||reloadRequired" @tap="setStatus(item,'NEXT_TRIP')">撤销勾选</button></view>
       </view></view>
     </view>
     <view v-else>
-      <view class="stock-note">库存仅辅助判断，不自动换算单位。数量留空表示待确认；调料只登记有无。</view>
+      <view class="stock-note">库存仅辅助判断，不自动换算单位，购买和做饭不会自动增减库存。数量留空可登记有、无或待确认；调料只登记有无。</view>
       <view v-if="canAccess(session,'inventory','EDIT')" class="stock-form">
         <view class="filters"><text class="filter" :class="{selected:stockItem.kind==='FOOD'}" @tap="chooseKind('FOOD')">食材</text><text class="filter" :class="{selected:stockItem.kind==='SEASONING'}" @tap="chooseKind('SEASONING')">调料</text></view>
-        <input v-model="stockItem.name" :disabled="!!editingStock" class="input" placeholder="名称" /><view v-if="stockItem.kind==='FOOD'" class="form-row"><input v-model="stockItem.quantity" type="digit" class="input" placeholder="数量，留空待确认" /><input v-model="stockItem.unit" :disabled="!!editingStock" class="input" placeholder="单位" /></view>
-        <view v-if="stockItem.kind==='SEASONING'||stockItem.quantity===''" class="filters"><text v-for="(label,key) in {PRESENT:'有',ABSENT:'无',UNKNOWN:'待确认'}" :key="key" class="filter" :class="{selected:stockItem.availability===key}" @tap="stockItem.availability=key">{{label}}</text></view>
-        <input v-model="stockItem.location" :disabled="!!editingStock" class="input" placeholder="存放位置" /><picker mode="date" :value="stockItem.expiresAt" @change="stockItem.expiresAt=$event.detail.value"><text class="hint">到期日：{{stockItem.expiresAt||'未填写'}} ›</text></picker><text class="hint" @tap="stockItem.expiresAt=''">清空到期日</text>
+        <input v-model="stockItem.name" :disabled="busy||!!editingStock" class="input" placeholder="名称" /><view v-if="stockItem.kind==='FOOD'" class="form-row"><input :disabled="busy" v-model="stockItem.quantity" type="digit" class="input" placeholder="数量，留空待确认" /><input v-model="stockItem.unit" :disabled="busy||!!editingStock" class="input" placeholder="单位" /></view>
+        <view v-if="stockItem.kind==='SEASONING'||stockItem.quantity===''" class="filters"><text v-for="(label,key) in {PRESENT:'有',ABSENT:'无',UNKNOWN:'待确认'}" :key="key" class="filter" :class="{selected:stockItem.availability===key}" @tap="chooseAvailability(key)">{{label}}</text></view>
+        <input v-model="stockItem.location" :disabled="busy||!!editingStock" class="input" placeholder="存放位置" /><picker :disabled="busy" mode="date" :value="stockItem.expiresAt" @change="chooseExpiry($event.detail.value)"><text class="hint">到期日：{{stockItem.expiresAt||'未填写'}} ›</text></picker><text class="hint" @tap="chooseExpiry('')">清空到期日</text><text v-if="editingStock" class="hint">名称、单位和位置不可修改；不同存放位置请另建记录。</text>
         <button :disabled="loading" @tap="saveStock">{{editingStock?'保存核实后的库存':'登记库存'}}</button><button v-if="editingStock" @tap="resetStock">取消修改</button>
       </view>
-      <view v-if="!loading&&!inventory.length" class="empty">还没有录入库存</view>
-      <view v-for="item in inventory" :key="item.id" class="stock-item"><view><text class="item-name">{{item.ingredient.name}}</text><text class="category">{{item.ingredient.kind==='SEASONING'?'调料':'食材'}} · {{item.location||'未设位置'}}</text><text v-if="item.expiresAt" class="category">到期日 {{item.expiresAt.slice(0,10)}}</text><button v-if="canAccess(session,'inventory','EDIT')" @tap="editStock(item)">核实 / 调整</button></view><text class="stock-quantity">{{item.ingredient.kind==='SEASONING'?({PRESENT:'有',ABSENT:'无',UNKNOWN:'待确认'})[item.availability]:quantityText(item.quantity,item.unit)}}</text></view>
+      <view v-if="!busy&&!errorText&&!inventory.length" class="empty">{{canAccess(session,'inventory')?'还没有录入库存':'尚未获得库存权限'}}</view>
+      <view v-for="item in inventory" :key="item.id" class="stock-item"><view><text class="item-name">{{item.ingredient.name}}</text><text class="category">{{item.ingredient.kind==='SEASONING'?'调料':'食材'}} · {{item.location||'未设位置'}}</text><text v-if="item.expiresAt" class="category">到期日 {{shanghaiDate(item.expiresAt)}}</text><button v-if="canAccess(session,'inventory','EDIT')" @tap="editStock(item)">核实 / 调整</button></view><text class="stock-quantity">{{stockText(item)}}</text></view>
     </view>
   </view>
 </template>

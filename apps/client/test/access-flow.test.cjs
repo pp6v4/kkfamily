@@ -641,8 +641,8 @@ test('Meal completion confirms explicitly, is retryable, and has no stock payloa
 test('Shopping repeat reuses one request id after failure and status update carries the item version',async()=>{
   const uni=mockUni(),repeatIds=[],updates=[];let fail=true;
   const item={id:'shopping-a',version:6,name:'番茄',quantity:'2',unit:'个',status:'PURCHASED',sourceType:'MANUAL',sourceId:null,sourceVersion:null,purchasedAt:'2026-09-01',previousItemId:null};
-  const page=loadPage('src/pages/shopping/index.vue',{'../../services/session':{canAccess:allowed,refreshAccess:async()=>mealSession},'../../services/family-api':{listShoppingLists:async()=>[],listInventory:async()=>[],repeatShoppingItem:async(_,requestId)=>{repeatIds.push(requestId);if(fail)throw Error('暂时失败');return item;},updateShoppingItem:async(value,status)=>{updates.push({value,status});return value;}}},uni);
-  page.session.value=mealSession;await page.repeat(item);fail=false;await page.repeat(item);
+  const page=loadPage('src/pages/shopping/index.vue',{'../../services/session':{canAccess:allowed,getStoredSession:()=>mealSession,refreshAccess:async()=>mealSession},'../../services/transport':{ApiError},'../../services/trip-form':tripForm,'../../services/family-api':{listShoppingLists:async()=>[{items:[item]}],listInventory:async()=>[],repeatShoppingItem:async(_,requestId)=>{repeatIds.push(requestId);if(fail)throw Error('暂时失败');return item;},updateShoppingItem:async(value,status)=>{updates.push({value,status});return value;}}},uni);
+  page.pageVisible.value=true;page.session.value=mealSession;page.items.value=[item];await page.repeat(item);fail=false;await page.repeat(item);
   assert.equal(repeatIds[0],repeatIds[1]);await page.setStatus(item,'NEXT_TRIP');assert.equal(updates[0].value.version,6);assert.equal(updates[0].status,'NEXT_TRIP');
 });
 test('Family API serializes optimistic shopping version instead of a blind status write',async()=>{
