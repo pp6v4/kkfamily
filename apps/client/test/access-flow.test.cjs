@@ -591,7 +591,7 @@ test('My home displays the approved website ICP filing number and supports copyi
 const mealSession={...family,effectivePermissions:{meals:'MANAGE',recipes:'VIEW',inventory:'EDIT',shopping:'EDIT'}};
 function mealRecord(overrides={}) {return {id:'meal-a',version:7,snapshotVersion:1,localDate:'2026-09-01',slotKey:'',scheduledAt:'2026-09-01T18:00:00+08:00',mealType:'DINNER',status:'CONFIRMED',legacyWithoutSnapshot:false,items:[],menu:[],...overrides};}
 function mealDependencies(overrides={}) {
-  return {'../../services/session':{canAccess:allowed,refreshAccess:async()=>mealSession},'../../services/calendar-navigation':{takeCalendarTarget:()=>undefined},'../../services/family-api':{
+  return {'../../services/session':{canAccess:allowed,getStoredSession:()=>mealSession,refreshAccess:async()=>mealSession},'../../services/transport':{ApiError},'../../services/trip-form':tripForm,'../../services/calendar-navigation':{takeCalendarTarget:()=>undefined},'../../services/family-api':{
     mealTypeCodes:{早餐:'BREAKFAST',午餐:'LUNCH',晚餐:'DINNER',加餐:'OTHER'},mealTypeLabel:()=> '晚餐',listMeals:async()=>[],listRecipeCategories:async()=>[],listRecipes:async()=>[],recalculateMeal:async()=>[],listMealSnapshots:async()=>[],...overrides,
   }};
 }
@@ -600,7 +600,7 @@ test('Recipe manager can add, edit, order and archive categories, then update re
   const manager={...mealSession,effectivePermissions:{...mealSession.effectivePermissions,recipes:'MANAGE'}};
   const recipe={id:'recipe-a',version:4,name:'烤鱼',status:'PUBLISHED',category:null,ingredients:[],seasonings:[],steps:['烤熟']};
   const page=loadPage('src/pages/meal/index.vue',mealDependencies({createRecipeCategory:async(name,sortOrder)=>{categories.push({name,sortOrder});return{id:'category-a',name,sortOrder,version:1};},updateRecipeCategory:async(value,input)=>{categoryUpdates.push({version:value.version,...input});return{...value,...input,version:value.version+1};},archiveRecipeCategory:async value=>{categoryArchives.push(value.version);return{...value,version:value.version+1,archivedAt:'2026-09-03'};},updateRecipeStatus:async(value,status)=>{statuses.push({version:value.version,status});return{...value,status,version:value.version+1};}}),uni);
-  page.session.value=manager;page.recipeCategories.value=[{id:'category-old',name:'主食',sortOrder:0,version:2}];page.categoryName.value='  海鲜  ';await page.saveCategory();
+  page.pageVisible.value=true;page.session.value=manager;page.recipeCategories.value=[{id:'category-old',name:'主食',sortOrder:0,version:2}];page.categoryName.value='  海鲜  ';await page.saveCategory();
   assert.deepEqual(categories,[{name:'海鲜',sortOrder:1}]);assert.equal(page.categoryName.value,'');assert.equal(page.recipeCategories.value[1].name,'海鲜');
   page.startCategoryEdit(page.recipeCategories.value[0]);page.categoryEditName.value='  家常菜 ';page.categoryEditOrder.value='5';await page.saveCategoryEdit();
   assert.deepEqual(categoryUpdates,[{version:2,name:'家常菜',sortOrder:5}]);const edited=page.recipeCategories.value.find(item=>item.id==='category-old');assert.equal(edited.version,3);
@@ -626,7 +626,7 @@ test('Meal confirmation modal never confirms when the user cancels',async()=>{
   const uni=mockUni();let modal,transitions=0;
   uni.showModal=input=>modal=input;
   const page=loadPage('src/pages/meal/index.vue',mealDependencies({transitionMeal:async meal=>{transitions++;return {...meal,status:'CONFIRMED'};}}),uni);
-  page.session.value=mealSession;page.meal.value=mealRecord({status:'DRAFT',version:3});
+  page.pageVisible.value=true;page.session.value=mealSession;page.meal.value=mealRecord({status:'DRAFT',version:3});
   page.confirmAction('confirm');await modal.success({confirm:false,cancel:true});assert.equal(transitions,0);
   page.confirmAction('confirm');await modal.success({confirm:true,cancel:false});assert.equal(transitions,1);
 });
@@ -634,7 +634,7 @@ test('Meal completion confirms explicitly, is retryable, and has no stock payloa
   const uni=mockUni(),requests=[];let modal,fail=true;
   uni.showModal=input=>modal=input;
   const page=loadPage('src/pages/meal/index.vue',mealDependencies({completeMeal:async meal=>{requests.push(meal);if(fail)throw Error('网络中断');return mealRecord({status:'COMPLETED',version:8});}}),uni);
-  page.session.value=mealSession;page.meal.value=mealRecord();page.finishCooking();await modal.success({confirm:false,cancel:true});assert.equal(requests.length,0);
+  page.pageVisible.value=true;page.session.value=mealSession;page.meal.value=mealRecord();page.finishCooking();await modal.success({confirm:false,cancel:true});assert.equal(requests.length,0);
   page.finishCooking();await modal.success({confirm:true,cancel:false});assert.equal(requests[0].version,7);assert.match(page.errorText.value,/网络中断/);
   fail=false;page.finishCooking();await modal.success({confirm:true,cancel:false});assert.equal(requests[1].version,7);
 });
