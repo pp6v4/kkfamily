@@ -18,11 +18,11 @@ function evaluate(source, dependencies, uni) {
   vm.runInNewContext(result.outputText,{module,exports:module.exports,require:id=>{if(id in dependencies)return dependencies[id];throw Error('Unexpected import '+id);},uni,console,setTimeout,clearTimeout,Map,Set,Promise,Error,Date}, {timeout:1000});
   return module.exports;
 }
-function loadPage(relative, dependencies, uni) {
+function loadPage(relative, dependencies, uni, props = {}) {
   const filename=path.join(ROOT,relative), {descriptor}=parse(fs.readFileSync(filename,'utf8'),{filename});
   const script=compileScript(descriptor,{id:'component-test',inlineTemplate:false});
   const module=evaluate(script.content,{'vue':vue,'@dcloudio/uni-app':{onShow(){},onLoad(){},onHide(){},onUnload(){}},...dependencies},uni);
-  return module.default.setup({}, {expose(){}});
+  return module.default.setup(props, {expose(){},emit(){}});
 }
 function mockUni() {
   const values=new Map(), routes=[];
@@ -30,6 +30,118 @@ function mockUni() {
 }
 const family={householdId:'house-a',householdName:'虚构家庭',membershipId:'member-a',roles:['ADMIN'],accessToken:'fictional-token',version:1,effectivePermissions:{members:'MANAGE'}};
 function allowed(context,module,level='VIEW') {const ranks={VIEW:1,EDIT:2,MANAGE:3};return (ranks[context?.effectivePermissions?.[module]]||0)>=ranks[level];}
+
+const tripForm = loadTs('src/services/trip-form.ts',{},{});
+const sampleTrip={id:'trip-a',version:4,title:'露营',status:'PENDING',startsAt:'2026-09-01T23:30:00.000Z',endsAt:'2026-09-02T13:45:00.000Z',members:[],preparationGroups:[]};
+function itineraryForm(api={},canEdit=true){
+  const uni=mockUni(),errors=[];uni.showToast=input=>errors.push(input.title);
+  const page=loadPage('src/components/trip-itinerary.vue',{
+    vue:{...vue,watch(){},onUnmounted(){}},
+    '../services/trip-form':tripForm,
+    '../services/family-api':{getTripItinerary:async()=>({tripVersion:5,stops:[],legs:[],accommodations:[]}),...api},
+  },uni,{trip:sampleTrip,canEdit,active:true});
+  return{page,errors};
+}
+function campingForm(api={}){
+  const uni=mockUni(),errors=[];uni.showToast=input=>errors.push(input.title);
+  const page=loadPage('src/pages/camping/index.vue',{
+    vue:{...vue,onUnmounted(){}},
+    '../../components/trip-itinerary.vue':{},'../../components/trip-photos.vue':{},
+    '../../services/trip-form':tripForm,
+    '../../services/calendar-navigation':{takeCalendarTarget:()=>undefined},
+    '../../services/session':{canAccess:allowed,refreshAccess:async()=>({...family,effectivePermissions:{trips:'EDIT'}})},
+    '../../services/family-api':{listTrips:async()=>[],listPackingTemplates:async()=>[],...api},
+  },uni);
+  return{page,errors};
+}
+
+test('Travel dates use Shanghai cross-day boundaries and preserve unchanged timestamp precision',()=>{
+  assert.equal(tripForm.shanghaiDate('2026-09-01T23:30:15.123Z'),'2026-09-02');
+  assert.equal(tripForm.shanghaiDate('2026-09-01T15:59:59.999Z'),'2026-09-01');
+  assert.equal(tripForm.shanghaiDate('2026-09-01T16:00:00.000Z'),'2026-09-02');
+  assert.equal(tripForm.shanghaiDate('2028-02-28T20:00:00Z'),'2028-02-29');
+  assert.equal(tripForm.shanghaiDate('2026-12-31T20:00:00Z'),'2027-01-01');
+  assert.equal(tripForm.shanghaiDate('2026-09-01'),'2026-09-01');
+  assert.equal(tripForm.shanghaiDate('invalid'),'');
+  assert.equal(tripForm.travelTimestamp('2026-09-02','08','2026-09-01T23:30:15.123Z'),'2026-09-01T23:30:15.123Z');
+  assert.equal(tripForm.travelTimestamp('2026-09-03','18','2026-09-01T23:30:15.123Z'),'2026-09-03T18:00:00+08:00');
+  assert.equal(tripForm.travelTimestamp('','18','2026-09-01T23:30:15.123Z'),undefined);
+  for(const date of ['2026-02-29','2026-04-31','2026-13-01','2026-9-02',' '])assert.equal(tripForm.isCalendarDate(date),false,date);
+  assert.equal(tripForm.isCalendarDate('2028-02-29'),true);
+  assert.throws(()=>tripForm.travelTimestamp('2026-02-29','08'),/有效日期/);
+});
+
+test('Coordinates reject blanks, malformed values and out-of-range values while allowing genuine zero',()=>{
+  for(const [latitude,longitude] of [['',''],[' ','116'],['39',''],['91','116'],['39','181'],['-91','-181'],['NaN','0'],['0','Infinity'],['0x10','116']]){
+    assert.throws(()=>tripForm.parseCoordinates(latitude,longitude),/有效经纬度/);
+  }
+  for(const [latitude,longitude] of [['0','0'],[' 39.9042 ',' 116.4074 '],['-90','-180'],['90','180']]){
+    const point=tripForm.parseCoordinates(latitude,longitude);assert.equal(point.latitude,Number(latitude));assert.equal(point.longitude,Number(longitude));
+  }
+});
+
+test('Stop form blocks invalid coordinates and reversed dates before making any API request',async()=>{
+  let writes=0;const{page,errors}=itineraryForm({createTripStop:async()=>writes++});
+  page.newStop();page.stopForm.value.title='营地';await page.saveStop();
+  assert.equal(writes,0);assert.match(errors.at(-1),/有效经纬度/);assert.equal(page.showingStopForm.value,true);
+  Object.assign(page.stopForm.value,{latitude:'39',longitude:'116',arriveDate:'2026-09-03',leaveDate:'2026-09-02'});
+  await page.saveStop();assert.equal(writes,0);assert.match(errors.at(-1),/结束时间/);
+  page.stopForm.value.arriveDate='2026-02-29';await page.saveStop();assert.equal(writes,0);assert.match(errors.at(-1),/有效日期/);
+});
+
+test('Stop edit shows Shanghai date, preserves original times and explicitly clears note and dates',async()=>{
+  const writes=[];const{page}=itineraryForm({updateTripStop:async(trip,stop,input)=>{writes.push({trip,stop,input});return{tripVersion:5};}});
+  const stop={id:'stop-a',version:3,title:'集合',stopType:'MEETING',latitude:'39.1',longitude:'116.2',arriveAt:'2026-09-01T23:30:00Z',leaveAt:'2026-09-02T01:15:00Z',note:'旧备注'};
+  page.editStop(stop);assert.equal(page.stopForm.value.arriveDate,'2026-09-02');
+  page.stopForm.value.note=' ';page.stopForm.value.title='新集合点';await page.saveStop();
+  assert.equal(writes[0].input.arriveAt,stop.arriveAt);assert.equal(writes[0].input.leaveAt,stop.leaveAt);
+  assert.equal(writes[0].input.note,'');assert.equal(writes[0].input.title,'新集合点');assert.equal(writes[0].stop.version,3);
+  page.editStop(stop);page.stopForm.value.arriveDate='';page.stopForm.value.leaveDate='';await page.saveStop();
+  assert.equal(writes[1].input.arriveAt,null);assert.equal(writes[1].input.leaveAt,null);
+});
+
+test('New stop emits exact decimal coordinates, GCJ-02 date inputs and valid zero without invented dates',async()=>{
+  let submitted;const{page}=itineraryForm({createTripStop:async(trip,input)=>{submitted=input;return{tripVersion:5};}});
+  page.newStop();Object.assign(page.stopForm.value,{title:' 营地 ',latitude:'0',longitude:'116.4074',arriveDate:'2026-09-03',leaveDate:''});
+  await page.saveStop();assert.equal(submitted.title,'营地');assert.equal(submitted.latitude,0);assert.equal(submitted.longitude,116.4074);
+  assert.equal(submitted.arriveAt,'2026-09-03T08:00:00+08:00');assert.equal(submitted.leaveAt,undefined);assert.equal(page.showingStopForm.value,false);
+});
+
+test('Accommodation form rejects impossible dates, zero nights and missing selected stops',async()=>{
+  let writes=0;const{page,errors}=itineraryForm({createAccommodation:async()=>writes++});
+  page.newLodging();page.lodgingForm.value.name='营地小屋';
+  for(const [checkInDate,checkOutDate] of [['2026-02-29','2026-03-02'],['2026-09-03','2026-09-03'],['2026-09-04','2026-09-03']]){
+    Object.assign(page.lodgingForm.value,{checkInDate,checkOutDate});await page.saveLodging();assert.equal(writes,0);
+  }
+  Object.assign(page.lodgingForm.value,{checkInDate:'2026-09-03',checkOutDate:'2026-09-04',stopIndex:1});await page.saveLodging();
+  assert.equal(writes,0);assert.match(errors.at(-1),/关联节点/);
+});
+
+test('Accommodation edit clears optional fields explicitly without shifting calendar dates',async()=>{
+  let submitted;const{page}=itineraryForm({updateAccommodation:async(trip,item,input)=>{submitted=input;return{tripVersion:5};}});
+  const item={id:'hotel-a',version:2,name:'小屋',address:'旧地址',contact:'旧电话',reservationNote:'旧备注',stopId:null,checkInDate:'2026-09-02T00:00:00.000Z',checkOutDate:'2026-09-03T00:00:00.000Z'};
+  page.editLodging(item);assert.equal(page.lodgingForm.value.checkInDate,'2026-09-02');
+  Object.assign(page.lodgingForm.value,{address:' ',contact:'',reservationNote:''});await page.saveLodging();
+  assert.equal(submitted.address,'');assert.equal(submitted.contact,'');assert.equal(submitted.reservationNote,'');assert.equal(submitted.stopId,null);
+  assert.equal(submitted.checkInDate,'2026-09-02');assert.equal(submitted.checkOutDate,'2026-09-03');
+});
+
+test('Read-only itinerary cannot submit lingering stop or accommodation forms',async()=>{
+  let writes=0;const{page}=itineraryForm({createTripStop:async()=>writes++,createAccommodation:async()=>writes++},false);
+  page.newStop();Object.assign(page.stopForm.value,{title:'营地',latitude:'39',longitude:'116'});
+  page.newLodging();Object.assign(page.lodgingForm.value,{name:'小屋',checkInDate:'2026-09-02',checkOutDate:'2026-09-03'});
+  await page.saveStop();await page.saveLodging();assert.equal(writes,0);
+});
+
+test('Camping trip edits preserve exact timestamps and creation rejects inverted date range',async()=>{
+  let submitted,creates=0;
+  const{page,errors}=campingForm({updateTrip:async(trip,input)=>{submitted=input;return{...trip,...input,version:5};},createTrip:async()=>creates++});
+  page.trips.value=[sampleTrip];page.selectedTripId.value=sampleTrip.id;page.startTripEdit();
+  assert.equal(page.tripEditForm.value.startsAt,'2026-09-02');assert.equal(page.tripEditForm.value.endsAt,'2026-09-02');
+  page.tripEditForm.value.title='新行程名称';await page.saveTripEdit();assert.equal(submitted.startsAt,sampleTrip.startsAt);assert.equal(submitted.endsAt,sampleTrip.endsAt);
+  Object.assign(page.tripForm.value,{title:'露营',startsAt:'2026-09-04',endsAt:'2026-09-03'});await page.saveTrip();assert.equal(creates,0);assert.match(errors.at(-1),/结束时间/);
+  page.tripForm.value.startsAt='2026-02-29';await page.saveTrip();assert.equal(creates,0);assert.match(errors.at(-1),/有效日期/);
+});
 
 test('JSON and binary requests directly use the verified HTTPS API without redirects',async()=>{
   const config=loadTs('src/services/config.ts',{},{});

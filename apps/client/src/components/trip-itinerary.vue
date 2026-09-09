@@ -1,5 +1,6 @@
 <script setup lang="ts">
 import { computed, onUnmounted, ref, watch } from 'vue';
+import { assertTravelOrder, isCalendarDate, parseCoordinates, shanghaiDate, travelTimestamp } from '../services/trip-form';
 import { createAccommodation, createTripLeg, createTripStop, getTripItinerary, getTripStopDeleteImpact, removeAccommodation, removeTripLeg, removeTripStop, reorderTripStops, updateAccommodation, updateTripLeg, updateTripStop, type Accommodation, type Trip, type TripItinerary, type TripLeg, type TripStop } from '../services/family-api';
 
 const props=defineProps<{trip:Trip;canEdit:boolean;active:boolean}>();
@@ -32,9 +33,24 @@ const markers=computed(()=>itinerary.value.stops.map((stop,index)=>({id:index+1,
 const polylines=computed(()=>itinerary.value.legs.map(leg=>{const planned=leg.routeKind==='PLANNED'&&!leg.staleAt&&Array.isArray(leg.geometryJson);const raw=planned?leg.geometryJson!:[[Number(leg.fromStop.longitude),Number(leg.fromStop.latitude)],[Number(leg.toStop.longitude),Number(leg.toStop.latitude)]];const dotted=props.trip.status==='PLANNING'||props.trip.status==='PENDING'||Boolean(leg.staleAt);return{points:raw.map(point=>({longitude:Number(point[0]),latitude:Number(point[1])})),color:dotted?(pulse.value?'#6ea979':'#b6cfb7'):'#4f8d66',width:5,dottedLine:dotted,arrowLine:!dotted&&(props.trip.status==='DEPARTING'||props.trip.status==='COMPLETED')}}));
 
 function newStop(){editingStop.value=undefined;stopForm.value={title:'',typeIndex:2,latitude:'',longitude:'',arriveDate:'',leaveDate:'',note:''};showingStopForm.value=true;}
-function editStop(stop:TripStop){editingStop.value=stop;stopForm.value={title:stop.title,typeIndex:Math.max(0,stopTypes.findIndex(item=>item.value===stop.stopType)),latitude:String(Number(stop.latitude)),longitude:String(Number(stop.longitude)),arriveDate:stop.arriveAt?dateOnly(stop.arriveAt):'',leaveDate:stop.leaveAt?dateOnly(stop.leaveAt):'',note:stop.note||''};showingStopForm.value=true;}
+function editStop(stop:TripStop){editingStop.value=stop;stopForm.value={title:stop.title,typeIndex:Math.max(0,stopTypes.findIndex(item=>item.value===stop.stopType)),latitude:String(Number(stop.latitude)),longitude:String(Number(stop.longitude)),arriveDate:stop.arriveAt?shanghaiDate(stop.arriveAt):'',leaveDate:stop.leaveAt?shanghaiDate(stop.leaveAt):'',note:stop.note||''};showingStopForm.value=true;}
 function choosePoint(){uni.chooseLocation({success:result=>{stopForm.value.latitude=String(result.latitude);stopForm.value.longitude=String(result.longitude);if(!stopForm.value.title)stopForm.value.title=result.name||result.address||'行程地点';},fail:()=>uni.showToast({title:'未选择位置，可继续手工填写经纬度',icon:'none'})});}
-async function saveStop(){const form=stopForm.value,latitude=Number(form.latitude),longitude=Number(form.longitude);if(!form.title.trim()||!Number.isFinite(latitude)||!Number.isFinite(longitude)){uni.showToast({title:'填写节点名称和有效经纬度',icon:'none'});return;}const input={title:form.title.trim(),stopType:stopTypes[form.typeIndex].value,latitude,longitude,arriveAt:form.arriveDate?`${form.arriveDate}T08:00:00+08:00`:undefined,leaveAt:form.leaveDate?`${form.leaveDate}T18:00:00+08:00`:undefined,note:form.note.trim()||undefined};try{const result=editingStop.value?await updateTripStop(props.trip,editingStop.value,{...input,arriveAt:input.arriveAt??null,leaveAt:input.leaveAt??null}):await createTripStop(props.trip,input);emitVersion(result.tripVersion);showingStopForm.value=false;await load();}catch(error){toast(error);}}
+async function saveStop(){
+  if(!props.canEdit)return;
+  const form=stopForm.value,original=editingStop.value;
+  try{
+    if(!form.title.trim())throw new Error('请填写节点名称');
+    const coordinates=parseCoordinates(form.latitude,form.longitude);
+    const stopType=stopTypes[form.typeIndex]?.value;
+    if(!stopType)throw new Error('请选择节点类型');
+    const arriveAt=travelTimestamp(form.arriveDate,'08',original?.arriveAt);
+    const leaveAt=travelTimestamp(form.leaveDate,'18',original?.leaveAt);
+    assertTravelOrder(arriveAt,leaveAt);
+    const input={title:form.title.trim(),stopType,...coordinates,arriveAt,leaveAt,note:form.note.trim()};
+    const result=original?await updateTripStop(props.trip,original,{...input,arriveAt:arriveAt??null,leaveAt:leaveAt??null}):await createTripStop(props.trip,input);
+    emitVersion(result.tripVersion);showingStopForm.value=false;await load();
+  }catch(error){toast(error);}
+}
 async function moveStop(index:number,direction:-1|1){const target=index+direction;if(target<0||target>=itinerary.value.stops.length)return;const ids=itinerary.value.stops.map(stop=>stop.id);[ids[index],ids[target]]=[ids[target],ids[index]];try{const result=await reorderTripStops(props.trip,ids);emitVersion(result.tripVersion);await load();}catch(error){toast(error);}}
 function deleteStop(stop:TripStop){getTripStopDeleteImpact(props.trip.id,stop.id).then(impact=>{const detail=`关联路线 ${impact.legs.length} 条、住宿 ${impact.accommodations.length} 条。路线会归档，住宿会保留为行程级记录。`;uni.showModal({title:'移除行程节点',content:detail,success:async result=>{if(!result.confirm)return;try{const removed=await removeTripStop(props.trip,stop,true);emitVersion(removed.tripVersion);await load();}catch(error){toast(error);}}});}).catch(toast);}
 
@@ -45,7 +61,19 @@ function deleteLeg(leg:TripLeg){uni.showModal({title:'移除路线',content:`移
 
 function newLodging(){editingLodging.value=undefined;lodgingForm.value={name:'',address:'',checkInDate:'',checkOutDate:'',contact:'',reservationNote:'',stopIndex:0};showingLodgingForm.value=true;}
 function editLodging(item:Accommodation){editingLodging.value=item;lodgingForm.value={name:item.name,address:item.address||'',checkInDate:dateOnly(item.checkInDate),checkOutDate:dateOnly(item.checkOutDate),contact:item.contact||'',reservationNote:item.reservationNote||'',stopIndex:item.stopId?itinerary.value.stops.findIndex(stop=>stop.id===item.stopId)+1:0};showingLodgingForm.value=true;}
-async function saveLodging(){const form=lodgingForm.value;if(!form.name.trim()||!form.checkInDate||!form.checkOutDate){uni.showToast({title:'填写住宿名称和入住退房日期',icon:'none'});return;}const stopId=form.stopIndex?itinerary.value.stops[form.stopIndex-1]?.id:undefined;const input={stopId,name:form.name.trim(),address:form.address.trim()||undefined,checkInDate:form.checkInDate,checkOutDate:form.checkOutDate,contact:form.contact.trim()||undefined,reservationNote:form.reservationNote.trim()||undefined};try{const result=editingLodging.value?await updateAccommodation(props.trip,editingLodging.value,{...input,stopId:stopId??null}):await createAccommodation(props.trip,input);emitVersion(result.tripVersion);showingLodgingForm.value=false;await load();}catch(error){toast(error);}}
+async function saveLodging(){
+  if(!props.canEdit)return;
+  const form=lodgingForm.value;
+  try{
+    if(!form.name.trim()||!isCalendarDate(form.checkInDate)||!isCalendarDate(form.checkOutDate))throw new Error('填写住宿名称和有效的入住退房日期');
+    if(form.checkOutDate<=form.checkInDate)throw new Error('退房日期必须晚于入住日期');
+    const stopId=form.stopIndex?itinerary.value.stops[form.stopIndex-1]?.id:undefined;
+    if(form.stopIndex&&!stopId)throw new Error('关联节点已变更，请重新选择');
+    const input={stopId,name:form.name.trim(),address:form.address.trim(),checkInDate:form.checkInDate,checkOutDate:form.checkOutDate,contact:form.contact.trim(),reservationNote:form.reservationNote.trim()};
+    const result=editingLodging.value?await updateAccommodation(props.trip,editingLodging.value,{...input,stopId:stopId??null}):await createAccommodation(props.trip,input);
+    emitVersion(result.tripVersion);showingLodgingForm.value=false;await load();
+  }catch(error){toast(error);}
+}
 function deleteLodging(item:Accommodation){uni.showModal({title:'移除住宿',content:`移除“${item.name}”？`,success:async result=>{if(!result.confirm)return;try{const removed=await removeAccommodation(props.trip,item);emitVersion(removed.tripVersion);await load();}catch(error){toast(error);}}});}
 </script>
 

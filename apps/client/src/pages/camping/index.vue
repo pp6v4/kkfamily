@@ -5,6 +5,7 @@ import TripItinerary from '../../components/trip-itinerary.vue';
 import TripPhotos from '../../components/trip-photos.vue';
 import { canAccess, refreshAccess, type HouseholdContext } from '../../services/session';
 import { takeCalendarTarget } from '../../services/calendar-navigation';
+import { assertTravelOrder, shanghaiDate, travelTimestamp } from '../../services/trip-form';
 import { addTripMember, applyPackingTemplate, createPackingTemplate, createTrip, createTripPackingItem, createTripPreparationGroup, getTrip, listPackingTemplates, listTripCandidates, listTripPackingItems, listTrips, removeTripPackingItem, updatePackingTemplate, updateTrip, updateTripMember, updateTripPackingItem, updateTripPreparationGroup, updateTripStatus, type PackingTemplate, type Trip, type TripPackingItem, type TripPreparationGroup } from '../../services/family-api';
 
 type ViewName = 'trips' | 'templates';
@@ -68,7 +69,7 @@ const overviewPolylines = computed(() => trips.value.flatMap(trip => {
 }));
 
 function message(error: unknown) { return error instanceof Error ? error.message : '操作失败'; }
-function dateText(value: string) { const date = new Date(value); return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`; }
+function dateText(value: string) { return shanghaiDate(value); }
 function statusText(status: Trip['status']) { return ({ PLANNING: '规划中', PENDING: '待出行', DEPARTING: '旅途中', COMPLETED: '已完成', CANCELLED: '已取消' } as Record<Trip['status'], string>)[status]; }
 function quantityText(quantity: string | number | null, unit: string | null) { return quantity === null ? '' : `${Number(quantity)}${unit ? ` ${unit}` : ''}`; }
 function responsibleName(item: TripPackingItem) { return item.responsibleMembership?.user.nickname || (item.responsibleMembership ? '家庭成员' : '未分配'); }
@@ -102,7 +103,9 @@ function closeTrip() { selectedTripId.value = ''; packingItems.value = []; candi
 async function saveTrip() {
   if (!tripForm.value.title.trim() || !tripForm.value.startsAt) { uni.showToast({ title: '请填写行程名称和出发日期', icon: 'none' }); return; }
   try {
-    const trip = await createTrip({ title: tripForm.value.title.trim(), destination: tripForm.value.destination.trim() || undefined, startsAt: `${tripForm.value.startsAt}T08:00:00+08:00`, endsAt: tripForm.value.endsAt ? `${tripForm.value.endsAt}T20:00:00+08:00` : undefined });
+    const startsAt=travelTimestamp(tripForm.value.startsAt,'08')!,endsAt=travelTimestamp(tripForm.value.endsAt,'20');
+    assertTravelOrder(startsAt,endsAt);
+    const trip = await createTrip({ title: tripForm.value.title.trim(), destination: tripForm.value.destination.trim() || undefined, startsAt, endsAt });
     tripForm.value = { title: '', destination: '', startsAt: '', endsAt: '' }; creatingTrip.value = false; await loadData(); await openTrip(trip.id); uni.showToast({ title: '行程已创建', icon: 'success' });
   } catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
 }
@@ -117,7 +120,9 @@ async function saveTripEdit() {
   if (!trip || !form.title.trim() || !form.startsAt) { uni.showToast({ title: '请填写行程名称和出发日期', icon: 'none' }); return; }
   if (form.endsAt && form.endsAt < form.startsAt) { uni.showToast({ title: '返回日期不能早于出发日期', icon: 'none' }); return; }
   try {
-    const updated = await updateTrip(trip, { title: form.title.trim(), destination: form.destination.trim(), startsAt: `${form.startsAt}T08:00:00+08:00`, endsAt: form.endsAt ? `${form.endsAt}T20:00:00+08:00` : null });
+    const startsAt=travelTimestamp(form.startsAt,'08',trip.startsAt)!,endsAt=travelTimestamp(form.endsAt,'20',trip.endsAt);
+    assertTravelOrder(startsAt,endsAt);
+    const updated = await updateTrip(trip, { title: form.title.trim(), destination: form.destination.trim(), startsAt, endsAt: endsAt??null });
     replaceTrip(updated); editingTrip.value = false; uni.showToast({ title: '行程已更新', icon: 'success' });
   } catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
 }
