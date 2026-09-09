@@ -32,7 +32,7 @@ const family={householdId:'house-a',householdName:'虚构家庭',membershipId:'m
 function allowed(context,module,level='VIEW') {const ranks={VIEW:1,EDIT:2,MANAGE:3};return (ranks[context?.effectivePermissions?.[module]]||0)>=ranks[level];}
 
 const tripForm = loadTs('src/services/trip-form.ts',{},{});
-const sampleTrip={id:'trip-a',version:4,title:'露营',status:'PENDING',startsAt:'2026-09-01T23:30:00.000Z',endsAt:'2026-09-02T13:45:00.000Z',members:[],preparationGroups:[]};
+const sampleTrip={id:'trip-a',version:4,title:'露营',status:'PENDING',startsAt:'2026-09-01T23:30:00.000Z',endsAt:'2026-09-02T13:45:00.000Z',members:[{membershipId:'member-a',tripRole:'OWNER',status:'ACTIVE',canEdit:true,membership:{user:{id:'user-a',nickname:'小扣'}}}],preparationGroups:[]};
 function itineraryForm(api={},canEdit=true){
   const uni=mockUni(),errors=[];uni.showToast=input=>errors.push(input.title);
   const page=loadPage('src/components/trip-itinerary.vue',{
@@ -42,17 +42,21 @@ function itineraryForm(api={},canEdit=true){
   },uni,{trip:sampleTrip,canEdit,active:true});
   return{page,errors};
 }
-function campingForm(api={}){
-  const uni=mockUni(),errors=[];uni.showToast=input=>errors.push(input.title);
+function campingForm(api={},access){
+  const uni=mockUni(),errors=[],lifecycle={};uni.showToast=input=>errors.push(input.title);
+  let stored={...family,effectivePermissions:{trips:'EDIT',packing_templates:'MANAGE'}};
   const page=loadPage('src/pages/camping/index.vue',{
     vue:{...vue,onUnmounted(){}},
+    '@dcloudio/uni-app':{onShow:fn=>lifecycle.show=fn,onHide:fn=>lifecycle.hide=fn,onUnload:fn=>lifecycle.unload=fn},
     '../../components/trip-itinerary.vue':{},'../../components/trip-photos.vue':{},
     '../../services/trip-form':tripForm,
+    '../../services/transport':{ApiError},
     '../../services/calendar-navigation':{takeCalendarTarget:()=>undefined},
-    '../../services/session':{canAccess:allowed,refreshAccess:async()=>({...family,effectivePermissions:{trips:'EDIT'}})},
+    '../../services/session':{canAccess:allowed,getStoredSession:()=>stored,refreshAccess:async()=>{const result=access?await access():stored;stored=result;return result;}},
     '../../services/family-api':{listTrips:async()=>[],listPackingTemplates:async()=>[],...api},
   },uni);
-  return{page,errors};
+  page.pageVisible.value=true;page.session.value=stored;
+  return{page,errors,lifecycle,uni,setStored:context=>{stored=context;}};
 }
 
 test('Travel dates use Shanghai cross-day boundaries and preserve unchanged timestamp precision',()=>{
@@ -141,6 +145,142 @@ test('Camping trip edits preserve exact timestamps and creation rejects inverted
   page.tripEditForm.value.title='新行程名称';await page.saveTripEdit();assert.equal(submitted.startsAt,sampleTrip.startsAt);assert.equal(submitted.endsAt,sampleTrip.endsAt);
   Object.assign(page.tripForm.value,{title:'露营',startsAt:'2026-09-04',endsAt:'2026-09-03'});await page.saveTrip();assert.equal(creates,0);assert.match(errors.at(-1),/结束时间/);
   page.tripForm.value.startsAt='2026-02-29';await page.saveTrip();assert.equal(creates,0);assert.match(errors.at(-1),/有效日期/);
+});
+
+function pendingValue(){let resolve,reject;const promise=new Promise((yes,no)=>{resolve=yes;reject=no;});return{promise,resolve,reject};}
+const sampleTripB={...sampleTrip,id:'trip-b',title:'另一趟行程',version:7};
+const campingContext={...family,effectivePermissions:{trips:'EDIT',packing_templates:'MANAGE'}};
+function selectCamping(page,trip=sampleTrip){page.trips.value=[trip];page.selectedTripId.value=trip.id;}
+
+test('Camping permission refresh immediately clears all private details and does not fetch denied modules',async()=>{
+  const access=pendingValue();let reads=0;
+  const{page}=campingForm({listTrips:async()=>{reads++;return[];},listPackingTemplates:async()=>{reads++;return[];}},()=>access.promise);
+  selectCamping(page);page.candidates.value=[{id:'private-candidate'}];page.packingItems.value=[{id:'private-item'}];page.groupName.value='家庭名称';page.tripEditForm.value.title='旧标题';
+  const loading=page.loadData();assert.equal(page.selectedTrip.value,undefined);assert.equal(page.session.value,undefined);assert.equal(page.candidates.value.length,0);assert.equal(page.packingItems.value.length,0);assert.equal(page.groupName.value,'');assert.equal(page.tripEditForm.value.title,'');
+  access.resolve({...campingContext,effectivePermissions:{}});await loading;
+  assert.equal(reads,0);assert.equal(page.trips.value.length,0);
+});
+
+test('Camping drops late lists after hiding and after unload, including private drafts',async()=>{
+  for(const end of ['hide','unload']){
+    const rows=pendingValue();const{page,lifecycle}=campingForm({listTrips:()=>rows.promise});
+    const loading=page.loadData();await new Promise(setImmediate);page.tripForm.value.title='临时草稿';page.templateForm.value.name='私有模板';
+    lifecycle[end]();rows.resolve([sampleTrip]);await loading;
+    assert.equal(page.trips.value.length,0);assert.equal(page.templates.value.length,0);assert.equal(page.session.value,undefined);assert.equal(page.tripForm.value.title,'');assert.equal(page.templateForm.value.name,'');
+    if(end==='unload'){page.pageVisible.value=true;await page.loadData();assert.equal(page.trips.value.length,0);}
+  }
+});
+
+test('Camping keeps the latest list response when overlapping refreshes finish out of order',async()=>{
+  const first=pendingValue();let calls=0;const{page}=campingForm({listTrips:()=>++calls===1?first.promise:Promise.resolve([sampleTripB])});
+  const old=page.loadData();await new Promise(setImmediate);await page.loadData();first.resolve([sampleTrip]);await old;
+  assert.equal(page.trips.value.length,1);assert.equal(page.trips.value[0].id,'trip-b');
+});
+
+test('Camping detail selection clears old data and ignores earlier trip and candidate responses',async()=>{
+  const old=pendingValue(),oldCandidates=pendingValue();
+  const{page}=campingForm({getTrip:id=>id==='trip-a'?old.promise:Promise.resolve(sampleTripB),listTripPackingItems:async id=>[{id:`${id}-item`}],listTripCandidates:id=>id==='trip-a'?oldCandidates.promise:Promise.resolve([{id:'b-candidate'}])});
+  selectCamping(page);page.packingItems.value=[{id:'old-item'}];const opening=page.openTrip('trip-a');assert.equal(page.selectedTrip.value,undefined);assert.equal(page.packingItems.value.length,0);
+  old.resolve(sampleTrip);await new Promise(setImmediate);await page.openTrip('trip-b');oldCandidates.resolve([{id:'a-candidate'}]);await opening;
+  assert.equal(page.selectedTrip.value.id,'trip-b');assert.equal(page.packingItems.value[0].id,'trip-b-item');assert.equal(page.candidates.value[0].id,'b-candidate');
+});
+
+test('Camping old failed detail cannot close a newer successful trip',async()=>{
+  const old=pendingValue();const{page,errors}=campingForm({getTrip:id=>id==='trip-a'?old.promise:Promise.resolve(sampleTripB),listTripPackingItems:async()=>[],listTripCandidates:async()=>[]});
+  const opening=page.openTrip('trip-a');await page.openTrip('trip-b');old.reject(new Error('旧请求失败'));await opening;
+  assert.equal(page.selectedTrip.value.id,'trip-b');assert.equal(errors.length,0);
+});
+
+test('Camping returning to the same family reopens its trip but another household does not inherit selection',async()=>{
+  for(const different of [false,true]){
+    let details=0;const{page,lifecycle,setStored}=campingForm({listTrips:async()=>[sampleTrip],getTrip:async()=>{details++;return sampleTrip;},listTripPackingItems:async()=>[],listTripCandidates:async()=>[]});
+    selectCamping(page);lifecycle.hide();setStored(different?{...campingContext,householdId:'house-b',membershipId:'member-b'}:campingContext);
+    page.pageVisible.value=true;await page.loadData();assert.equal(details,different?0:1);assert.equal(page.selectedTripId.value,different?'':'trip-a');
+  }
+});
+
+test('Camping packing mutation cannot refresh another trip or write back after hide',async()=>{
+  for(const hide of [true,false]){
+    const write=pendingValue();let reads=0;const{page,lifecycle}=campingForm({updateTripPackingItem:()=>write.promise,listTripPackingItems:async()=>{reads++;return[{id:'late-item'}];}});
+    selectCamping(page);const pending=page.togglePacked({id:'item-a',version:1,status:'PENDING'});assert.equal(page.tripBusy.value,true);
+    if(hide)lifecycle.hide();else{page.closeTrip();selectCamping(page,sampleTripB);page.packingItems.value=[{id:'b-item'}];}
+    write.resolve({});await pending;assert.equal(reads,0);assert.equal(page.packingItems.value[0]?.id,hide?undefined:'b-item');
+  }
+});
+
+test('Camping suppresses duplicate writes and uses the original trip id for a successful packing refresh',async()=>{
+  const write=pendingValue(),calls=[];const{page}=campingForm({updateTripPackingItem:(id,item,input)=>{calls.push(['write',id,input.status]);return write.promise;},listTripPackingItems:async id=>{calls.push(['read',id]);return[{id:'fresh',status:'PACKED'}];}});
+  selectCamping(page);const item={id:'item-a',version:1,status:'PENDING'};const pending=page.togglePacked(item);await page.togglePacked(item);
+  assert.equal(calls.length,1);write.resolve({});await pending;assert.deepEqual(calls,[['write','trip-a','PACKED'],['read','trip-a']]);assert.equal(page.packingItems.value[0].status,'PACKED');assert.equal(page.tripBusy.value,false);
+});
+
+test('Camping delete, revoke and status confirmation dialogs expire on trip change',async()=>{
+  for(const operation of ['removeItem','revokeMember','advanceStatus']){
+    let dialog,writes=0;const{page,uni}=campingForm({removeTripPackingItem:async()=>writes++,updateTripMember:async()=>writes++,updateTripStatus:async()=>writes++});
+    uni.showModal=input=>dialog=input;selectCamping(page);
+    const arg=operation==='revokeMember'?{membership:{user:{nickname:'同行成员'}}}:{id:'item-a',name:'桌子'};
+    await page[operation](arg);assert.ok(dialog,operation);page.closeTrip();selectCamping(page,sampleTripB);await dialog.success({confirm:true});assert.equal(writes,0,operation);
+  }
+});
+
+test('Camping refuses writes after stored account changes or trip permissions are read-only',async()=>{
+  for(const mode of ['identity','permission','history']){
+    let writes=0;const{page,setStored}=campingForm({updateTripPackingItem:async()=>writes++});selectCamping(page);
+    if(mode==='identity')setStored({...campingContext,membershipId:'member-b'});
+    else if(mode==='permission')page.session.value={...campingContext,effectivePermissions:{trips:'VIEW'}};
+    else page.trips.value=[{...sampleTrip,members:[{...sampleTrip.members[0],status:'HISTORY'}]}];
+    await page.togglePacked({id:'item-a',status:'PENDING'});assert.equal(writes,0,mode);
+  }
+});
+
+test('Camping ignores updates emitted by an unmounted trip and never downgrades versions',async()=>{
+  const old=pendingValue();let reads=0;const{page}=campingForm({getTrip:()=>{reads++;return old.promise;}});selectCamping(page,sampleTripB);
+  await page.itineraryChanged(99,'trip-a');assert.equal(reads,0);assert.equal(page.selectedTrip.value.version,7);
+  const pending=page.itineraryChanged(8,'trip-b');page.replaceTrip({...sampleTripB,version:10});old.resolve({...sampleTripB,version:8});await pending;
+  assert.equal(page.selectedTrip.value.version,10);
+});
+
+test('Camping template save ignores completion after leaving the tab',async()=>{
+  const write=pendingValue();let reads=0;const{page}=campingForm({createPackingTemplate:()=>write.promise,listPackingTemplates:async()=>{reads++;return[];}});
+  page.active.value='templates';page.newTemplate();page.templateForm.value.name='烧烤';page.templateForm.value.items[0].name='桌子';const saving=page.saveTemplate();
+  page.active.value='trips';write.resolve({});await saving;assert.equal(reads,0);assert.equal(page.showingTemplateForm.value,false);assert.equal(page.pageBusy.value,false);
+});
+
+test('Camping a current forbidden response clears loaded trip, candidates and draft content',async()=>{
+  const{page,errors}=campingForm({updateTripPackingItem:async()=>{throw new ApiError('行程权限已撤销',403);}});
+  selectCamping(page);page.packingItems.value=[{id:'item-a'}];page.candidates.value=[{id:'candidate-a'}];page.tripEditForm.value.title='私有行程';
+  await page.togglePacked({id:'item-a',status:'PENDING'});
+  assert.equal(page.trips.value.length,0);assert.equal(page.selectedTrip.value,undefined);assert.equal(page.candidates.value.length,0);assert.equal(page.tripEditForm.value.title,'');assert.match(errors.at(-1),/访问状态/);
+});
+
+test('Camping archive confirmation expires after choosing a different template form',async()=>{
+  let dialog,writes=0;const{page,uni}=campingForm({updatePackingTemplate:async()=>writes++});
+  page.active.value='templates';uni.showModal=input=>dialog=input;
+  page.archiveTemplate({id:'template-a',version:1,name:'烧烤',createdById:'member-a'});assert.ok(dialog);
+  page.newTemplate();await dialog.success({confirm:true});assert.equal(writes,0);assert.equal(page.showingTemplateForm.value,true);
+});
+
+test('Camping successful creation opens the new trip with fresh packing data and releases busy state',async()=>{
+  let input;const{page}=campingForm({createTrip:async value=>{input=value;return sampleTrip;},getTrip:async()=>sampleTrip,listTripPackingItems:async()=>[{id:'new-item'}],listTripCandidates:async()=>[]});
+  Object.assign(page.tripForm.value,{title:' 周末营地 ',startsAt:'2026-09-02',endsAt:'2026-09-03'});await page.saveTrip();
+  assert.equal(input.title,'周末营地');assert.equal(input.startsAt,'2026-09-02T08:00:00+08:00');assert.equal(input.endsAt,'2026-09-03T20:00:00+08:00');
+  assert.equal(page.selectedTrip.value.id,'trip-a');assert.equal(page.packingItems.value[0].id,'new-item');assert.equal(page.pageBusy.value,false);assert.equal(page.loadingTrip.value,false);
+});
+
+test('Camping normal owner member and group writes refresh their corresponding visible data',async()=>{
+  const calls=[];const updated={...sampleTrip,version:5,preparationGroups:[{id:'group-a',name:'我们家',members:[{membershipId:'member-a'}]}]};
+  const{page}=campingForm({addTripMember:async(trip,id)=>{calls.push(['member',trip,id]);return updated;},listTripCandidates:async()=>[{id:'next-candidate'}],createTripPreparationGroup:async(trip,name,ids)=>{calls.push(['group',trip,name,Array.from(ids)]);return{};},getTrip:async()=>updated});
+  selectCamping(page);page.candidates.value=[{id:'friend-a'}];await page.addMemberByIndex({detail:{value:'0'}});
+  assert.equal(page.selectedTrip.value.version,5);assert.equal(page.candidates.value[0].id,'next-candidate');
+  page.groupName.value=' 我们家 ';page.groupMemberIds.value=['member-a'];await page.saveGroup();
+  assert.deepEqual(calls,[['member','trip-a','friend-a'],['group','trip-a','我们家',['member-a']]]);assert.equal(page.groupName.value,'');assert.equal(page.tripBusy.value,false);
+});
+
+test('Camping completing a trip retains photo eligibility while disabling itinerary and packing changes',async()=>{
+  let dialog;const complete={...sampleTrip,status:'COMPLETED',version:5,members:[{...sampleTrip.members[0],status:'HISTORY'}]};
+  const{page,uni}=campingForm({updateTripStatus:async()=>complete});uni.showModal=input=>dialog=input;
+  selectCamping(page,{...sampleTrip,status:'DEPARTING'});await page.advanceStatus();await dialog.success({confirm:true});
+  assert.equal(page.selectedTrip.value.status,'COMPLETED');assert.equal(page.canEditTrip.value,false);assert.equal(page.canAddTripPhotos.value,true);assert.equal(page.tripBusy.value,false);
 });
 
 test('JSON and binary requests directly use the verified HTTPS API without redirects',async()=>{

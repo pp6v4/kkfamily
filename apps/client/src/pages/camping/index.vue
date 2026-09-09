@@ -1,11 +1,12 @@
 <script setup lang="ts">
-import { computed, onUnmounted, ref } from 'vue';
-import { onHide, onShow } from '@dcloudio/uni-app';
+import { computed, onUnmounted, ref, watch } from 'vue';
+import { onHide, onShow, onUnload } from '@dcloudio/uni-app';
 import TripItinerary from '../../components/trip-itinerary.vue';
 import TripPhotos from '../../components/trip-photos.vue';
-import { canAccess, refreshAccess, type HouseholdContext } from '../../services/session';
+import { canAccess, getStoredSession, refreshAccess, type HouseholdContext } from '../../services/session';
 import { takeCalendarTarget } from '../../services/calendar-navigation';
 import { assertTravelOrder, shanghaiDate, travelTimestamp } from '../../services/trip-form';
+import { ApiError } from '../../services/transport';
 import { addTripMember, applyPackingTemplate, createPackingTemplate, createTrip, createTripPackingItem, createTripPreparationGroup, getTrip, listPackingTemplates, listTripCandidates, listTripPackingItems, listTrips, removeTripPackingItem, updatePackingTemplate, updateTrip, updateTripMember, updateTripPackingItem, updateTripPreparationGroup, updateTripStatus, type PackingTemplate, type Trip, type TripPackingItem, type TripPreparationGroup } from '../../services/family-api';
 
 type ViewName = 'trips' | 'templates';
@@ -31,7 +32,8 @@ const groupName = ref('');
 const groupMemberIds = ref<string[]>([]);
 const editingGroupId = ref('');
 
-const selectedTrip = computed(() => trips.value.find((trip) => trip.id === selectedTripId.value));
+const loadingTrip = ref(false), tripBusy = ref(false), pageBusy = ref(false);
+const selectedTrip = computed(() => loadingTrip.value ? undefined : trips.value.find((trip) => trip.id === selectedTripId.value));
 const currentTripMember = computed(() => selectedTrip.value?.members.find(m=>m.membershipId===session.value?.membershipId));
 const canEditTrip = computed(() => canAccess(session.value,'trips','EDIT') && currentTripMember.value?.status === 'ACTIVE' && Boolean(currentTripMember.value?.canEdit) && !['COMPLETED','CANCELLED'].includes(selectedTrip.value?.status || ''));
 const canAddTripPhotos = computed(() => canAccess(session.value,'trips','EDIT') && ['ACTIVE','HISTORY'].includes(currentTripMember.value?.status || '') && Boolean(currentTripMember.value?.canEdit));
@@ -43,6 +45,27 @@ const packedCount = computed(() => packingItems.value.filter((item) => item.stat
 const pageVisible = ref(false);
 const overviewPulse = ref(false);
 let overviewTimer: ReturnType<typeof setInterval> | undefined;
+let viewEpoch=0, detailEpoch=0, packingRead=0, tripRead=0, disposed=false;
+type ViewStamp={epoch:number;detail:number;householdId:string;membershipId:string;tripId:string;tab:ViewName};
+let returnTarget:{id:string;householdId:string;membershipId:string}|undefined;
+function stamp():ViewStamp{return{epoch:viewEpoch,detail:detailEpoch,householdId:session.value?.householdId||'',membershipId:session.value?.membershipId||'',tripId:selectedTripId.value,tab:active.value};}
+function current(scope:ViewStamp){const stored=getStoredSession();return!disposed&&pageVisible.value&&scope.epoch===viewEpoch&&scope.detail===detailEpoch&&scope.tab===active.value&&scope.tripId===selectedTripId.value&&Boolean(scope.membershipId)&&session.value?.householdId===scope.householdId&&session.value?.membershipId===scope.membershipId&&stored?.householdId===scope.householdId&&stored?.membershipId===scope.membershipId;}
+function clearForms(){creatingTrip.value=false;editingTrip.value=false;showingTemplateForm.value=false;editingTemplateId.value='';showingItemForm.value=false;showingCollaboration.value=false;tripForm.value={title:'',destination:'',startsAt:'',endsAt:''};tripEditForm.value={title:'',destination:'',startsAt:'',endsAt:''};templateForm.value={name:'',description:'',items:[{name:'',quantity:'',unit:'',note:''}]};itemForm.value={name:'',quantity:'',unit:'',note:''};resetGroupForm();}
+function clearView(){viewEpoch++;detailEpoch++;trips.value=[];templates.value=[];packingItems.value=[];candidates.value=[];session.value=undefined;selectedTripId.value='';loadingTrip.value=false;tripBusy.value=false;pageBusy.value=false;clearForms();}
+function scopedError(scope:ViewStamp,error:unknown){
+  if(disposed||!pageVisible.value||scope.epoch!==viewEpoch||scope.detail!==detailEpoch||scope.tripId!==selectedTripId.value||scope.tab!==active.value)return;
+  if(error instanceof ApiError&&[401,403,404].includes(error.statusCode)){clearView();uni.showToast({title:'访问状态已变化，请重新进入露营页面',icon:'none'});return;}
+  if(current(scope))uni.showToast({title:message(error),icon:'none',duration:3000});
+}
+async function refreshPacking(scope:ViewStamp){const request=++packingRead;const rows=await listTripPackingItems(scope.tripId);if(current(scope)&&request===packingRead)packingItems.value=rows;}
+async function refreshTrip(scope:ViewStamp){const request=++tripRead;const trip=await getTrip(scope.tripId);if(current(scope)&&request===tripRead)replaceTrip(trip);}
+async function refreshCandidates(scope:ViewStamp){if(!current(scope))return;if(!isTripOwner.value){candidates.value=[];return;}const rows=await listTripCandidates(scope.tripId);if(current(scope)&&isTripOwner.value)candidates.value=rows;}
+async function mutateTrip<T>(write:(trip:Trip)=>Promise<T>,after:(result:T,scope:ViewStamp)=>Promise<void>|void,owner=false){
+  const trip=selectedTrip.value,scope=stamp();
+  if(!trip||!current(scope)||tripBusy.value||!(owner?isTripOwner.value:canEditTrip.value))return;
+  tripBusy.value=true;
+  try{const result=await write(trip);if(current(scope))await after(result,scope);}catch(error){scopedError(scope,error);}finally{if(current(scope))tripBusy.value=false;}
+}
 const overviewPoints = computed(() => trips.value.flatMap(trip => (trip.stops || []).map(stop => ({ latitude: Number(stop.latitude), longitude: Number(stop.longitude) }))));
 const overviewCenter = computed(() => overviewPoints.value[0] || { latitude: 35.8617, longitude: 104.1954 });
 const overviewMarkers = computed(() => trips.value.flatMap((trip, tripIndex) => (trip.stops || []).map((stop, stopIndex) => ({
@@ -75,43 +98,55 @@ function quantityText(quantity: string | number | null, unit: string | null) { r
 function responsibleName(item: TripPackingItem) { return item.responsibleMembership?.user.nickname || (item.responsibleMembership ? '家庭成员' : '未分配'); }
 
 async function loadData() {
+  if(disposed||!pageVisible.value)return false;
   const target=takeCalendarTarget('TRIP');
-  if (target) { active.value='trips'; if (target.sourceId) selectedTripId.value=target.sourceId; else { creatingTrip.value=true; tripForm.value.startsAt=target.date; } }
-  trips.value=[]; templates.value=[]; packingItems.value=[]; session.value=undefined;
+  const previous=session.value?{id:selectedTripId.value,householdId:session.value.householdId,membershipId:session.value.membershipId}:returnTarget;
+  clearView();const epoch=viewEpoch;returnTarget=undefined;
   try {
-    session.value=await refreshAccess();
-    const [tripRows, templateRows] = await Promise.all([canAccess(session.value,'trips') ? listTrips() : Promise.resolve([]), canAccess(session.value,'packing_templates') ? listPackingTemplates() : Promise.resolve([])]);
+    const context=await refreshAccess();
+    if(disposed||!pageVisible.value||epoch!==viewEpoch)return false;
+    session.value=context;
+    if(target||!canAccess(context,'packing_templates'))active.value='trips';
+    const scope=stamp();if(!current(scope))return false;
+    const [tripRows, templateRows] = await Promise.all([canAccess(context,'trips') ? listTrips() : Promise.resolve([]), canAccess(context,'packing_templates') ? listPackingTemplates() : Promise.resolve([])]);
+    if(!current(scope))return false;
     trips.value = tripRows; templates.value = templateRows;
-    if (selectedTripId.value && !tripRows.some((trip) => trip.id === selectedTripId.value)) selectedTripId.value = '';
-    if (selectedTripId.value) packingItems.value = await listTripPackingItems(selectedTripId.value);
-  } catch (error) { trips.value=[]; templates.value=[]; packingItems.value=[]; uni.showToast({ title: message(error), icon: 'none', duration: 3000 }); }
+    const wanted=target?.sourceId||(previous?.householdId===context.householdId&&previous?.membershipId===context.membershipId?previous.id:'');
+    if(wanted&&tripRows.some(trip=>trip.id===wanted))await openTrip(wanted);
+    else if(target&&!target.sourceId&&canAccess(context,'trips','EDIT')){creatingTrip.value=true;tripForm.value.startsAt=target.date;}
+    return epoch===viewEpoch&&pageVisible.value;
+  } catch (error) { if(epoch===viewEpoch&&pageVisible.value){clearView();uni.showToast({ title: message(error), icon: 'none', duration: 3000 });}return false; }
 }
 async function openTrip(tripId: string) {
-  selectedTripId.value = tripId;
-  try { const [trip, items] = await Promise.all([getTrip(tripId), listTripPackingItems(tripId)]); replaceTrip(trip); packingItems.value = items; candidates.value = trip.members.some(m=>m.membershipId===session.value?.membershipId && m.tripRole==='OWNER' && m.status==='ACTIVE') ? await listTripCandidates(tripId) : []; }
-  catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
+  if(!current(stamp())||!canAccess(session.value,'trips'))return;
+  detailEpoch++;selectedTripId.value=tripId;loadingTrip.value=true;tripBusy.value=false;packingItems.value=[];candidates.value=[];clearForms();const scope=stamp();
+  try {const [trip,items]=await Promise.all([getTrip(tripId),listTripPackingItems(tripId)]);if(!current(scope))return;replaceTrip(trip);packingItems.value=items;loadingTrip.value=false;await refreshCandidates(scope);}
+  catch(error){if(current(scope)){scopedError(scope,error);closeTrip();}}
+  finally{if(current(scope))loadingTrip.value=false;}
 }
-function replaceTrip(trip: Trip) { const index=trips.value.findIndex(row=>row.id===trip.id); if(index>=0) trips.value[index]=trip; else trips.value.unshift(trip); }
-async function itineraryChanged(version: number) {
-  const current=selectedTrip.value;
-  if (!current) return;
-  replaceTrip({ ...current, version });
-  try { replaceTrip(await getTrip(current.id)); }
-  catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
+function replaceTrip(trip: Trip) { const index=trips.value.findIndex(row=>row.id===trip.id); if(index>=0){if(trips.value[index].version<=trip.version)trips.value[index]=trip;}else trips.value.unshift(trip); }
+async function itineraryChanged(version: number,tripId:string) {
+  const trip=selectedTrip.value,scope=stamp();
+  if(!trip||trip.id!==tripId||!current(scope))return;
+  replaceTrip({...trip,version:Math.max(trip.version,version)});
+  try{await refreshTrip(scope);}catch(error){scopedError(scope,error);}
 }
-function closeTrip() { selectedTripId.value = ''; packingItems.value = []; candidates.value=[]; showingItemForm.value = false; editingTrip.value = false; }
+function closeTrip() { detailEpoch++;selectedTripId.value='';packingItems.value=[];candidates.value=[];loadingTrip.value=false;tripBusy.value=false;clearForms(); }
 async function saveTrip() {
+  const scope=stamp();if(!current(scope)||pageBusy.value||!canAccess(session.value,'trips','EDIT'))return;
   if (!tripForm.value.title.trim() || !tripForm.value.startsAt) { uni.showToast({ title: '请填写行程名称和出发日期', icon: 'none' }); return; }
+  pageBusy.value=true;
   try {
     const startsAt=travelTimestamp(tripForm.value.startsAt,'08')!,endsAt=travelTimestamp(tripForm.value.endsAt,'20');
     assertTravelOrder(startsAt,endsAt);
     const trip = await createTrip({ title: tripForm.value.title.trim(), destination: tripForm.value.destination.trim() || undefined, startsAt, endsAt });
-    tripForm.value = { title: '', destination: '', startsAt: '', endsAt: '' }; creatingTrip.value = false; await loadData(); await openTrip(trip.id); uni.showToast({ title: '行程已创建', icon: 'success' });
-  } catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
+    if(!current(scope))return;
+    tripForm.value={title:'',destination:'',startsAt:'',endsAt:''};creatingTrip.value=false;pageBusy.value=false;replaceTrip(trip);await openTrip(trip.id);
+  } catch(error){scopedError(scope,error);}finally{if(current(scope))pageBusy.value=false;}
 }
 function startTripEdit() {
   const trip = selectedTrip.value;
-  if (!trip) return;
+  if (!trip||!canEditTrip.value||tripBusy.value) return;
   tripEditForm.value = { title: trip.title, destination: trip.destination || '', startsAt: dateText(trip.startsAt), endsAt: trip.endsAt ? dateText(trip.endsAt) : '' };
   editingTrip.value = true;
 }
@@ -122,15 +157,18 @@ async function saveTripEdit() {
   try {
     const startsAt=travelTimestamp(form.startsAt,'08',trip.startsAt)!,endsAt=travelTimestamp(form.endsAt,'20',trip.endsAt);
     assertTravelOrder(startsAt,endsAt);
-    const updated = await updateTrip(trip, { title: form.title.trim(), destination: form.destination.trim(), startsAt, endsAt: endsAt??null });
-    replaceTrip(updated); editingTrip.value = false; uni.showToast({ title: '行程已更新', icon: 'success' });
+    await mutateTrip(currentTrip=>updateTrip(currentTrip,{title:form.title.trim(),destination:form.destination.trim(),startsAt,endsAt:endsAt??null}),updated=>{replaceTrip(updated);editingTrip.value=false;uni.showToast({title:'行程已更新',icon:'success'});});
   } catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
 }
 
 function newTemplate() {
+  if(!current(stamp())||pageBusy.value||!canAccess(session.value,'packing_templates','EDIT'))return;
+  detailEpoch++;
   editingTemplateId.value = ''; templateForm.value = { name: '', description: '', items: [{ name: '', quantity: '', unit: '', note: '' }] }; showingTemplateForm.value = true;
 }
 function editTemplate(template: PackingTemplate) {
+  if(!current(stamp())||pageBusy.value||!canEditTemplate(template))return;
+  detailEpoch++;
   editingTemplateId.value = template.id;
   templateForm.value = { name: template.name, description: template.description || '', items: template.items.map((item) => ({ id: item.id, name: item.name, quantity: item.defaultQuantity === null ? '' : String(Number(item.defaultQuantity)), unit: item.unit || '', note: item.note || '' })) };
   showingTemplateForm.value = true;
@@ -138,82 +176,85 @@ function editTemplate(template: PackingTemplate) {
 function addTemplateItem() { templateForm.value.items.push({ name: '', quantity: '', unit: '', note: '' }); }
 function removeTemplateItem(index: number) { if (templateForm.value.items.length > 1) templateForm.value.items.splice(index, 1); }
 async function saveTemplate() {
+  const scope=stamp();if(!current(scope)||pageBusy.value||!canAccess(session.value,'packing_templates','EDIT'))return;
   const rows = templateForm.value.items.filter((item) => item.name.trim());
   if (!templateForm.value.name.trim() || !rows.length) { uni.showToast({ title: '请填写模板名称和至少一件物品', icon: 'none' }); return; }
   const payload = { name: templateForm.value.name.trim(), description: templateForm.value.description.trim() || null, items: rows.map((item, index) => ({ id: item.id, name: item.name.trim(), quantity: item.quantity === '' ? null : Number(item.quantity), unit: item.unit.trim() || null, note: item.note.trim() || null, sortOrder: index })) };
+  pageBusy.value=true;
   try {
     const editing = templates.value.find((template) => template.id === editingTemplateId.value);
     if (editingTemplateId.value && !editing) throw new Error('行李模板已变更，请刷新后重试');
+    if(editing&&!canEditTemplate(editing))throw new Error('没有模板编辑权限');
     if (editing) await updatePackingTemplate(editing, payload); else await createPackingTemplate(payload);
-    showingTemplateForm.value = false; await loadData(); uni.showToast({ title: editingTemplateId.value ? '模板已更新' : '模板已创建', icon: 'success' });
-  } catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
+    if(!current(scope))return;const updated=await listPackingTemplates();if(!current(scope))return;templates.value=updated;showingTemplateForm.value=false;uni.showToast({title:editing?'模板已更新':'模板已创建',icon:'success'});
+  }catch(error){scopedError(scope,error);}finally{if(current(scope))pageBusy.value=false;}
 }
 function archiveTemplate(template: PackingTemplate) {
+  const scope=stamp();if(!current(scope)||!canEditTemplate(template)||pageBusy.value)return;
   uni.showModal({ title: '归档模板', content: `归档“${template.name}”后，已生成的行程行李不会受影响。`, success: async (result) => {
-    if (!result.confirm) return;
-    try { await updatePackingTemplate(template, { archived: true }); await loadData(); }
-    catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
+    if(!result.confirm||!current(scope)||!canEditTemplate(template)||pageBusy.value)return;
+    pageBusy.value=true;
+    try{await updatePackingTemplate(template,{archived:true});if(!current(scope))return;const rows=await listPackingTemplates();if(current(scope))templates.value=rows;}
+    catch(error){scopedError(scope,error);}finally{if(current(scope))pageBusy.value=false;}
   } });
 }
 async function applyTemplateByIndex(event: { detail: { value: string } }) {
   const template = templates.value[Number(event.detail.value)];
-  if (!selectedTrip.value || !template) return;
-  try {
-    const result = await applyPackingTemplate(selectedTrip.value.id, template.id); packingItems.value = result.items;
-    uni.showToast({ title: result.addedCount ? `已加入 ${result.addedCount} 项` : '该模板已套用', icon: 'none' });
-  } catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
+  if(!template||!canAccess(session.value,'packing_templates'))return;
+  await mutateTrip(trip=>applyPackingTemplate(trip.id,template.id),(result)=>{packingItems.value=result.items;uni.showToast({title:result.addedCount?`已加入 ${result.addedCount} 项`:'该模板已套用',icon:'none'});});
 }
 async function saveTripItem() {
   if (!selectedTrip.value || !itemForm.value.name.trim()) { uni.showToast({ title: '请输入行李名称', icon: 'none' }); return; }
-  try {
-    await createTripPackingItem(selectedTrip.value.id, { name: itemForm.value.name.trim(), quantity: itemForm.value.quantity === '' ? undefined : Number(itemForm.value.quantity), unit: itemForm.value.unit.trim() || undefined, note: itemForm.value.note.trim() || undefined });
-    itemForm.value = { name: '', quantity: '', unit: '', note: '' }; showingItemForm.value = false; packingItems.value = await listTripPackingItems(selectedTrip.value.id);
-  } catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
+  const form={...itemForm.value};
+  await mutateTrip(trip=>createTripPackingItem(trip.id,{name:form.name.trim(),quantity:form.quantity===''?undefined:Number(form.quantity),unit:form.unit.trim()||undefined,note:form.note.trim()||undefined}),async(_,scope)=>{itemForm.value={name:'',quantity:'',unit:'',note:''};showingItemForm.value=false;await refreshPacking(scope);});
 }
 async function togglePacked(item: TripPackingItem) {
-  if (!selectedTrip.value) return;
-  try { await updateTripPackingItem(selectedTrip.value.id, item, { status: item.status === 'PACKED' ? 'PENDING' : 'PACKED' }); packingItems.value = await listTripPackingItems(selectedTrip.value.id); }
-  catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
+  await mutateTrip(trip=>updateTripPackingItem(trip.id,item,{status:item.status==='PACKED'?'PENDING':'PACKED'}),(_,scope)=>refreshPacking(scope));
 }
 async function assign(item: TripPackingItem, pickerIndex: number) {
   const trip = selectedTrip.value; const member = pickerIndex ? assignableMembers(item)[pickerIndex - 1] : undefined;
-  if (!trip) return;
-  try { await updateTripPackingItem(trip.id, item, { responsibleMembershipId: member?.membershipId || '' }); packingItems.value = await listTripPackingItems(trip.id); }
-  catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
+  if (!trip||(pickerIndex&&!member)) return;
+  await mutateTrip(currentTrip=>updateTripPackingItem(currentTrip.id,item,{responsibleMembershipId:member?.membershipId||''}),(_,scope)=>refreshPacking(scope));
 }
 function assignableMembers(item:TripPackingItem){const trip=selectedTrip.value;if(!trip)return[];const active=trip.members.filter(member=>member.status==='ACTIVE');if(!item.groupId)return active;const group=trip.preparationGroups.find(entry=>entry.id===item.groupId);return group?active.filter(member=>group.members.some(entry=>entry.membershipId===member.membershipId)):active;}
 function assignableMemberNames(item:TripPackingItem){return ['未分配',...assignableMembers(item).map((entry,index)=>entry.membership.user.nickname||`成员${index+1}`)];}
-async function assignGroup(item:TripPackingItem,pickerIndex:number){const trip=selectedTrip.value,group=pickerIndex?trip?.preparationGroups[pickerIndex-1]:undefined;if(!trip)return;const keepResponsible=!group||item.responsibleMembershipId&&group.members.some(m=>m.membershipId===item.responsibleMembershipId);try{await updateTripPackingItem(trip.id,item,{groupId:group?.id||'',...(keepResponsible?{}:{responsibleMembershipId:''})});packingItems.value=await listTripPackingItems(trip.id);}catch(error){uni.showToast({title:message(error),icon:'none'});}}
+async function assignGroup(item:TripPackingItem,pickerIndex:number){const trip=selectedTrip.value,group=pickerIndex?trip?.preparationGroups[pickerIndex-1]:undefined;if(!trip||(pickerIndex&&!group))return;const keepResponsible=!group||item.responsibleMembershipId&&group.members.some(m=>m.membershipId===item.responsibleMembershipId);await mutateTrip(currentTrip=>updateTripPackingItem(currentTrip.id,item,{groupId:group?.id||'',...(keepResponsible?{}:{responsibleMembershipId:''})}),(_,scope)=>refreshPacking(scope));}
 function removeItem(item: TripPackingItem) {
-  if (!selectedTrip.value) return;
+  const trip=selectedTrip.value,scope=stamp();if(!trip||!current(scope)||!canEditTrip.value||tripBusy.value)return;
   uni.showModal({ title: '移除行李', content: `从本次行程移除“${item.name}”？不会影响原模板。`, success: async (result) => {
-    if (!result.confirm || !selectedTrip.value) return;
-    try { await removeTripPackingItem(selectedTrip.value.id, item); packingItems.value = await listTripPackingItems(selectedTrip.value.id); }
-    catch (error) { uni.showToast({ title: message(error), icon: 'none' }); }
+    if(!result.confirm||!current(scope))return;
+    await mutateTrip(()=>removeTripPackingItem(trip.id,item),(_,currentScope)=>refreshPacking(currentScope));
   } });
 }
 
-async function addMemberByIndex(event:{detail:{value:string}}){const trip=selectedTrip.value,candidate=candidates.value[Number(event.detail.value)];if(!trip||!candidate)return;try{replaceTrip(await addTripMember(trip.id,candidate.id));candidates.value=await listTripCandidates(trip.id);uni.showToast({title:'已加入行程',icon:'success'});}catch(error){uni.showToast({title:message(error),icon:'none'});}}
-function revokeMember(member: Trip['members'][number]){const trip=selectedTrip.value;if(!trip)return;uni.showModal({title:'撤销行程访问',content:`撤销“${member.membership.user.nickname||'该成员'}”后会立即失去访问，未完成的负责人分配将被清空。`,success:async result=>{if(!result.confirm)return;try{replaceTrip(await updateTripMember(trip.id,member,{status:'REVOKED',clearResponsibilities:true}));packingItems.value=await listTripPackingItems(trip.id);candidates.value=await listTripCandidates(trip.id);}catch(error){uni.showToast({title:message(error),icon:'none'});}}});}
-async function advanceStatus(){const trip=selectedTrip.value;if(!trip)return;const next=({PLANNING:'PENDING',PENDING:'DEPARTING',DEPARTING:'COMPLETED'} as Partial<Record<Trip['status'],Trip['status']>>)[trip.status];if(!next)return;uni.showModal({title:next==='COMPLETED'?'完成行程':'更新行程状态',content:next==='COMPLETED'?'完成后所有成员保留历史查看，但不能继续修改。':`将行程更新为“${statusText(next)}”？`,success:async result=>{if(!result.confirm)return;try{replaceTrip(await updateTripStatus(trip,next));}catch(error){uni.showToast({title:message(error),icon:'none'});}}});}
+async function addMemberByIndex(event:{detail:{value:string}}){const candidate=candidates.value[Number(event.detail.value)];if(!candidate)return;await mutateTrip(trip=>addTripMember(trip.id,candidate.id),async(updated,scope)=>{replaceTrip(updated);await refreshCandidates(scope);},true);}
+function revokeMember(member: Trip['members'][number]){const trip=selectedTrip.value,scope=stamp();if(!trip||!current(scope)||!isTripOwner.value||tripBusy.value)return;uni.showModal({title:'撤销行程访问',content:`撤销“${member.membership.user.nickname||'该成员'}”后会立即失去访问，未完成的负责人分配将被清空。`,success:async result=>{if(!result.confirm||!current(scope))return;await mutateTrip(()=>updateTripMember(trip.id,member,{status:'REVOKED',clearResponsibilities:true}),async(updated,latest)=>{replaceTrip(updated);await refreshPacking(latest);await refreshCandidates(latest);},true);}});}
+async function advanceStatus(){const trip=selectedTrip.value,scope=stamp();if(!trip||!current(scope)||!isTripOwner.value||tripBusy.value)return;const next=({PLANNING:'PENDING',PENDING:'DEPARTING',DEPARTING:'COMPLETED'} as Partial<Record<Trip['status'],Trip['status']>>)[trip.status];if(!next)return;uni.showModal({title:next==='COMPLETED'?'完成行程':'更新行程状态',content:next==='COMPLETED'?'完成后保留历史查看和有权限成员补照片，行程及行李不能继续修改。':`将行程更新为“${statusText(next)}”？`,success:async result=>{if(!result.confirm||!current(scope))return;await mutateTrip(()=>updateTripStatus(trip,next),updated=>{replaceTrip(updated);candidates.value=[];},true);}});}
 function groupSelection(event:{detail:{value:string[]}}){groupMemberIds.value=event.detail.value;}
 function editGroup(group:TripPreparationGroup){editingGroupId.value=group.id;groupName.value=group.name;groupMemberIds.value=group.members.map(member=>member.membershipId);}
 function resetGroupForm(){editingGroupId.value='';groupName.value='';groupMemberIds.value=[];}
-async function saveGroup(){const trip=selectedTrip.value;if(!trip||!groupName.value.trim()||!groupMemberIds.value.length){uni.showToast({title:'填写小组名并选择成员',icon:'none'});return;}try{const editing=trip.preparationGroups.find(group=>group.id===editingGroupId.value);if(editingGroupId.value&&!editing)throw new Error('准备小组已变更，请刷新后重试');if(editing)await updateTripPreparationGroup(trip.id,editing,groupName.value.trim(),groupMemberIds.value);else await createTripPreparationGroup(trip.id,groupName.value.trim(),groupMemberIds.value);resetGroupForm();replaceTrip(await getTrip(trip.id));uni.showToast({title:editing?'准备小组已更新':'准备小组已创建',icon:'success'});}catch(error){uni.showToast({title:message(error),icon:'none'});}}
+async function saveGroup(){const trip=selectedTrip.value;if(!trip||!groupName.value.trim()||!groupMemberIds.value.length){uni.showToast({title:'填写小组名并选择成员',icon:'none'});return;}const name=groupName.value.trim(),members=[...groupMemberIds.value],editingId=editingGroupId.value;await mutateTrip(async currentTrip=>{const editing=currentTrip.preparationGroups.find(group=>group.id===editingId);if(editingId&&!editing)throw new Error('准备小组已变更，请刷新后重试');if(editing)return updateTripPreparationGroup(currentTrip.id,editing,name,members);return createTripPreparationGroup(currentTrip.id,name,members);},async(_,scope)=>{resetGroupForm();await refreshTrip(scope);},true);}
 
 function startOverviewPulse() {
   if (overviewTimer) clearInterval(overviewTimer);
   overviewTimer=setInterval(() => { overviewPulse.value=!overviewPulse.value; }, 850);
 }
-onShow(() => { pageVisible.value=true; startOverviewPulse(); loadData(); });
-onHide(() => { pageVisible.value=false; if (overviewTimer) { clearInterval(overviewTimer); overviewTimer=undefined; } });
-onUnmounted(() => { if (overviewTimer) clearInterval(overviewTimer); });
+function hidePage(){if(session.value)returnTarget={id:selectedTripId.value,householdId:session.value.householdId,membershipId:session.value.membershipId};pageVisible.value=false;if(overviewTimer){clearInterval(overviewTimer);overviewTimer=undefined;}clearView();}
+function unloadPage(){disposed=true;hidePage();returnTarget=undefined;}
+function showPage(){if(disposed)return;pageVisible.value=true;startOverviewPulse();return loadData();}
+watch(active,()=>{closeTrip();pageBusy.value=false;},{flush:'sync'});
+onShow(showPage);
+onHide(hidePage);
+onUnload(unloadPage);
+onUnmounted(unloadPage);
 </script>
 
 <template>
   <view class="page">
     <view class="heading"><text class="label">去露营</text><text class="title">{{ active === 'trips' ? '我的行程' : '行李模板' }}</text><text class="subtitle">{{ active === 'trips' ? '只有行程成员可以查看和协作' : '模板名称和物品都由你自己定义' }}</text></view>
     <view class="tabs"><view class="tab" :class="{ chosen: active === 'trips' }" @tap="active = 'trips'">行程</view><view v-if="canAccess(session,'packing_templates')" class="tab" :class="{ chosen: active === 'templates' }" @tap="active = 'templates'">行李模板</view></view>
+    <text v-if="loadingTrip" class="empty">正在核对行程权限并读取行李…</text>
+    <text v-if="tripBusy || pageBusy" class="map-note">正在保存，请稍候…</text>
 
     <view v-if="active === 'trips' && !selectedTrip">
       <map v-if="overviewPoints.length" class="overview-map" :latitude="overviewCenter.latitude" :longitude="overviewCenter.longitude" :scale="4" :markers="overviewMarkers" :polyline="overviewPolylines" :include-points="overviewPoints" show-scale />
@@ -229,8 +270,8 @@ onUnmounted(() => { if (overviewTimer) clearInterval(overviewTimer); });
       <view class="back" @tap="closeTrip">‹ 返回行程</view>
       <view class="trip-head"><view class="trip-head-row"><view><text class="trip-title">{{ selectedTrip.title }}</text><text class="trip-sub">{{ selectedTrip.destination || '未填写目的地' }} · {{dateText(selectedTrip.startsAt)}}{{selectedTrip.endsAt?` 至 ${dateText(selectedTrip.endsAt)}`:''}} · 已准备 {{ packedCount }}/{{ packingItems.length }}</text></view><text v-if="canEditTrip" class="edit" @tap="startTripEdit">编辑行程</text></view></view>
       <view v-if="editingTrip" class="editor"><text class="editor-title">编辑行程</text><input v-model="tripEditForm.title" class="input" placeholder="行程名称"/><input v-model="tripEditForm.destination" class="input" placeholder="目的地（可清空）"/><view class="date-row"><picker mode="date" :value="tripEditForm.startsAt" @change="tripEditForm.startsAt=$event.detail.value"><view class="input">{{tripEditForm.startsAt||'出发日期'}}</view></picker><picker mode="date" :value="tripEditForm.endsAt" @change="tripEditForm.endsAt=$event.detail.value"><view class="input">{{tripEditForm.endsAt||'返回日期（可不填）'}}</view></picker></view><text v-if="tripEditForm.endsAt" class="clear" @tap="tripEditForm.endsAt=''">清空返回日期</text><view class="button small" @tap="saveTripEdit">保存行程</view><view class="cancel" @tap="editingTrip=false">取消</view></view>
-      <TripItinerary :trip="selectedTrip" :can-edit="canEditTrip" :active="pageVisible" @changed="itineraryChanged" />
-      <TripPhotos :trip="selectedTrip" :can-upload="canAddTripPhotos" @changed="itineraryChanged" />
+      <TripItinerary :key="`${session?.membershipId}:${selectedTrip.id}:${detailEpoch}`" :trip="selectedTrip" :can-edit="canEditTrip" :active="pageVisible" @changed="itineraryChanged" />
+      <TripPhotos :key="`${session?.membershipId}:${selectedTrip.id}:${detailEpoch}`" :trip="selectedTrip" :can-upload="canAddTripPhotos" @changed="itineraryChanged" />
       <view class="collab-summary" @tap="showingCollaboration=!showingCollaboration"><text>同行 {{selectedTrip.members.length}} 人 · 准备小组 {{selectedTrip.preparationGroups.length}} 个</text><text>{{showingCollaboration?'收起':'管理协作'}} ›</text></view>
       <view v-if="showingCollaboration" class="editor collab-panel">
         <view v-for="member in selectedTrip.members" :key="member.membershipId" class="member-row"><view><text class="member-name">{{member.membership.user.nickname||'家庭成员'}}</text><text class="member-role">{{member.tripRole==='OWNER'?'行程负责人':'同行成员'}} · {{member.status==='HISTORY'?'历史可见':member.canEdit?'可协作':'只读'}}</text></view><text v-if="isTripOwner && member.membershipId!==session?.membershipId" class="danger-link" @tap="revokeMember(member)">撤销</text></view>

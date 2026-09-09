@@ -3,7 +3,7 @@ import { ref, watch } from 'vue';
 import { confirmMediaAsset, createMediaUploadIntent, getMediaReadUrl, listTripPhotos, publicMediaUrl, uploadMediaContent, type Trip, type TripPhoto } from '../services/family-api';
 
 const props=defineProps<{trip:Trip;canUpload:boolean}>();
-const emit=defineEmits<{changed:[version:number]}>();
+const emit=defineEmits<{changed:[version:number,tripId:string]}>();
 const photos=ref<Array<TripPhoto&{url:string}>>([]);
 const loading=ref(false),uploading=ref(false);
 
@@ -27,7 +27,7 @@ async function choosePhotos(){
       const uploaded=await uploadMediaContent(intent.uploadPath,bytes,mimeType);
       const confirmed=await confirmMediaAsset(intent.id,uploaded.checksumSha256);ownerVersion=confirmed.ownerVersion;
     }
-    emit('changed',ownerVersion);await load();uni.showToast({title:`已添加 ${selected.length} 张照片`,icon:'success'});
+    emit('changed',ownerVersion,props.trip.id);await load();uni.showToast({title:`已添加 ${selected.length} 张照片`,icon:'success'});
   }catch(error){const text=message(error);if(!text.includes('cancel'))uni.showToast({title:text,icon:'none',duration:3000});}finally{uploading.value=false;}
 }
 function preview(index:number){uni.previewImage({current:photos.value[index].url,urls:photos.value.map(photo=>photo.url)});}

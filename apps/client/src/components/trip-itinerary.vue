@@ -4,7 +4,7 @@ import { assertTravelOrder, isCalendarDate, parseCoordinates, shanghaiDate, trav
 import { createAccommodation, createTripLeg, createTripStop, getTripItinerary, getTripStopDeleteImpact, removeAccommodation, removeTripLeg, removeTripStop, reorderTripStops, updateAccommodation, updateTripLeg, updateTripStop, type Accommodation, type Trip, type TripItinerary, type TripLeg, type TripStop } from '../services/family-api';
 
 const props=defineProps<{trip:Trip;canEdit:boolean;active:boolean}>();
-const emit=defineEmits<{changed:[version:number]}>();
+const emit=defineEmits<{changed:[version:number,tripId:string]}>();
 const itinerary=ref<TripItinerary>({tripVersion:props.trip.version,stops:[],legs:[],accommodations:[]});
 const loading=ref(false),section=ref<'stops'|'lodging'>('stops'),pulse=ref(false);
 const showingStopForm=ref(false),editingStop=ref<TripStop>(),showingLodgingForm=ref(false),editingLodging=ref<Accommodation>();
@@ -20,7 +20,7 @@ function toast(error:unknown){uni.showToast({title:message(error),icon:'none',du
 function labelStop(type:TripStop['stopType']){return stopTypes.find(item=>item.value===type)?.label||type;}
 function labelMode(mode:TripLeg['mode']){return transportModes.find(item=>item.value===mode)?.label||mode;}
 function dateOnly(value:string){return value.slice(0,10);}
-function emitVersion(version:number){itinerary.value.tripVersion=version;emit('changed',version);}
+function emitVersion(version:number){itinerary.value.tripVersion=version;emit('changed',version,props.trip.id);}
 
 async function load(){loading.value=true;try{itinerary.value=await getTripItinerary(props.trip.id);}catch(error){toast(error);}finally{loading.value=false;}}
 watch(()=>props.trip.id,load,{immediate:true});
