@@ -15,14 +15,14 @@ function loadTs(relative, dependencies, uni) {
 function evaluate(source, dependencies, uni) {
   const result=ts.transpileModule(source,{compilerOptions:{target:ts.ScriptTarget.ES2022,module:ts.ModuleKind.CommonJS}});
   const module={exports:{}};
-  vm.runInNewContext(result.outputText,{module,exports:module.exports,require:id=>{if(id in dependencies)return dependencies[id];throw Error('Unexpected import '+id);},uni,console,setTimeout,clearTimeout,Map,Set,Promise,Error,Date}, {timeout:1000});
+  vm.runInNewContext(result.outputText,{module,exports:module.exports,require:id=>{if(id in dependencies)return dependencies[id];throw Error('Unexpected import '+id);},uni,console,setTimeout,clearTimeout,setInterval:()=>1,clearInterval(){},Map,Set,Promise,Error,Date}, {timeout:1000});
   return module.exports;
 }
-function loadPage(relative, dependencies, uni, props = {}) {
+function loadPage(relative, dependencies, uni, props = {}, emitted = []) {
   const filename=path.join(ROOT,relative), {descriptor}=parse(fs.readFileSync(filename,'utf8'),{filename});
   const script=compileScript(descriptor,{id:'component-test',inlineTemplate:false});
   const module=evaluate(script.content,{'vue':vue,'@dcloudio/uni-app':{onShow(){},onLoad(){},onHide(){},onUnload(){}},...dependencies},uni);
-  return module.default.setup(props, {expose(){},emit(){}});
+  return module.default.setup(props, {expose(){},emit(...args){emitted.push(args);}});
 }
 function mockUni() {
   const values=new Map(), routes=[];
@@ -38,6 +38,7 @@ function itineraryForm(api={},canEdit=true){
   const page=loadPage('src/components/trip-itinerary.vue',{
     vue:{...vue,watch(){},onUnmounted(){}},
     '../services/trip-form':tripForm,
+    '../services/transport':{ApiError},
     '../services/family-api':{getTripItinerary:async()=>({tripVersion:5,stops:[],legs:[],accommodations:[]}),...api},
   },uni,{trip:sampleTrip,canEdit,active:true});
   return{page,errors};
@@ -45,6 +46,9 @@ function itineraryForm(api={},canEdit=true){
 function campingForm(api={},access){
   const uni=mockUni(),errors=[],lifecycle={};uni.showToast=input=>errors.push(input.title);
   let stored={...family,effectivePermissions:{trips:'EDIT',packing_templates:'MANAGE'}};
+  const sessionApi={canAccess:allowed,getStoredSession:()=>stored,refreshAccess:async()=>{const result=access?await access():stored;stored=result;return result;}};
+  const familyApi={listTrips:async()=>[],listPackingTemplates:async()=>[],...api};
+  const native=loadTs('src/services/trip-native.ts',{'./session':sessionApi,'./family-api':familyApi},uni);
   const page=loadPage('src/pages/camping/index.vue',{
     vue:{...vue,onUnmounted(){}},
     '@dcloudio/uni-app':{onShow:fn=>lifecycle.show=fn,onHide:fn=>lifecycle.hide=fn,onUnload:fn=>lifecycle.unload=fn},
@@ -52,11 +56,12 @@ function campingForm(api={},access){
     '../../services/trip-form':tripForm,
     '../../services/transport':{ApiError},
     '../../services/calendar-navigation':{takeCalendarTarget:()=>undefined},
-    '../../services/session':{canAccess:allowed,getStoredSession:()=>stored,refreshAccess:async()=>{const result=access?await access():stored;stored=result;return result;}},
-    '../../services/family-api':{listTrips:async()=>[],listPackingTemplates:async()=>[],...api},
+    '../../services/session':sessionApi,
+    '../../services/trip-native':native,
+    '../../services/family-api':familyApi,
   },uni);
   page.pageVisible.value=true;page.session.value=stored;
-  return{page,errors,lifecycle,uni,setStored:context=>{stored=context;}};
+  return{page,errors,lifecycle,uni,native,setStored:context=>{stored=context;}};
 }
 
 test('Travel dates use Shanghai cross-day boundaries and preserve unchanged timestamp precision',()=>{
@@ -281,6 +286,180 @@ test('Camping completing a trip retains photo eligibility while disabling itiner
   const{page,uni}=campingForm({updateTripStatus:async()=>complete});uni.showModal=input=>dialog=input;
   selectCamping(page,{...sampleTrip,status:'DEPARTING'});await page.advanceStatus();await dialog.success({confirm:true});
   assert.equal(page.selectedTrip.value.status,'COMPLETED');assert.equal(page.canEditTrip.value,false);assert.equal(page.canAddTripPhotos.value,true);assert.equal(page.tripBusy.value,false);
+});
+
+function nativeCamping(api={},access){
+  let trip={...sampleTrip},chosen;const calls=[];
+  const result=campingForm({
+    getTrip:async id=>{assert.equal(id,trip.id);return trip;},listTrips:async()=>[trip],listTripPackingItems:async()=>[],listTripCandidates:async()=>[],
+    createMediaUploadIntent:async input=>{calls.push(['intent',input.ownerId,input.expectedOwnerVersion]);return{id:'intent-a',uploadPath:'/upload-a'};},
+    uploadMediaContent:async(path,bytes,mime)=>{calls.push(['bytes',path,bytes.byteLength,mime]);return{checksumSha256:'checksum-a'};},
+    confirmMediaAsset:async id=>{calls.push(['confirm',id]);trip={...trip,version:trip.version+1};return{ownerVersion:trip.version};},
+    ...api,
+  },access);
+  result.uni.chooseMedia=input=>{chosen=input;};
+  result.uni.getFileSystemManager=()=>({readFile:input=>input.success({data:new ArrayBuffer(4)})});
+  selectCamping(result.page,trip);
+  return{...result,calls,chosen:()=>chosen,setTrip:value=>{trip=value;}};
+}
+const locationDraft={tripId:'trip-a',form:{title:'准备集合',typeIndex:0,latitude:'39',longitude:'116',arriveDate:'2026-09-02',leaveDate:'',note:'带饮用水'}};
+
+for(const order of ['show-first','callback-first']){
+  test(`Camping native location restores only its authorized draft when ${order}`,async()=>{
+    let chooser;const{page,lifecycle,uni}=nativeCamping();uni.chooseLocation=input=>chooser=input;
+    const selecting=page.chooseStopLocation(locationDraft);assert.equal(page.nativeBusy.value,true);lifecycle.hide();
+    assert.equal(page.selectedTrip.value,undefined);assert.equal(page.returnedStop.value,undefined);
+    if(order==='show-first')await lifecycle.show();
+    chooser.success({latitude:40.5,longitude:117.8,name:'新地点',address:'地址'});await selecting;
+    if(order==='callback-first'){assert.equal(page.selectedTrip.value,undefined);await lifecycle.show();}
+    assert.equal(page.selectedTrip.value.id,'trip-a');assert.equal(page.returnedStop.value.form.latitude,'40.5');assert.equal(page.returnedStop.value.form.longitude,'117.8');
+    assert.equal(page.returnedStop.value.form.title,'准备集合');assert.equal(page.returnedStop.value.form.note,'带饮用水');assert.equal(locationDraft.form.latitude,'39');assert.equal(page.nativeBusy.value,false);lifecycle.unload();
+  });
+}
+
+test('Camping cancelled native location restores the unmodified draft for manual coordinates',async()=>{
+  let chooser;const{page,lifecycle,uni,errors}=nativeCamping();uni.chooseLocation=input=>chooser=input;
+  const selecting=page.chooseStopLocation(locationDraft);lifecycle.hide();chooser.fail({errMsg:'chooseLocation:fail cancel'});await selecting;await lifecycle.show();
+  assert.equal(page.returnedStop.value.form.latitude,'39');assert.match(errors.at(-1),/手工填写/);lifecycle.unload();
+});
+
+test('Camping location draft is discarded if editing permission is revoked during the picker',async()=>{
+  let chooser;const{page,lifecycle,uni,setTrip}=nativeCamping();uni.chooseLocation=input=>chooser=input;
+  const selecting=page.chooseStopLocation(locationDraft);lifecycle.hide();setTrip({...sampleTrip,members:[{...sampleTrip.members[0],canEdit:false}]});
+  chooser.success({latitude:40,longitude:117,name:'地点',address:''});await selecting;await lifecycle.show();
+  assert.equal(page.returnedStop.value,undefined);assert.equal(page.canEditTrip.value,false);lifecycle.unload();
+});
+
+for(const order of ['show-first','callback-first']){
+  test(`Camping native photos use the captured trip and refreshed versions when ${order}`,async()=>{
+    const{page,lifecycle,chosen,setTrip,calls}=nativeCamping();setTrip({...sampleTrip,version:11});
+    const upload=page.chooseTripPhotos('trip-a');lifecycle.hide();if(order==='show-first')await lifecycle.show();
+    chosen().success({tempFiles:[{tempFilePath:'one.png',size:4},{tempFilePath:'two.jpg',size:4}]});await upload;
+    if(order==='callback-first'){assert.equal(page.selectedTrip.value,undefined);await lifecycle.show();}
+    assert.deepEqual(calls.filter(row=>row[0]==='intent'),[['intent','trip-a',11],['intent','trip-a',12]]);
+    assert.equal(calls.filter(row=>row[0]==='confirm').length,2);assert.equal(page.selectedTrip.value.version,13);assert.equal(page.nativeBusy.value,false);lifecycle.unload();
+  });
+}
+
+for(const interruption of ['household','revoked','unloaded','other-trip']){
+  test(`Camping photo picker never starts an upload after ${interruption}`,async()=>{
+    const{page,lifecycle,chosen,calls,setTrip,setStored}=nativeCamping();
+    const upload=page.chooseTripPhotos('trip-a');lifecycle.hide();
+    if(interruption==='household')setStored({...campingContext,householdId:'house-b',membershipId:'member-b'});
+    if(interruption==='revoked')setTrip({...sampleTrip,members:[{...sampleTrip.members[0],status:'REVOKED'}]});
+    if(interruption==='unloaded')lifecycle.unload();
+    if(interruption==='other-trip'){page.closeTrip();page.pageVisible.value=true;selectCamping(page,sampleTripB);}
+    chosen().success({tempFiles:[{tempFilePath:'one.png',size:4}]});await upload;
+    assert.equal(calls.length,0);assert.equal(page.nativeBusy.value,false);assert.equal(page.returnedStop.value,undefined);
+    if(interruption==='other-trip')assert.equal(page.selectedTrip.value.id,'trip-b');lifecycle.unload();
+  });
+}
+
+test('Camping media pipeline rechecks authority between read, intent, upload and confirmation',async()=>{
+  for(const stage of ['read','intent','bytes']){
+    const pending=pendingValue(),calls=[];
+    const{page,lifecycle,chosen,setTrip,uni}=nativeCamping({
+      createMediaUploadIntent:async()=>{calls.push('intent');return stage==='intent'?pending.promise:{id:'intent-a',uploadPath:'/upload'};},
+      uploadMediaContent:async()=>{calls.push('bytes');return stage==='bytes'?pending.promise:{checksumSha256:'checksum'};},
+      confirmMediaAsset:async()=>{calls.push('confirm');return{ownerVersion:5};},
+    });
+    if(stage==='read')uni.getFileSystemManager=()=>({readFile:input=>{calls.push('read');pending.promise.then(input.success);}});
+    const upload=page.chooseTripPhotos('trip-a');chosen().success({tempFiles:[{tempFilePath:'one.png',size:4}]});await new Promise(setImmediate);
+    setTrip({...sampleTrip,members:[{...sampleTrip.members[0],canEdit:false}]});
+    pending.resolve(stage==='read'?{data:new ArrayBuffer(4)}:stage==='intent'?{id:'intent-a',uploadPath:'/upload'}:{checksumSha256:'checksum'});await upload;
+    assert.deepEqual(calls,stage==='read'?['read']:stage==='intent'?['intent']:['intent','bytes']);lifecycle.unload();
+  }
+});
+
+test('Camping reports partial photo completion honestly and refreshes the gallery owner',async()=>{
+  let intents=0;const{page,lifecycle,chosen,calls,errors}=nativeCamping({createMediaUploadIntent:async()=>{if(++intents===2)throw Error('网络暂时失败');return{id:'intent-a',uploadPath:'/upload'};}});
+  const upload=page.chooseTripPhotos('trip-a');chosen().success({tempFiles:[{tempFilePath:'one.png',size:4},{tempFilePath:'two.png',size:4}]});await upload;
+  assert.equal(calls.filter(row=>row[0]==='confirm').length,1);assert.match(errors.at(-1),/已添加 1 张，其余未完成/);assert.equal(page.selectedTrip.value.version,5);lifecycle.unload();
+});
+
+test('Camping validates photo limits and actual byte counts before creating an upload intent',async()=>{
+  for(const file of [{tempFilePath:'bad.gif',size:4},{tempFilePath:'large.png',size:8*1024*1024+1},{tempFilePath:'empty.png',size:0},{tempFilePath:'changed.png',size:5}]){
+    const{page,chosen,calls,lifecycle}=nativeCamping();const upload=page.chooseTripPhotos('trip-a');chosen().success({tempFiles:[file]});await upload;assert.equal(calls.length,0);lifecycle.unload();
+  }
+});
+
+test('Camping cancellation creates no photos and returns to the original authorized trip',async()=>{
+  const{page,lifecycle,chosen,calls,errors}=nativeCamping();const upload=page.chooseTripPhotos('trip-a');lifecycle.hide();chosen().fail({errMsg:'chooseMedia:fail cancel'});await upload;await lifecycle.show();
+  assert.equal(calls.length,0);assert.equal(page.selectedTrip.value.id,'trip-a');assert.equal(errors.length,0);lifecycle.unload();
+});
+
+test('Camping photo preview signs fresh gallery URLs and restores after the native preview hides the page',async()=>{
+  let preview;const reads=[];const{page,lifecycle,uni}=nativeCamping({listTripPhotos:async()=>[{id:'photo-a'},{id:'photo-b'}],getMediaReadUrl:async id=>{reads.push(id);return{path:`/new-${id}`};},publicMediaUrl:path=>`https://pp6v4.com/api/v1${path}`});
+  uni.previewImage=input=>{preview=input;lifecycle.hide();input.success();};await page.previewTripPhoto('trip-a','photo-b');
+  assert.equal(preview.current,'https://pp6v4.com/api/v1/new-photo-b');assert.equal(preview.urls.length,2);assert.deepEqual(reads,['photo-a','photo-b']);assert.equal(page.selectedTrip.value,undefined);await lifecycle.show();assert.equal(page.selectedTrip.value.id,'trip-a');lifecycle.unload();
+});
+
+test('Camping preview is cancelled after permission changes while signing its URL',async()=>{
+  const sign=pendingValue();let previews=0;const{page,uni,setTrip,lifecycle}=nativeCamping({listTripPhotos:async()=>[{id:'photo-a'}],getMediaReadUrl:()=>sign.promise,publicMediaUrl:path=>path});
+  uni.previewImage=()=>previews++;const pending=page.previewTripPhoto('trip-a','photo-a');await new Promise(setImmediate);
+  setTrip({...sampleTrip,members:[]});sign.resolve({path:'/new-photo-a'});await pending;assert.equal(previews,0);lifecycle.unload();
+});
+
+function tripChild(kind,api={},extras={}){
+  const props=vue.reactive({trip:{...sampleTrip},canEdit:true,canUpload:true,active:true,...extras}),emitted=[],uni=mockUni();let unmount=()=>{};
+  const scope=vue.effectScope();
+  const component=scope.run(()=>loadPage(`src/components/trip-${kind}.vue`,{
+    vue:{...vue,onUnmounted:callback=>{unmount=callback;}},'../services/trip-form':tripForm,'../services/transport':{ApiError},
+    '../services/family-api':{getTripItinerary:async()=>({tripVersion:4,stops:[],legs:[],accommodations:[]}),listTripPhotos:async()=>[],publicMediaUrl:path=>path,...api},
+  },uni,props,emitted));
+  return{component,props,emitted,uni,unmount(){unmount();scope.stop();}};
+}
+
+test('Itinerary component forwards an immutable native draft and restores it without silently upgrading stop version',async()=>{
+  const{component,props,emitted,unmount}=tripChild('itinerary');await new Promise(setImmediate);
+  const original={id:'stop-a',version:2,title:'原节点',stopType:'MEETING',latitude:39,longitude:116,arriveAt:null,leaveAt:null,note:'原备注'};
+  component.editStop(original);component.stopForm.value.note='尚未保存的备注';component.choosePoint();
+  const event=emitted.find(row=>row[0]==='chooseLocation');assert.equal(event[1].tripId,'trip-a');assert.equal(event[1].original.version,2);
+  component.stopForm.value.note='后续输入';assert.equal(event[1].form.note,'尚未保存的备注');
+  props.restoredDraft={...event[1],form:{...event[1].form,latitude:'40',longitude:'117'}};
+  assert.equal(component.stopForm.value.latitude,'40');assert.equal(component.stopForm.value.note,'尚未保存的备注');assert.equal(component.editingStop.value.version,2);assert.equal(component.showingStopForm.value,true);assert.ok(emitted.some(row=>row[0]==='draftConsumed'));unmount();
+});
+
+test('Itinerary component ignores stale reads across trip change and clears hidden forms',async()=>{
+  const first=pendingValue();const{component,props,unmount}=tripChild('itinerary',{getTripItinerary:id=>id==='trip-a'?first.promise:Promise.resolve({tripVersion:7,stops:[{id:'b-stop'}],legs:[],accommodations:[]})});
+  props.trip=sampleTripB;await new Promise(setImmediate);first.resolve({tripVersion:4,stops:[{id:'a-stop'}],legs:[],accommodations:[]});await new Promise(setImmediate);
+  assert.equal(component.itinerary.value.stops[0].id,'b-stop');component.newStop();component.stopForm.value.note='私有备注';props.active=false;
+  assert.equal(component.itinerary.value.stops.length,0);assert.equal(component.stopForm.value.note,'');assert.equal(component.showingStopForm.value,false);unmount();
+});
+
+test('Itinerary late save and delete-impact responses cannot mutate or emit after unmount',async()=>{
+  const write=pendingValue(),impact=pendingValue();let reads=0,modals=0;
+  const{component,uni,emitted,unmount}=tripChild('itinerary',{getTripItinerary:async()=>{reads++;return{tripVersion:4,stops:[],legs:[],accommodations:[]};},createTripStop:()=>write.promise,getTripStopDeleteImpact:()=>impact.promise});
+  await new Promise(setImmediate);uni.showModal=()=>modals++;const deleting=component.deleteStop({id:'old-stop'});
+  component.newStop();Object.assign(component.stopForm.value,{title:'集合',latitude:'39',longitude:'116'});const saving=component.saveStop();unmount();
+  write.resolve({tripVersion:5});impact.resolve({legs:[],accommodations:[]});await Promise.all([saving,deleting]);
+  assert.equal(reads,1);assert.equal(modals,0);assert.equal(emitted.filter(row=>row[0]==='changed').length,0);assert.equal(component.itinerary.value.stops.length,0);
+});
+
+test('Itinerary deletion dialog cannot execute after edit permission is removed',async()=>{
+  let dialog,writes=0;const{component,props,uni,unmount}=tripChild('itinerary',{removeAccommodation:async()=>writes++});
+  uni.showModal=input=>dialog=input;component.deleteLodging({id:'hotel-a',name:'小屋'});props.canEdit=false;await dialog.success({confirm:true});assert.equal(writes,0);unmount();
+});
+
+test('Trip photo component clears old gallery and rejects signed URLs arriving after destruction',async()=>{
+  const signed=pendingValue();const{component,unmount}=tripChild('photos',{listTripPhotos:async()=>[{id:'photo-a'}],getMediaReadUrl:()=>signed.promise});
+  await new Promise(setImmediate);unmount();signed.resolve({path:'/old-photo'});await new Promise(setImmediate);assert.equal(component.photos.value.length,0);assert.equal(component.loading.value,false);
+});
+
+test('Trip photo component only forwards identity-bearing actions and never opens a native picker itself',async()=>{
+  const{component,props,emitted,unmount}=tripChild('photos',{listTripPhotos:async()=>[{id:'photo-a'}],getMediaReadUrl:async()=>({path:'/photo-a'})});await new Promise(setImmediate);
+  component.choosePhotos();component.preview(0);assert.deepEqual(emitted.map(row=>Array.from(row)),[['choosePhotos','trip-a'],['preview','trip-a','photo-a']]);
+  props.active=false;component.choosePhotos();component.preview(0);assert.equal(emitted.length,2);assert.equal(component.photos.value.length,0);unmount();
+});
+
+test('Trip child access failures clear their content and invalidate only the matching parent trip',async()=>{
+  for(const kind of ['itinerary','photos']){
+    const api=kind==='itinerary'?{getTripItinerary:async()=>{throw new ApiError('撤权',403);}}:{listTripPhotos:async()=>{throw new ApiError('撤权',403);}};
+    const{component,emitted,unmount}=tripChild(kind,api);await new Promise(setImmediate);
+    assert.ok(emitted.some(row=>row[0]==='accessLost'&&row[1]==='trip-a'));
+    assert.equal(kind==='itinerary'?component.itinerary.value.stops.length:component.photos.value.length,0);unmount();
+  }
+  const{page}=nativeCamping();page.childAccessLost('trip-b');assert.equal(page.selectedTrip.value.id,'trip-a');page.childAccessLost('trip-a');assert.equal(page.selectedTrip.value,undefined);assert.equal(page.session.value,undefined);
 });
 
 test('JSON and binary requests directly use the verified HTTPS API without redirects',async()=>{

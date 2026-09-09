@@ -7,6 +7,8 @@ import { canAccess, getStoredSession, refreshAccess, type HouseholdContext } fro
 import { takeCalendarTarget } from '../../services/calendar-navigation';
 import { assertTravelOrder, shanghaiDate, travelTimestamp } from '../../services/trip-form';
 import { ApiError } from '../../services/transport';
+import { authorizeNativeTrip, uploadTripSelection, type SelectedTripPhoto, type StopLocationDraft, type TripNativeTarget } from '../../services/trip-native';
+import { getMediaReadUrl, listTripPhotos, publicMediaUrl } from '../../services/family-api';
 import { addTripMember, applyPackingTemplate, createPackingTemplate, createTrip, createTripPackingItem, createTripPreparationGroup, getTrip, listPackingTemplates, listTripCandidates, listTripPackingItems, listTrips, removeTripPackingItem, updatePackingTemplate, updateTrip, updateTripMember, updateTripPackingItem, updateTripPreparationGroup, updateTripStatus, type PackingTemplate, type Trip, type TripPackingItem, type TripPreparationGroup } from '../../services/family-api';
 
 type ViewName = 'trips' | 'templates';
@@ -33,6 +35,9 @@ const groupMemberIds = ref<string[]>([]);
 const editingGroupId = ref('');
 
 const loadingTrip = ref(false), tripBusy = ref(false), pageBusy = ref(false);
+const nativeBusy=ref(false),returnedStop=ref<StopLocationDraft>();
+let nativeEpoch=0;
+let nativeReturn:{target:TripNativeTarget;draft?:StopLocationDraft;notice?:string;token:number}|undefined;
 const selectedTrip = computed(() => loadingTrip.value ? undefined : trips.value.find((trip) => trip.id === selectedTripId.value));
 const currentTripMember = computed(() => selectedTrip.value?.members.find(m=>m.membershipId===session.value?.membershipId));
 const canEditTrip = computed(() => canAccess(session.value,'trips','EDIT') && currentTripMember.value?.status === 'ACTIVE' && Boolean(currentTripMember.value?.canEdit) && !['COMPLETED','CANCELLED'].includes(selectedTrip.value?.status || ''));
@@ -51,7 +56,60 @@ let returnTarget:{id:string;householdId:string;membershipId:string}|undefined;
 function stamp():ViewStamp{return{epoch:viewEpoch,detail:detailEpoch,householdId:session.value?.householdId||'',membershipId:session.value?.membershipId||'',tripId:selectedTripId.value,tab:active.value};}
 function current(scope:ViewStamp){const stored=getStoredSession();return!disposed&&pageVisible.value&&scope.epoch===viewEpoch&&scope.detail===detailEpoch&&scope.tab===active.value&&scope.tripId===selectedTripId.value&&Boolean(scope.membershipId)&&session.value?.householdId===scope.householdId&&session.value?.membershipId===scope.membershipId&&stored?.householdId===scope.householdId&&stored?.membershipId===scope.membershipId;}
 function clearForms(){creatingTrip.value=false;editingTrip.value=false;showingTemplateForm.value=false;editingTemplateId.value='';showingItemForm.value=false;showingCollaboration.value=false;tripForm.value={title:'',destination:'',startsAt:'',endsAt:''};tripEditForm.value={title:'',destination:'',startsAt:'',endsAt:''};templateForm.value={name:'',description:'',items:[{name:'',quantity:'',unit:'',note:''}]};itemForm.value={name:'',quantity:'',unit:'',note:''};resetGroupForm();}
-function clearView(){viewEpoch++;detailEpoch++;trips.value=[];templates.value=[];packingItems.value=[];candidates.value=[];session.value=undefined;selectedTripId.value='';loadingTrip.value=false;tripBusy.value=false;pageBusy.value=false;clearForms();}
+function clearView(){viewEpoch++;detailEpoch++;trips.value=[];templates.value=[];packingItems.value=[];candidates.value=[];session.value=undefined;selectedTripId.value='';loadingTrip.value=false;tripBusy.value=false;pageBusy.value=false;returnedStop.value=undefined;clearForms();}
+function cancelNative(){nativeEpoch++;nativeBusy.value=false;nativeReturn=undefined;returnedStop.value=undefined;}
+function childAccessLost(tripId:string){if(!current(stamp())||selectedTripId.value!==tripId)return;cancelNative();clearView();uni.showToast({title:'行程访问权限已变化，请重新进入',icon:'none'});}
+function beginNative(tripId:string,kind:'VIEW'|'PHOTO'|'LOCATION'){
+  const scope=stamp();if(!current(scope)||scope.tripId!==tripId||nativeBusy.value||tripBusy.value||pageBusy.value)return;
+  if(kind==='PHOTO'&&!canAddTripPhotos.value||kind==='LOCATION'&&!canEditTrip.value)return;
+  const target={id:tripId,householdId:scope.householdId,membershipId:scope.membershipId};nativeBusy.value=true;nativeReturn=undefined;return{target,token:++nativeEpoch};
+}
+async function restoreNative(){
+  const result=nativeReturn;if(!result||disposed||!pageVisible.value)return;nativeReturn=undefined;
+  returnTarget=result.target;await loadData();
+  if(result.token!==nativeEpoch||!current(stamp())||selectedTripId.value!==result.target.id||session.value?.householdId!==result.target.householdId||session.value?.membershipId!==result.target.membershipId)return;
+  if(result.draft&&canEditTrip.value)returnedStop.value=result.draft;
+  if(result.notice)uni.showToast({title:result.notice,icon:'none',duration:3000});
+}
+async function finishNative(target:TripNativeTarget,token:number,draft?:StopLocationDraft,notice?:string){
+  if(disposed||token!==nativeEpoch)return;nativeBusy.value=false;nativeReturn={target,token,draft,notice};if(pageVisible.value)await restoreNative();
+}
+async function chooseStopLocation(draft:StopLocationDraft){
+  const flow=beginNative(draft.tripId,'LOCATION');if(!flow)return;
+  const {target,token}=flow,alive=()=>!disposed&&token===nativeEpoch;
+  const retained:StopLocationDraft={tripId:target.id,form:{...draft.form},original:draft.original?{...draft.original}:undefined};
+  let notice:string|undefined,restore=false;
+  try{
+    let picked:{latitude:number;longitude:number;name:string;address:string}|undefined;
+    try{picked=await new Promise((resolve,reject)=>uni.chooseLocation({success:resolve,fail:reject}));}
+    catch{notice='未选择位置，可继续手工填写经纬度';}
+    await authorizeNativeTrip(target,'LOCATION',alive);restore=true;
+    if(picked){retained.form.latitude=String(picked.latitude);retained.form.longitude=String(picked.longitude);if(!retained.form.title)retained.form.title=picked.name||picked.address||'行程地点';}
+  }catch(error){notice=message(error);}
+  await finishNative(target,token,restore?retained:undefined,notice);
+}
+async function chooseTripPhotos(tripId:string){
+  const flow=beginNative(tripId,'PHOTO');if(!flow)return;
+  const{target,token}=flow,alive=()=>!disposed&&token===nativeEpoch;let completed=0,notice:string|undefined;
+  try{
+    const files=await new Promise<SelectedTripPhoto[]>((resolve,reject)=>uni.chooseMedia({count:9,mediaType:['image'],sourceType:['album','camera'],success:result=>resolve(result.tempFiles.map(file=>({tempFilePath:file.tempFilePath,size:file.size}))),fail:error=>reject(new Error(error.errMsg||'未选择图片'))}));
+    await uploadTripSelection(target,files,alive,count=>{completed=count;});notice=`已添加 ${completed} 张照片`;
+  }catch(error){const text=message(error);if(!text.includes('cancel'))notice=completed?`已添加 ${completed} 张，其余未完成：${text}`:text;}
+  await finishNative(target,token,undefined,notice);
+}
+async function previewTripPhoto(tripId:string,photoId:string){
+  const flow=beginNative(tripId,'VIEW');if(!flow)return;
+  const{target,token}=flow,alive=()=>!disposed&&token===nativeEpoch;let notice:string|undefined;
+  try{
+    await authorizeNativeTrip(target,'VIEW',alive);
+    const rows=await listTripPhotos(target.id);if(!alive())return;
+    if(!rows.some(row=>row.id===photoId))throw new Error('照片已不可访问，请刷新相册');
+    const signed=await Promise.all(rows.map(async row=>({id:row.id,url:publicMediaUrl((await getMediaReadUrl(row.id)).path)})));
+    await authorizeNativeTrip(target,'VIEW',alive);
+    await new Promise<void>((resolve,reject)=>uni.previewImage({current:signed.find(row=>row.id===photoId)!.url,urls:signed.map(row=>row.url),success:()=>resolve(),fail:error=>reject(new Error(error.errMsg||'照片预览失败'))}));
+  }catch(error){notice=message(error);}
+  await finishNative(target,token,undefined,notice);
+}
 function scopedError(scope:ViewStamp,error:unknown){
   if(disposed||!pageVisible.value||scope.epoch!==viewEpoch||scope.detail!==detailEpoch||scope.tripId!==selectedTripId.value||scope.tab!==active.value)return;
   if(error instanceof ApiError&&[401,403,404].includes(error.statusCode)){clearView();uni.showToast({title:'访问状态已变化，请重新进入露营页面',icon:'none'});return;}
@@ -62,7 +120,7 @@ async function refreshTrip(scope:ViewStamp){const request=++tripRead;const trip=
 async function refreshCandidates(scope:ViewStamp){if(!current(scope))return;if(!isTripOwner.value){candidates.value=[];return;}const rows=await listTripCandidates(scope.tripId);if(current(scope)&&isTripOwner.value)candidates.value=rows;}
 async function mutateTrip<T>(write:(trip:Trip)=>Promise<T>,after:(result:T,scope:ViewStamp)=>Promise<void>|void,owner=false){
   const trip=selectedTrip.value,scope=stamp();
-  if(!trip||!current(scope)||tripBusy.value||!(owner?isTripOwner.value:canEditTrip.value))return;
+  if(!trip||!current(scope)||tripBusy.value||nativeBusy.value||!(owner?isTripOwner.value:canEditTrip.value))return;
   tripBusy.value=true;
   try{const result=await write(trip);if(current(scope))await after(result,scope);}catch(error){scopedError(scope,error);}finally{if(current(scope))tripBusy.value=false;}
 }
@@ -98,7 +156,7 @@ function quantityText(quantity: string | number | null, unit: string | null) { r
 function responsibleName(item: TripPackingItem) { return item.responsibleMembership?.user.nickname || (item.responsibleMembership ? '家庭成员' : '未分配'); }
 
 async function loadData() {
-  if(disposed||!pageVisible.value)return false;
+  if(disposed||!pageVisible.value||nativeBusy.value)return false;
   const target=takeCalendarTarget('TRIP');
   const previous=session.value?{id:selectedTripId.value,householdId:session.value.householdId,membershipId:session.value.membershipId}:returnTarget;
   clearView();const epoch=viewEpoch;returnTarget=undefined;
@@ -119,6 +177,7 @@ async function loadData() {
 }
 async function openTrip(tripId: string) {
   if(!current(stamp())||!canAccess(session.value,'trips'))return;
+  if(nativeBusy.value)cancelNative();
   detailEpoch++;selectedTripId.value=tripId;loadingTrip.value=true;tripBusy.value=false;packingItems.value=[];candidates.value=[];clearForms();const scope=stamp();
   try {const [trip,items]=await Promise.all([getTrip(tripId),listTripPackingItems(tripId)]);if(!current(scope))return;replaceTrip(trip);packingItems.value=items;loadingTrip.value=false;await refreshCandidates(scope);}
   catch(error){if(current(scope)){scopedError(scope,error);closeTrip();}}
@@ -131,7 +190,7 @@ async function itineraryChanged(version: number,tripId:string) {
   replaceTrip({...trip,version:Math.max(trip.version,version)});
   try{await refreshTrip(scope);}catch(error){scopedError(scope,error);}
 }
-function closeTrip() { detailEpoch++;selectedTripId.value='';packingItems.value=[];candidates.value=[];loadingTrip.value=false;tripBusy.value=false;clearForms(); }
+function closeTrip() { cancelNative();detailEpoch++;selectedTripId.value='';packingItems.value=[];candidates.value=[];loadingTrip.value=false;tripBusy.value=false;clearForms(); }
 async function saveTrip() {
   const scope=stamp();if(!current(scope)||pageBusy.value||!canAccess(session.value,'trips','EDIT'))return;
   if (!tripForm.value.title.trim() || !tripForm.value.startsAt) { uni.showToast({ title: '请填写行程名称和出发日期', icon: 'none' }); return; }
@@ -240,8 +299,8 @@ function startOverviewPulse() {
   overviewTimer=setInterval(() => { overviewPulse.value=!overviewPulse.value; }, 850);
 }
 function hidePage(){if(session.value)returnTarget={id:selectedTripId.value,householdId:session.value.householdId,membershipId:session.value.membershipId};pageVisible.value=false;if(overviewTimer){clearInterval(overviewTimer);overviewTimer=undefined;}clearView();}
-function unloadPage(){disposed=true;hidePage();returnTarget=undefined;}
-function showPage(){if(disposed)return;pageVisible.value=true;startOverviewPulse();return loadData();}
+function unloadPage(){disposed=true;cancelNative();hidePage();returnTarget=undefined;}
+function showPage(){if(disposed)return;pageVisible.value=true;startOverviewPulse();if(nativeBusy.value)return;if(nativeReturn)return restoreNative();return loadData();}
 watch(active,()=>{closeTrip();pageBusy.value=false;},{flush:'sync'});
 onShow(showPage);
 onHide(hidePage);
@@ -255,6 +314,7 @@ onUnmounted(unloadPage);
     <view class="tabs"><view class="tab" :class="{ chosen: active === 'trips' }" @tap="active = 'trips'">行程</view><view v-if="canAccess(session,'packing_templates')" class="tab" :class="{ chosen: active === 'templates' }" @tap="active = 'templates'">行李模板</view></view>
     <text v-if="loadingTrip" class="empty">正在核对行程权限并读取行李…</text>
     <text v-if="tripBusy || pageBusy" class="map-note">正在保存，请稍候…</text>
+    <text v-if="nativeBusy" class="empty">正在处理选点或照片，请稍候…</text>
 
     <view v-if="active === 'trips' && !selectedTrip">
       <map v-if="overviewPoints.length" class="overview-map" :latitude="overviewCenter.latitude" :longitude="overviewCenter.longitude" :scale="4" :markers="overviewMarkers" :polyline="overviewPolylines" :include-points="overviewPoints" show-scale />
@@ -270,8 +330,8 @@ onUnmounted(unloadPage);
       <view class="back" @tap="closeTrip">‹ 返回行程</view>
       <view class="trip-head"><view class="trip-head-row"><view><text class="trip-title">{{ selectedTrip.title }}</text><text class="trip-sub">{{ selectedTrip.destination || '未填写目的地' }} · {{dateText(selectedTrip.startsAt)}}{{selectedTrip.endsAt?` 至 ${dateText(selectedTrip.endsAt)}`:''}} · 已准备 {{ packedCount }}/{{ packingItems.length }}</text></view><text v-if="canEditTrip" class="edit" @tap="startTripEdit">编辑行程</text></view></view>
       <view v-if="editingTrip" class="editor"><text class="editor-title">编辑行程</text><input v-model="tripEditForm.title" class="input" placeholder="行程名称"/><input v-model="tripEditForm.destination" class="input" placeholder="目的地（可清空）"/><view class="date-row"><picker mode="date" :value="tripEditForm.startsAt" @change="tripEditForm.startsAt=$event.detail.value"><view class="input">{{tripEditForm.startsAt||'出发日期'}}</view></picker><picker mode="date" :value="tripEditForm.endsAt" @change="tripEditForm.endsAt=$event.detail.value"><view class="input">{{tripEditForm.endsAt||'返回日期（可不填）'}}</view></picker></view><text v-if="tripEditForm.endsAt" class="clear" @tap="tripEditForm.endsAt=''">清空返回日期</text><view class="button small" @tap="saveTripEdit">保存行程</view><view class="cancel" @tap="editingTrip=false">取消</view></view>
-      <TripItinerary :key="`${session?.membershipId}:${selectedTrip.id}:${detailEpoch}`" :trip="selectedTrip" :can-edit="canEditTrip" :active="pageVisible" @changed="itineraryChanged" />
-      <TripPhotos :key="`${session?.membershipId}:${selectedTrip.id}:${detailEpoch}`" :trip="selectedTrip" :can-upload="canAddTripPhotos" @changed="itineraryChanged" />
+      <TripItinerary :key="`${session?.membershipId}:${selectedTrip.id}:${detailEpoch}`" :trip="selectedTrip" :can-edit="canEditTrip && !nativeBusy" :active="pageVisible" :restored-draft="returnedStop" @choose-location="chooseStopLocation" @draft-consumed="returnedStop=undefined" @access-lost="childAccessLost" @changed="itineraryChanged" />
+      <TripPhotos :key="`${session?.membershipId}:${selectedTrip.id}:${detailEpoch}`" :trip="selectedTrip" :can-upload="canAddTripPhotos && !nativeBusy" :active="pageVisible" @choose-photos="chooseTripPhotos" @preview="previewTripPhoto" @access-lost="childAccessLost" />
       <view class="collab-summary" @tap="showingCollaboration=!showingCollaboration"><text>同行 {{selectedTrip.members.length}} 人 · 准备小组 {{selectedTrip.preparationGroups.length}} 个</text><text>{{showingCollaboration?'收起':'管理协作'}} ›</text></view>
       <view v-if="showingCollaboration" class="editor collab-panel">
         <view v-for="member in selectedTrip.members" :key="member.membershipId" class="member-row"><view><text class="member-name">{{member.membership.user.nickname||'家庭成员'}}</text><text class="member-role">{{member.tripRole==='OWNER'?'行程负责人':'同行成员'}} · {{member.status==='HISTORY'?'历史可见':member.canEdit?'可协作':'只读'}}</text></view><text v-if="isTripOwner && member.membershipId!==session?.membershipId" class="danger-link" @tap="revokeMember(member)">撤销</text></view>

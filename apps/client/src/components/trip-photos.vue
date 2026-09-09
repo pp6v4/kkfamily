@@ -1,41 +1,34 @@
 <script setup lang="ts">
-import { ref, watch } from 'vue';
-import { confirmMediaAsset, createMediaUploadIntent, getMediaReadUrl, listTripPhotos, publicMediaUrl, uploadMediaContent, type Trip, type TripPhoto } from '../services/family-api';
+import { onUnmounted, ref, watch } from 'vue';
+import { ApiError } from '../services/transport';
+import { getMediaReadUrl, listTripPhotos, publicMediaUrl, type Trip, type TripPhoto } from '../services/family-api';
 
-const props=defineProps<{trip:Trip;canUpload:boolean}>();
-const emit=defineEmits<{changed:[version:number,tripId:string]}>();
+const props=defineProps<{trip:Trip;canUpload:boolean;active:boolean}>();
+const emit=defineEmits<{choosePhotos:[tripId:string];preview:[tripId:string,photoId:string];accessLost:[tripId:string]}>();
 const photos=ref<Array<TripPhoto&{url:string}>>([]);
-const loading=ref(false),uploading=ref(false);
+const loading=ref(false);
+let epoch=0,disposed=false;
 
 function message(error:unknown){return error instanceof Error?error.message:'操作失败';}
-function mimeFor(path:string){const clean=path.toLowerCase().split('?')[0];if(clean.endsWith('.jpg')||clean.endsWith('.jpeg'))return'image/jpeg' as const;if(clean.endsWith('.png'))return'image/png' as const;if(clean.endsWith('.webp'))return'image/webp' as const;throw new Error('请选择 JPG、PNG 或 WebP 图片');}
-function readBytes(path:string){return new Promise<ArrayBuffer>((resolve,reject)=>{uni.getFileSystemManager().readFile({filePath:path,success(result){if(typeof result.data==='string')reject(new Error('图片读取格式错误'));else resolve(result.data as ArrayBuffer);},fail(error){reject(new Error(error.errMsg||'图片读取失败'));}});});}
-async function load(){loading.value=true;try{const rows=await listTripPhotos(props.trip.id);photos.value=(await Promise.all(rows.map(async row=>{try{const read=await getMediaReadUrl(row.id);return{...row,url:publicMediaUrl(read.path)};}catch{return undefined;}}))).filter((row):row is TripPhoto&{url:string}=>Boolean(row));}catch(error){uni.showToast({title:message(error),icon:'none'});}finally{loading.value=false;}}
-watch(()=>props.trip.id,load,{immediate:true});
-
-async function choosePhotos(){
-  if(uploading.value||!props.canUpload)return;
+async function load(){
+  const token=++epoch,tripId=props.trip.id;photos.value=[];loading.value=false;
+  const current=()=>!disposed&&props.active&&epoch===token&&props.trip.id===tripId;
+  if(!current())return;loading.value=true;
   try{
-    const selected=await new Promise<Array<{tempFilePath:string;size:number}>>((resolve,reject)=>uni.chooseMedia({count:9,mediaType:['image'],sourceType:['album','camera'],success(result){resolve(result.tempFiles.map(file=>({tempFilePath:file.tempFilePath,size:file.size})));},fail(error){reject(new Error(error.errMsg||'未选择图片'));}}));
-    if(selected.some(file=>file.size>8*1024*1024))throw new Error('每张图片不能超过 8MB');
-    uploading.value=true;
-    let ownerVersion=props.trip.version;
-    for(const file of selected){
-      const mimeType=mimeFor(file.tempFilePath),bytes=await readBytes(file.tempFilePath);
-      if(bytes.byteLength!==file.size)throw new Error('图片读取大小不一致，请重新选择');
-      const intent=await createMediaUploadIntent({ownerType:'TRIP',ownerId:props.trip.id,expectedOwnerVersion:ownerVersion,mimeType,byteSize:bytes.byteLength});
-      const uploaded=await uploadMediaContent(intent.uploadPath,bytes,mimeType);
-      const confirmed=await confirmMediaAsset(intent.id,uploaded.checksumSha256);ownerVersion=confirmed.ownerVersion;
-    }
-    emit('changed',ownerVersion,props.trip.id);await load();uni.showToast({title:`已添加 ${selected.length} 张照片`,icon:'success'});
-  }catch(error){const text=message(error);if(!text.includes('cancel'))uni.showToast({title:text,icon:'none',duration:3000});}finally{uploading.value=false;}
+    const rows=await listTripPhotos(tripId);if(!current())return;
+    const signed=await Promise.all(rows.map(async row=>{const read=await getMediaReadUrl(row.id);return{...row,url:publicMediaUrl(read.path)};}));
+    if(current())photos.value=signed;
+  }catch(error){if(current()){if(error instanceof ApiError&&[401,403].includes(error.statusCode))emit('accessLost',tripId);else uni.showToast({title:message(error),icon:'none'});}}finally{if(current())loading.value=false;}
 }
-function preview(index:number){uni.previewImage({current:photos.value[index].url,urls:photos.value.map(photo=>photo.url)});}
+watch(()=>[props.trip.id,props.active],load,{immediate:true,flush:'sync'});
+onUnmounted(()=>{disposed=true;epoch++;photos.value=[];loading.value=false;});
+function choosePhotos(){if(!disposed&&props.active&&props.canUpload)emit('choosePhotos',props.trip.id);}
+function preview(index:number){const photo=photos.value[index];if(!disposed&&props.active&&photo)emit('preview',props.trip.id,photo.id);}
 </script>
 
 <template>
   <view class="photo-card">
-    <view class="photo-head"><view><text class="eyebrow">旅途相册</text><text class="title">一路的小记忆</text></view><text v-if="canUpload" class="add" @tap="choosePhotos">{{uploading?'上传中…':'＋ 添加照片'}}</text></view>
+    <view class="photo-head"><view><text class="eyebrow">旅途相册</text><text class="title">一路的小记忆</text></view><text v-if="canUpload" class="add" @tap="choosePhotos">＋ 添加照片</text></view>
     <view v-if="photos.length" class="grid"><view v-for="(photo,index) in photos" :key="photo.id" class="photo-wrap" @tap="preview(index)"><image class="photo" :src="photo.url" mode="aspectFill"/><text class="author">{{photo.createdBy.nickname||'同行成员'}}</text></view></view>
     <text v-else class="empty">{{loading?'正在读取相册…':'还没有照片，旅途中或回来后都可以添加。'}}</text>
     <text class="note">照片仅向这趟行程的当前或历史成员开放；撤权后不能再获取新的查看链接。</text>
