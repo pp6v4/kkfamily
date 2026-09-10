@@ -550,8 +550,8 @@ test('Account page trims and saves the display name while preserving failed inpu
 });
 test('Permission editor previews DENY and preserves draft on version conflict',async()=>{
   const uni=mockUni();const target={id:'member-b',version:7,roles:['CHEF'],overrides:[],status:'ACTIVE',user:{id:'user-b',nickname:'示例成员'},effectivePermissions:{recipes:'EDIT'}};let submitted;
-  const page=loadPage('src/pages/members/index.vue',{'../../services/session':{canAccess:allowed,refreshAccess:async()=>family},'../../services/members-api':{saveMemberPermissions:async(member,roles,overrides)=>{submitted={version:member.version,roles,overrides};throw new Error('成员已更新，请刷新后重试');}}},uni);
-  page.session.value=family;page.catalog.value={CHEF:{recipes:'EDIT'}};page.edit(target);page.permissionChange('recipes',{detail:{value:'1'}});
+  const page=loadPage('src/pages/members/index.vue',{'../../services/session':{canAccess:allowed,getStoredSession:()=>family,refreshAccess:async()=>family},'../../services/transport':{ApiError},'../../services/members-api':{saveMemberPermissions:async(member,roles,overrides)=>{submitted={version:member.version,roles,overrides};throw new Error('成员已更新，请刷新后重试');}}},uni);
+  page.pageVisible.value=true;page.session.value=family;page.members.value=[target];page.catalog.value={CHEF:{recipes:'EDIT'}};page.edit(target);page.permissionChange('recipes',{detail:{value:'1'}});
   assert.equal(page.preview.value.recipes,undefined);await page.save();
   assert.equal(submitted.version,7);assert.equal(submitted.overrides[0].effect,'DENY');assert.equal(page.selected.value.id,'member-b');assert.equal(page.overrides.value[0].effect,'DENY');assert.match(page.error.value,/草稿已保留/);
 });
@@ -559,6 +559,26 @@ test('Calendar navigation preserves date/source, and consumption is scoped and o
   const nav=loadTs('src/services/calendar-navigation.ts',{},mockUni());
   nav.setCalendarTarget({type:'TRIP',date:'2026-09-01',sourceId:'trip-a'});
   assert.equal(nav.takeCalendarTarget('MEAL'),undefined);const target=nav.takeCalendarTarget('TRIP');assert.equal(target.date,'2026-09-01');assert.equal(target.sourceId,'trip-a');assert.equal(nav.takeCalendarTarget('TRIP'),undefined);
+});
+
+test('Members API sends captured member and actor versions, escaped targets and one-use invitation payloads',async()=>{
+  const sent=[],api=loadTs('src/services/members-api.ts',{'./session':{ensureSession:async()=>family},'./transport':{ApiError,rawRequest:async(path,method,data,headers)=>{sent.push({path,method,data,headers});return{};}}},mockUni());
+  const target={id:'member/b',version:7};
+  await api.saveMemberPermissions(target,['CHEF'],[{module:'recipes',effect:'DENY',level:'VIEW'}]);
+  await api.setMemberStatus(target,'DISABLED');await api.transferAdmin(target,3);
+  await api.createInvitation(['GUEST'],[{module:'meals',level:'EDIT',effect:'ALLOW'}]);await api.revokeInvitation({id:'invite/a',version:4});await api.listMembers('cursor/a');
+  assert.equal(sent[0].path,'/members/member%2Fb/permissions');assert.equal(sent[0].data.version,7);assert.equal(sent[0].data.overrides[0].effect,'DENY');
+  assert.equal(sent[1].method,'PATCH');assert.equal(sent[1].data.status,'DISABLED');assert.equal(sent[1].data.version,7);
+  assert.equal(sent[2].path,'/households/house-a/transfer-admin');assert.equal(sent[2].data.targetMembershipId,'member/b');assert.equal(sent[2].data.targetVersion,7);assert.equal(sent[2].data.version,3);
+  assert.equal(sent[3].data.maxUses,1);assert.equal(sent[3].data.grants[0].module,'meals');assert.equal(sent[4].method,'DELETE');assert.equal(sent[4].path,'/invitations/invite%2Fa');assert.equal(sent[4].data.version,4);assert.equal(sent[5].path,'/members?cursor=cursor%2Fa');
+  for(const call of sent){assert.equal(call.headers['X-Household-Id'],'house-a');assert.equal(call.headers.Authorization,'Bearer fictional-token');}
+});
+
+test('Members API renews 401 once for the original household, not for permission conflicts',async()=>{
+  for(const status of [401,403,409]){
+    let calls=0,renewals=0;const api=loadTs('src/services/members-api.ts',{'./session':{ensureSession:async()=>family,renewSession:async preferred=>{renewals++;assert.equal(preferred,'house-a');return{...family,accessToken:'renewed'};}},'./transport':{ApiError,rawRequest:async(path,method,data,headers)=>{calls++;if(calls===1)throw new ApiError('failure',status);assert.equal(headers.Authorization,'Bearer renewed');assert.equal(headers['X-Household-Id'],'house-a');return[];}}},mockUni());
+    if(status===401){await api.listInvitations();assert.equal(calls,2);assert.equal(renewals,1);}else{await assert.rejects(api.listInvitations(),e=>e.statusCode===status);assert.equal(calls,1);assert.equal(renewals,0);}
+  }
 });
 test('Calendar quick actions and event drill-down require the corresponding module permission',async()=>{
   const uni=mockUni(),targets=[],toasts=[];
