@@ -1,4 +1,4 @@
-import { ensureSession, renewSession } from './session';
+import { assertSessionEpoch, getSessionEpoch, ensureSession, renewSession } from './session';
 import { ApiError, rawBinaryRequest, rawRequest } from './transport';
 import { API_BASE_URL } from './config';
 
@@ -36,18 +36,28 @@ export interface InboxItem { id:string;version:number;sourceType:'TASK';sourceId
 export interface NotificationPreference { membershipId:string;eventType:'TASK_REMINDER';enabled:boolean;leadMinutes:number;quietStart:string|null;quietEnd:string|null;version:number }
 
 async function request<T>(path: string, method: UniApp.RequestOptions['method'] = 'GET', data?: unknown): Promise<T> {
+  const epoch = getSessionEpoch();
   const session = await ensureSession();
+  assertSessionEpoch(epoch);
   try {
-    return await rawRequest<T>(path, method, data, { Authorization: `Bearer ${session.accessToken}`, 'X-Household-Id': session.householdId });
+    const result = await rawRequest<T>(path, method, data, { Authorization: `Bearer ${session.accessToken}`, 'X-Household-Id': session.householdId });
+    assertSessionEpoch(epoch); return result;
   } catch (error) {
+    assertSessionEpoch(epoch);
     if (error instanceof ApiError && error.statusCode === 401) {
-      const renewed = await renewSession(session.householdId);
-      return rawRequest<T>(path, method, data, { Authorization: `Bearer ${renewed.accessToken}`, 'X-Household-Id': renewed.householdId });
+      const renewed = await renewSession(session.householdId, session.accessToken);
+      assertSessionEpoch(epoch);
+      const result = await rawRequest<T>(path, method, data, { Authorization: `Bearer ${renewed.accessToken}`, 'X-Household-Id': renewed.householdId });
+      assertSessionEpoch(epoch); return result;
     }
     throw error;
   }
 }
-async function binaryRequest<T>(path:string,data:ArrayBuffer,mimeType:string){const session=await ensureSession();try{return await rawBinaryRequest<T>(path,'PUT',data,mimeType,{Authorization:`Bearer ${session.accessToken}`,'X-Household-Id':session.householdId});}catch(error){if(error instanceof ApiError&&error.statusCode===401){const renewed=await renewSession(session.householdId);return rawBinaryRequest<T>(path,'PUT',data,mimeType,{Authorization:`Bearer ${renewed.accessToken}`,'X-Household-Id':renewed.householdId});}throw error;}}
+async function binaryRequest<T>(path:string,data:ArrayBuffer,mimeType:string){
+  const epoch=getSessionEpoch(),session=await ensureSession();assertSessionEpoch(epoch);
+  try{const result=await rawBinaryRequest<T>(path,'PUT',data,mimeType,{Authorization:`Bearer ${session.accessToken}`,'X-Household-Id':session.householdId});assertSessionEpoch(epoch);return result;}
+  catch(error){assertSessionEpoch(epoch);if(error instanceof ApiError&&error.statusCode===401){const renewed=await renewSession(session.householdId,session.accessToken);assertSessionEpoch(epoch);const result=await rawBinaryRequest<T>(path,'PUT',data,mimeType,{Authorization:`Bearer ${renewed.accessToken}`,'X-Household-Id':renewed.householdId});assertSessionEpoch(epoch);return result;}throw error;}
+}
 
 export function listRecipeCategories() { return request<RecipeCategory[]>('/recipes/categories'); }
 export function createRecipeCategory(name: string, sortOrder = 0) { return request<RecipeCategory>('/recipes/categories', 'POST', { name, sortOrder }); }

@@ -9,6 +9,8 @@ const { parse, compileScript } = require('vue/compiler-sfc');
 const ROOT = path.resolve(__dirname, '..');
 class ApiError extends Error { constructor(message, statusCode) { super(message); this.statusCode = statusCode; } }
 function loadTs(relative, dependencies, uni) {
+  // API serialization tests use a fixed identity; race tests load the real session module.
+  if (dependencies['./session']) dependencies={...dependencies,'./session':{getSessionEpoch:()=>0,assertSessionEpoch(){},...dependencies['./session']}};
   const source=fs.readFileSync(path.join(ROOT,relative),'utf8');
   return evaluate(source,dependencies,uni);
 }
