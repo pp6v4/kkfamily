@@ -52,7 +52,7 @@ function loginCode() {
   return new Promise<string>((resolve, reject) => {
     uni.login({
       provider: 'weixin',
-      success(result) { result.code ? resolve(result.code) : reject(new Error('微信登录未返回 code')); },
+      success(result) { if (result.code) resolve(result.code); else reject(new Error('微信登录未返回 code')); },
       fail(error) { reject(new Error(error.errMsg || '微信登录失败')); },
     });
   });
@@ -191,7 +191,7 @@ export async function identityRequest<T>(path: string, method: UniApp.RequestOpt
     if (!(error instanceof ApiError && error.statusCode === 401)) throw error;
     const renewed = await renewIdentity(identity.accessToken);
     assertSessionEpoch(epoch);
-    if (identity.user.id && renewed.user.id && identity.user.id !== renewed.user.id) { clearSession(); throw new Error('登录账号已变化，请重新登录'); }
+    if (identity.user.id && renewed.user.id && identity.user.id !== renewed.user.id) { clearSession(); throw Object.defineProperty(new Error('登录账号已变化，请重新登录'), 'cause', { value: error }); }
     identity = renewed;
     const result = await rawRequest<T>(path, method, data, { Authorization: `Bearer ${identity.accessToken}` });
     assertSessionEpoch(epoch);
@@ -243,7 +243,7 @@ export async function refreshAccess() {
     try { return await loadAccess(context, epoch, sequence); }
     catch (error) {
       assertSessionEpoch(epoch);
-      if (sequence !== accessSequence) throw new Error('权限已重新刷新，请使用最新结果');
+      if (sequence !== accessSequence) throw Object.defineProperty(new Error('权限已重新刷新，请使用最新结果'), 'cause', { value: error });
       if (attempt === 0 && error instanceof ApiError && error.statusCode === 401) {
         context = await renewSession(context.householdId, context.accessToken); assertSessionEpoch(epoch); continue;
       }

@@ -60,7 +60,7 @@ async function addImage(){
   const target=targetForSelection();if(!target||!editable.value||uploading.value||busy.value)return;
   const token=++uploadEpoch;uploading.value=true;returnTarget=target;let succeeded=false;
   try{
-    const file=await new Promise<{tempFilePath:string;size:number}>((resolve,reject)=>uni.chooseMedia({count:1,mediaType:['image'],sourceType:['album','camera'],success(result){const chosen=result.tempFiles[0];chosen?resolve(chosen):reject(new Error('未选择图片'));},fail(error){reject(new Error(error.errMsg||'未选择图片'));}}));
+    const file=await new Promise<{tempFilePath:string;size:number}>((resolve,reject)=>uni.chooseMedia({count:1,mediaType:['image'],sourceType:['album','camera'],success(result){const chosen=result.tempFiles[0];if(chosen)resolve(chosen);else reject(new Error('未选择图片'));},fail(error){reject(new Error(error.errMsg||'未选择图片'));}}));
     const context=await uploadContext(token,target);if(!context)return;
     if(file.size>8*1024*1024)throw new Error('图片不能超过 8MB');
     const current=await getFavorite(target.id);if(token!==uploadEpoch)return;
@@ -103,9 +103,9 @@ onUnload(unloadPage);
     </template>
     <view v-if="showForm" class="card">
       <text class="back" @tap="showForm=false">‹ 返回</text><text class="card-title">{{editing?'编辑收藏':'记录一个灵感'}}</text>
-      <picker :range="types" range-key="label" :value="form.typeIndex" @change="form.typeIndex=Number($event.detail.value)"><view class="input">类型：{{types[form.typeIndex].label}}　›</view></picker>
+      <picker :range="types" range-key="label" :value="form.typeIndex" @change="form.typeIndex=Number($event.detail.value)"><view class="input">类型：{{types[form.typeIndex].label}} ›</view></picker>
       <input v-model="form.title" class="input" placeholder="标题"/><textarea v-model="form.text" class="textarea" placeholder="写下自己的想法（文字类型必填）"/><input v-model="form.sourceUrl" class="input" placeholder="http(s) 来源链接（链接类型必填）"/><input v-model="form.tags" class="input" placeholder="标签，用逗号分隔"/>
-      <picker :range="visibilities" range-key="label" :value="form.visibilityIndex" @change="form.visibilityIndex=Number($event.detail.value)"><view class="input">可见范围：{{visibilities[form.visibilityIndex].label}}　›</view></picker>
+      <picker :range="visibilities" range-key="label" :value="form.visibilityIndex" @change="form.visibilityIndex=Number($event.detail.value)"><view class="input">可见范围：{{visibilities[form.visibilityIndex].label}} ›</view></picker>
       <view class="primary" :class="{disabled:busy}" @tap="save">{{busy?'保存中…':'保存收藏'}}</view><view class="cancel" @tap="showForm=false">取消</view>
     </view>
     <view v-if="selected&&!showForm" class="card detail">
@@ -113,7 +113,7 @@ onUnload(unloadPage);
       <view v-if="previews.length" class="grid"><image v-for="(url,index) in previews" :key="url" class="photo" :src="url" mode="aspectFill" @tap="preview(index)"/></view>
       <view v-if="selected.tags?.length" class="tags large"><text v-for="tag in selected.tags" :key="tag">#{{tag}}</text></view><text class="owner">由 {{personName(selected)}} 收藏 · 原收藏会一直保留</text>
       <view v-if="editable" class="actions"><view @tap="editFavorite">编辑</view><view @tap="addImage">{{uploading?'上传中…':'添加图片'}}</view><view class="danger" @tap="askArchive">归档</view></view>
-      <view v-if="canAccess(session,'favorites','EDIT')" class="convert"><view v-if="!convertOpen" class="secondary" @tap="startConvert">变成可继续编辑的草稿</view><template v-else><text class="card-title small-title">转换草稿</text><picker :range="conversions" range-key="label" :value="convertIndex" @change="convertIndex=Number($event.detail.value)"><view class="input">目标：{{conversions[convertIndex].label}}　›</view></picker><input v-model="convertTitle" class="input" placeholder="确认草稿标题"/><textarea v-model="convertDescription" class="textarea short-area" placeholder="补充说明（可选）"/><text class="note">转成菜谱时不猜食材和做法，也不会自动发布；请进入草稿后自己补全。</text><view class="primary" :class="{disabled:busy}" @tap="runConvert">{{busy?'创建中…':'确认创建草稿'}}</view></template></view>
+      <view v-if="canAccess(session,'favorites','EDIT')" class="convert"><view v-if="!convertOpen" class="secondary" @tap="startConvert">变成可继续编辑的草稿</view><template v-else><text class="card-title small-title">转换草稿</text><picker :range="conversions" range-key="label" :value="convertIndex" @change="convertIndex=Number($event.detail.value)"><view class="input">目标：{{conversions[convertIndex].label}} ›</view></picker><input v-model="convertTitle" class="input" placeholder="确认草稿标题"/><textarea v-model="convertDescription" class="textarea short-area" placeholder="补充说明（可选）"/><text class="note">转成菜谱时不猜食材和做法，也不会自动发布；请进入草稿后自己补全。</text><view class="primary" :class="{disabled:busy}" @tap="runConvert">{{busy?'创建中…':'确认创建草稿'}}</view></template></view>
     </view>
   </view>
 </template>

@@ -41,7 +41,7 @@ function mimeFor(path: string) {
 function readBytes(path: string) {
   return new Promise<ArrayBuffer>((resolve, reject) => uni.getFileSystemManager().readFile({
     filePath: path,
-    success(result) { typeof result.data === 'string' ? reject(new Error('图片读取格式错误')) : resolve(result.data as ArrayBuffer); },
+    success(result) { if (typeof result.data === 'string') reject(new Error('图片读取格式错误')); else resolve(result.data as ArrayBuffer); },
     fail(error) { reject(new Error(error.errMsg || '图片读取失败')); },
   }));
 }
