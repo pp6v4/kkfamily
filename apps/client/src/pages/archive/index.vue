@@ -12,6 +12,11 @@ const types=[{value:'TEXT' as const,label:'文字'},{value:'DATE' as const,label
 const visibilities=[{value:'MANAGERS' as const,label:'仅管理员'},{value:'MEMBERS' as const,label:'家庭成员'},{value:'SELECTED' as const,label:'指定成员'}];
 const manager=computed(()=>canAccess(session.value,'archive','MANAGE'));
 let viewEpoch=0;
+function changeSensitive(event:unknown){
+  if(!event||typeof event!=='object'||!('detail' in event))return;
+  const detail=event.detail;
+  if(detail&&typeof detail==='object'&&'value' in detail&&typeof detail.value==='boolean')form.value.sensitive=detail.value;
+}
 
 function message(error:unknown){return error instanceof Error?error.message:'操作失败';}
 function typeLabel(field:ArchiveField){return types.find(item=>item.value===field.valueType)?.label||field.valueType;}
@@ -79,7 +84,7 @@ onUnload(clearPage);
       <input v-model="form.label" class="input" placeholder="字段名称，例如：家庭联系人"/><input v-if="!editingField" v-model="form.key" class="input" placeholder="英文标识，例如 family_contact"/>
       <picker :range="types" range-key="label" :value="form.typeIndex" @change="form.typeIndex=Number($event.detail.value)"><view class="input">内容类型：{{types[form.typeIndex].label}} ›</view></picker>
       <picker :range="visibilities" range-key="label" :value="form.visibilityIndex" @change="form.visibilityIndex=Number($event.detail.value)"><view class="input">默认可见：{{visibilities[form.visibilityIndex].label}} ›</view></picker>
-      <view class="switch-row"><text>敏感内容（列表始终不返回明文）</text><switch :checked="form.sensitive" color="#739b82" @change="form.sensitive=$event.detail.value"/></view>
+      <view class="switch-row"><text>敏感内容（列表始终不返回明文）</text><switch :checked="form.sensitive" color="#739b82" @change="changeSensitive"/></view>
       <view v-if="members.length" class="grants"><text class="section-title">逐成员授权</text><view v-for="member in members" :key="member.id" class="grant" @tap="cycleGrant(member.id)"><text>{{member.user.nickname||'家庭成员'}}</text><text>{{grantLabel(member.id)}} ›</text></view><text class="note">“指定成员”按此处查看权限生效；非管理员要修改字段，必须单独授予“可编辑”。</text></view>
       <view class="primary" :class="{disabled:busy}" @tap="saveField">{{busy?'保存中…':'保存字段与授权'}}</view><view class="cancel" @tap="showFieldForm=false">取消</view>
     </view>

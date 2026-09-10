@@ -2,6 +2,8 @@
 
 ## 本轮实测
 
+后续17:06检查：完整vue-tsc通过，客户端248/248、lint零诊断、微信构建成功；发现并修复PATCH平台兼容问题，需配套后端部署后才能替换导入目录。详见[接口兼容记录](patch-compatibility-20260910.md)。下文241/241为前一批已交付证据。
+
 实现提交`faa8baf`。Node.js 24.16.0、本机实际pnpm 11.19.0；原依赖缓存为工作区父目录`.pnpm-store`。首次未指定缓存时pnpm要求重建依赖目录，未确认删除；读取原`.modules.yaml`后沿用既有缓存完成安装。
 
 | 门槛 | 结果 | 证明范围 |
@@ -33,4 +35,4 @@ pnpm install --filter @family-life/client --frozen-lockfile --offline --ignore-s
 - 根packageManager仍声明pnpm 10.12.1，而本机封装命令实际运行11.19.0。本轮未改根声明、未强制重建依赖；需在隔离目录核对声明版本的冻结安装与构建。
 - 现有uni-app peer警告仍在：Vue 3.5.41与内部server-renderer 3.4.21；Vite 6.4.3与uni插件5.2.8及其他插件5.x要求；@dcloudio/types 3.4.32与uni-app 3.4.31。锁文件保留原运行依赖，本轮不谎称已完成版本兼容验收。
 - 后端原有ESLint 9弃用及既有过期子依赖仍须另审，未在本次客户端变更中升级。
-- 完整Vue/TypeScript类型检查尚未建立；lint、模拟测试和uni编译不能替代类型检查、真机、微信/COS/地图/订阅消息联调及正式发布验收。
+- 完整Vue/TypeScript类型检查已在后续批次建立并通过；lint、类型检查、模拟测试和uni编译仍不能替代真机、微信/COS/地图/订阅消息联调及正式发布验收。

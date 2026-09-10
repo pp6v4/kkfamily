@@ -238,7 +238,7 @@ function hide() {
   pageVisible.value = false; epoch++; clearPrivate(); loading.value = false;
   if (nativeOperation?.stage === 'uploading') cancelNative();
 }
-onLoad(query => { cancelNative(); epoch++; clearPrivate(); routeId = query.id || ''; routeIdentity = undefined; });
+onLoad(query => { cancelNative(); epoch++; clearPrivate(); routeId = query?.id || ''; routeIdentity = undefined; });
 onShow(async () => {
   if (disposed) return;
   pageVisible.value = true;

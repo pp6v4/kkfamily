@@ -1,4 +1,4 @@
-import { ApiError, rawRequest } from './transport';
+import { ApiError, rawRequest, type ApiMethod } from './transport';
 
 const TOKEN_KEY = 'kkfamily.accessToken';
 const REFRESH_KEY = 'kkfamily.refreshToken';
@@ -178,7 +178,7 @@ export function canAccess(context: HouseholdContext | undefined, module: string,
   return assigned ? rank[assigned] >= rank[level] : false;
 }
 
-export async function identityRequest<T>(path: string, method: UniApp.RequestOptions['method'], data?: unknown) {
+export async function identityRequest<T>(path: string, method: ApiMethod, data?: unknown) {
   const epoch = sessionEpoch;
   let identity = await ensureIdentity();
   assertSessionEpoch(epoch);

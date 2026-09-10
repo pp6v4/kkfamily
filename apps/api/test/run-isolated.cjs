@@ -27,11 +27,14 @@ function main() {
     ['legacy-upgrade', ['--test', '--test-reporter=tap', 'test/legacy-upgrade.test.cjs']],
     ['notification-unit', ['--test', '--test-reporter=tap', 'test/notifications.unit.test.cjs']],
     ['itinerary-unit', ['--test', '--test-reporter=tap', 'test/itinerary.unit.test.cjs']],
+    ['patch-compatibility', ['--test', '--test-reporter=tap', 'test/patch-compatibility.test.cjs']],
     ['http-integration', ['--test', '--test-reporter=tap', 'test/access.integration.test.cjs']],
+    ['http-post-patch-integration', ['--test', '--test-reporter=tap', 'test/access.integration.test.cjs']],
   ];
   for (const [phase, args] of steps) {
     console.log(JSON.stringify({ phase, state: 'started' }));
-    const result = spawnSync(process.execPath, args, { cwd: path.join(__dirname, '..'), stdio: 'inherit' });
+    const result = spawnSync(process.execPath, args, { cwd: path.join(__dirname, '..'), stdio: 'inherit',
+      env: { ...process.env, TEST_PATCH_TRANSPORT: phase === 'http-post-patch-integration' ? 'post' : 'native' } });
     const exitCode = result.status ?? 1;
     console.log(JSON.stringify({ phase, state: exitCode === 0 ? 'passed' : 'failed', exitCode }));
     if (exitCode !== 0) { process.exitCode = exitCode; return; }

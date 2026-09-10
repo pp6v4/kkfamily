@@ -833,6 +833,35 @@ function privatePage(name,api,access){
     '../../services/session':{canAccess:allowed,refreshAccess:access},'../../services/family-api':api,
   },uni);return{page,lifecycle,uni};
 }
+test('Notification subscription records only an explicit result for the requested template',async()=>{
+  for(const [raw,expected] of [['accept','ACCEPT'],['reject','REJECT'],['ban','BAN'],[undefined,undefined],['unknown',undefined]]){
+    const receipts=[];
+    const {page,uni}=privatePage('notifications',{recordSubscriptionReceipt:async value=>receipts.push(value)},async()=>family);
+    page.session.value={...family,effectivePermissions:{notifications:'VIEW'}};
+    page.settings.value={taskReminderTemplateId:'template-test',wechatSubscriptionAvailable:true};
+    uni.requestSubscribeMessage=options=>options.success({errMsg:'requestSubscribeMessage:ok',...(raw===undefined?{}:{'template-test':raw})});
+    await page.subscribeWechat();
+    assert.equal(receipts.length,expected?1:0);
+    if(expected){assert.equal(receipts[0].templateId,'template-test');assert.equal(receipts[0].result,expected);}
+    assert.equal(page.busy.value,false);
+  }
+});
+test('Switch handlers accept boolean detail values only; missing page query does not crash',async()=>{
+  const archive=archivePage();
+  archive.page.changeSensitive({detail:{value:true}});assert.equal(archive.page.form.value.sensitive,true);
+  for(const event of [undefined,null,{}, {detail:{value:'false'}}])archive.page.changeSensitive(event);
+  assert.equal(archive.page.form.value.sensitive,true);
+  archive.page.changeSensitive({detail:{value:false}});assert.equal(archive.page.form.value.sensitive,false);
+  const writes=[];
+  const notifications=privatePage('notifications',{updateNotificationPreference:async(current,input)=>{writes.push(input);return{...current,...input};}},async()=>family);
+  notifications.page.session.value={...family,effectivePermissions:{notifications:'VIEW'}};
+  notifications.page.preference.value={version:2,enabled:true,leadMinutes:0,quietStart:null,quietEnd:null};
+  await notifications.page.changeEnabled({detail:{value:false}});assert.equal(writes.length,1);assert.equal(writes[0].enabled,false);
+  for(const event of [undefined,{}, {detail:{value:'true'}}])await notifications.page.changeEnabled(event);
+  assert.equal(writes.length,1);
+  const tasks=privatePage('tasks',{},async()=>family);tasks.lifecycle.load(undefined);
+  assert.equal(tasks.page.initialTaskId.value,'');assert.equal(tasks.page.initialDate.value,'');
+});
 for(const name of ['dashboard','notifications','tasks','favorites']){
   test(`${name} clears cached household data before permission refresh and rejects late data after hide`,async()=>{
     let denied=true,resolveAccess,resolveData,calls=0;

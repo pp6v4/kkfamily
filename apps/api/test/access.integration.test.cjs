@@ -15,6 +15,7 @@ process.env.ARCHIVE_ENCRYPTION_KEY = Buffer.alloc(32,7).toString('base64');
 process.env.ARCHIVE_ENCRYPTION_KEY_VERSION = '1';
 const { AppModule } = require('../dist/app.module');
 const { configureImageBodyParser } = require('../dist/media/binary-parser');
+const { configurePatchCompatibility } = require('../dist/common/patch-compatibility');
 const { NotificationsService } = require('../dist/notifications/notifications.service');
 let app, db, jwt;
 const TEST_PNG = Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0x00,0x00,0x00,0x0d,0x49,0x48,0x44,0x52]);
@@ -24,6 +25,7 @@ before(async () => {
   process.env.JWT_ACCESS_SECRET = 'isolated-verification-signing-key-not-for-production';
   app = await NestFactory.create(AppModule, new FastifyAdapter(), { logger: ['error'], abortOnError: false });
   configureImageBodyParser(app);
+  configurePatchCompatibility(app);
   app.setGlobalPrefix('v1');
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
   await app.init(); await app.getHttpAdapter().getInstance().ready();
@@ -36,6 +38,11 @@ async function identity() {
   return { userId: user.id, token: await jwt.signAsync({ sub: user.id }) };
 }
 async function call(who, method, path, payload, household = who?.householdId) {
+  if (process.env.TEST_PATCH_TRANSPORT === 'post' && method === 'PATCH') {
+    method = 'POST';
+    const [pathname, ...query] = path.split('?');
+    path = pathname + '/_patch' + (query.length ? '?' + query.join('?') : '');
+  }
   const headers = {};
   if (who?.token) headers.authorization = `Bearer ${who.token}`;
   if (household !== undefined) headers['x-household-id'] = household;

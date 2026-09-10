@@ -8,6 +8,7 @@
     "dev:h5": "uni",
     "build:h5": "uni build",
     "test": "node --test test/*.test.cjs",
+    "typecheck": "vue-tsc --noEmit --pretty false -p tsconfig.json",
     "lint": "eslint \"src/**/*.{ts,vue}\" --max-warnings=0"
   },
   "dependencies": {
@@ -24,6 +25,7 @@
     "eslint-plugin-vue": "10.11.0",
     "typescript-eslint": "8.70.0",
     "vue-eslint-parser": "10.4.1",
+    "vue-tsc": "3.3.11",
     "@dcloudio/types": "3.4.32",
     "@dcloudio/uni-automator": "3.0.0-5020420260813003",
     "@dcloudio/vite-plugin-uni": "3.0.0-5020420260813003",

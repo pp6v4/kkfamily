@@ -1,10 +1,10 @@
 import { assertSessionEpoch, getSessionEpoch, ensureSession, renewSession } from './session';
-import { ApiError, rawRequest } from './transport';
+import { ApiError, rawRequest, type ApiMethod } from './transport';
 export type Level = 'VIEW' | 'EDIT' | 'MANAGE';
 export interface Override { module: string; level: Level; effect: 'ALLOW' | 'DENY' }
 export interface Member { id: string; membershipId: string; user: { id: string; nickname: string | null }; status: 'ACTIVE' | 'PENDING' | 'DISABLED' | 'LEFT'; version: number; roles: string[]; overrides: Override[]; effectivePermissions: Record<string, Level> }
 export interface Invitation { id: string; roleCodes: string[]; expiresAt: string; usedCount: number; maxUses: number; revokedAt: string | null; version: number; code?: string }
-async function request<T>(path: string, method: UniApp.RequestOptions['method'] = 'GET', data?: unknown) {
+async function request<T>(path: string, method: ApiMethod = 'GET', data?: unknown) {
   const epoch = getSessionEpoch();
   const session = await ensureSession();
   assertSessionEpoch(epoch);

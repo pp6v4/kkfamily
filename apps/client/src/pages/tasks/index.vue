@@ -46,7 +46,7 @@ async function save(){if(busy.value||!canAccess(session.value,'tasks','EDIT')||(
 async function changeStatus(status:Task['status'],reason?:string){const task=selected.value;if(!task||busy.value||!statusEditable.value)return;const normalizedReason=reason?.trim();if(status==='PENDING'&&['COMPLETED','CANCELLED'].includes(task.status)&&!normalizedReason){uni.showToast({title:'请填写重新打开原因',icon:'none'});return;}const epoch=viewEpoch;busy.value=true;try{const saved=await updateTaskStatus(task,status,normalizedReason);if(epoch!==viewEpoch)return;replaceTask(saved);reopenReason.value='';}catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});}finally{if(epoch===viewEpoch)busy.value=false;}}
 function cancelTask(){if(busy.value||!statusEditable.value)return;const epoch=viewEpoch;uni.showModal({title:'取消待办',content:'取消后不会再出现在日历中，处理记录仍保留。',success:result=>{if(result.confirm&&epoch===viewEpoch)changeStatus('CANCELLED');}});}
 async function saveComment(){if(!selected.value||!comment.value.trim()||busy.value||!canAccess(session.value,'tasks','EDIT'))return;const epoch=viewEpoch;busy.value=true;try{const saved=await addTaskComment(selected.value.id,comment.value.trim());if(epoch!==viewEpoch)return;replaceTask(saved);comment.value='';}catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});}finally{if(epoch===viewEpoch)busy.value=false;}}
-onLoad(query=>{initialTaskId.value=String(query.id||'');initialDate.value=String(query.date||'');});
+onLoad(query=>{initialTaskId.value=String(query?.id||'');initialDate.value=String(query?.date||'');});
 onShow(load);
 onHide(clearPage);
 onUnload(clearPage);

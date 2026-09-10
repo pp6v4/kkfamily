@@ -6,6 +6,11 @@ import { canAccess, refreshAccess, type HouseholdContext } from '../../services/
 
 const session=ref<HouseholdContext>(),inbox=ref<InboxItem[]>([]),preference=ref<NotificationPreference>(),settings=ref<{taskReminderTemplateId:string|null;wechatSubscriptionAvailable:boolean}>(),busy=ref(false);
 let viewEpoch=0;
+function changeEnabled(event:unknown){
+  if(!event||typeof event!=='object'||!('detail' in event))return;
+  const detail=event.detail;
+  if(detail&&typeof detail==='object'&&'value' in detail&&typeof detail.value==='boolean')return toggle(detail.value);
+}
 function clearPage(){viewEpoch++;session.value=undefined;inbox.value=[];preference.value=undefined;settings.value=undefined;busy.value=false;}
 const unread=computed(()=>inbox.value.filter(item=>!item.readAt).length);
 function message(error:unknown){return error instanceof Error?error.message:'操作失败';}
@@ -22,7 +27,10 @@ async function subscribeWechat(){
   if(busy.value||!canAccess(session.value,'notifications'))return;
   const templateId=settings.value?.taskReminderTemplateId;if(!templateId){uni.showToast({title:'微信订阅模板尚未配置，站内提醒不受影响',icon:'none',duration:3000});return;}
   const epoch=viewEpoch;busy.value=true;
-  try{const result=await new Promise<Record<string,string>>((resolve,reject)=>uni.requestSubscribeMessage({tmplIds:[templateId],success:resolve,fail:error=>reject(new Error(error.errMsg||'微信订阅请求失败'))}));if(epoch!==viewEpoch)return;const raw=result[templateId],mapped=raw==='accept'?'ACCEPT':raw==='ban'?'BAN':'REJECT';await recordSubscriptionReceipt({templateId,result:mapped,clientScene:'notification-settings'});if(epoch!==viewEpoch)return;uni.showToast({title:mapped==='ACCEPT'?'本次微信订阅已记录':'已保留站内提醒',icon:mapped==='ACCEPT'?'success':'none'});}
+  try{const result=await new Promise<unknown>((resolve,reject)=>uni.requestSubscribeMessage({tmplIds:[templateId],success:resolve,fail:error=>reject(new Error(error.errMsg||'微信订阅请求失败'))}));if(epoch!==viewEpoch)return;
+    const raw=result&&typeof result==='object'&&templateId in result?(result as Record<string,unknown>)[templateId]:undefined;
+    if(raw!=='accept'&&raw!=='ban'&&raw!=='reject')throw new Error('微信未返回有效的模板订阅结果，请重试');
+    const mapped=raw==='accept'?'ACCEPT':raw==='ban'?'BAN':'REJECT';await recordSubscriptionReceipt({templateId,result:mapped,clientScene:'notification-settings'});if(epoch!==viewEpoch)return;uni.showToast({title:mapped==='ACCEPT'?'本次微信订阅已记录':'已保留站内提醒',icon:mapped==='ACCEPT'?'success':'none'});}
   catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});}finally{if(epoch===viewEpoch)busy.value=false;}
 }
 onShow(load);
@@ -33,7 +41,7 @@ onUnload(clearPage);
 <template>
   <view class="page">
     <view class="head"><text class="eyebrow">消息与提醒</text><text class="title">该记得的，轻轻提醒</text><text class="subtitle">站内消息是主记录；微信订阅只在你主动点击后申请，不会反复弹窗。</text></view>
-    <view v-if="preference" class="card setting"><view><text class="setting-title">家庭待办站内提醒</text><text class="setting-note">按待办里明确设置的提醒时间生成</text></view><switch :checked="preference.enabled" color="#76a094" :disabled="busy" @change="toggle($event.detail.value)"/></view>
+    <view v-if="preference" class="card setting"><view><text class="setting-title">家庭待办站内提醒</text><text class="setting-note">按待办里明确设置的提醒时间生成</text></view><switch :checked="preference.enabled" color="#76a094" :disabled="busy" @change="changeEnabled"/></view>
     <view v-if="settings" class="card wechat"><view><text class="setting-title">微信订阅消息（辅助）</text><text class="setting-note">{{settings.wechatSubscriptionAvailable?'模板已配置，可主动申请一次订阅':'模板尚未配置，当前只使用站内提醒'}}</text></view><view class="subscribe" @tap="subscribeWechat">主动申请</view></view>
     <view class="section"><text class="section-title">站内消息</text><text class="count">{{unread}} 条未读</text></view>
     <view v-for="item in inbox" :key="item.id" class="message" :class="{read:item.readAt}" @tap="open(item)"><text v-if="!item.readAt" class="dot"></text><view class="bell">🔔</view><view class="grow"><text class="message-title">{{item.title}}</text><text class="meta">待办提醒 · {{time(item.createdAt)}}</text></view><text class="go">›</text></view>

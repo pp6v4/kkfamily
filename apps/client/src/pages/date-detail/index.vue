@@ -207,7 +207,7 @@ function removeEvent() {
 }
 
 onLoad((query) => {
-  date.value = query.date === undefined ? todayInShanghai() : String(query.date);
+  date.value = query?.date === undefined ? todayInShanghai() : String(query.date);
 });
 onShow(() => { if (disposed) return; pageVisible.value = true; return loadEvents(); });
 onHide(leave);

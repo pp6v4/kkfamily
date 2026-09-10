@@ -1,5 +1,5 @@
 import { assertSessionEpoch, getSessionEpoch, ensureSession, renewSession } from './session';
-import { ApiError, rawBinaryRequest, rawRequest } from './transport';
+import { ApiError, rawBinaryRequest, rawRequest, type ApiMethod } from './transport';
 import { API_BASE_URL } from './config';
 
 export interface RecipeCategory { id: string; name: string; sortOrder: number; version: number; archivedAt?: string | null }
@@ -35,7 +35,7 @@ export interface DashboardSummary { from:string;to:string;recipes?:{publishedCou
 export interface InboxItem { id:string;version:number;sourceType:'TASK';sourceId:string;title:string;status:Task['status'];reminderAt:string|null;readAt:string|null;createdAt:string }
 export interface NotificationPreference { membershipId:string;eventType:'TASK_REMINDER';enabled:boolean;leadMinutes:number;quietStart:string|null;quietEnd:string|null;version:number }
 
-async function request<T>(path: string, method: UniApp.RequestOptions['method'] = 'GET', data?: unknown): Promise<T> {
+async function request<T>(path: string, method: ApiMethod = 'GET', data?: unknown): Promise<T> {
   const epoch = getSessionEpoch();
   const session = await ensureSession();
   assertSessionEpoch(epoch);
