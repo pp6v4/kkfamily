@@ -21,6 +21,7 @@ function evaluate(source, dependencies, uni) {
   return module.exports;
 }
 function loadPage(relative, dependencies, uni, props = {}, emitted = []) {
+  if(relative==='src/pages/join/index.vue')dependencies={...dependencies,'../../services/transport':{ApiError},'../../services/session':{getSessionEpoch:()=>0,...dependencies['../../services/session']}};
   const filename=path.join(ROOT,relative), {descriptor}=parse(fs.readFileSync(filename,'utf8'),{filename});
   const script=compileScript(descriptor,{id:'component-test',inlineTemplate:false});
   const module=evaluate(script.content,{'vue':vue,'@dcloudio/uni-app':{onShow(){},onLoad(){},onHide(){},onUnload(){}},...dependencies},uni);
@@ -533,20 +534,20 @@ test('Join component redeems explicit code, selects returned household, and neve
   const uni=mockUni(),calls=[];let stored;
   const current={accessToken:'fictional-token',user:{households:[]}};
   const page=loadPage('src/pages/join/index.vue',{'../../services/session':{ensureIdentity:async()=>current,identityRequest:async(path,method,body)=>{calls.push({path,method,code:body.code});return {identity:current,data:{membershipId:'member-b',roles:['MEMBER'],household:{id:'house-a',name:'虚构家庭'}}};},rememberSession:value=>stored=value}},uni);
-  page.code.value='x'.repeat(32);await page.submit('join');
+  page.pageVisible.value=true;await page.login();page.code.value='x'.repeat(32);await page.submit('join');
   assert.equal(calls.length,1);assert.equal(calls[0].path,'/invitations/redeem');assert.equal(stored.householdId,'house-a');assert.equal(stored.membershipId,'member-b');assert.equal(page.code.value,'');assert.equal(page.busy.value,false);
 });
 test('Rejected join preserves input and exposes error instead of reporting success',async()=>{
   const uni=mockUni();let saved=false;
   const page=loadPage('src/pages/join/index.vue',{'../../services/session':{ensureIdentity:async()=>({accessToken:'fictional-token',user:{households:[]}}),identityRequest:async()=>{throw new Error('邀请码已失效');},rememberSession:()=>saved=true}},uni);
-  page.code.value='x'.repeat(32);await page.submit('join');
+  page.pageVisible.value=true;await page.login();page.code.value='x'.repeat(32);await page.submit('join');
   assert.equal(page.code.value,'x'.repeat(32));assert.match(page.error.value,/已失效/);assert.equal(saved,false);assert.equal(page.busy.value,false);assert.equal(uni.routes.length,0);
 });
 test('Account page trims and saves the display name while preserving failed input',async()=>{
   const uni=mockUni();let submitted='',fail=false;
   const current={accessToken:'access-a',refreshToken:'refresh-a',user:{id:'user-a',nickname:null,avatarUrl:null,households:[]}};
   const page=loadPage('src/pages/join/index.vue',{'../../services/session':{ensureIdentity:async()=>current,updateMyProfile:async nickname=>{submitted=nickname;if(fail)throw Error('暂时失败');return{...current,user:{...current.user,nickname}};}}},uni);
-  page.identity.value=current;page.profileName.value='  小扣  ';await page.saveProfile();
+  page.pageVisible.value=true;await page.login();page.profileName.value='  小扣  ';await page.saveProfile();
   assert.equal(submitted,'小扣');assert.equal(page.identity.value.user.nickname,'小扣');assert.equal(page.profileName.value,'小扣');
   fail=true;page.profileName.value='老婆';await page.saveProfile();assert.equal(page.profileName.value,'老婆');assert.match(page.error.value,/暂时失败/);
 });
