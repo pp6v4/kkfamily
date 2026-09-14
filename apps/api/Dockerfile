@@ -7,7 +7,7 @@ COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/api/package.json ./apps/api/package.json
 COPY apps/client/package.json ./apps/client/package.json
 COPY packages/contracts/package.json ./packages/contracts/package.json
-RUN corepack enable && pnpm install --filter @family-life/api... --no-frozen-lockfile
+RUN corepack enable && pnpm install --filter @family-life/api... --frozen-lockfile
 
 COPY apps/api ./apps/api
 COPY packages/contracts ./packages/contracts

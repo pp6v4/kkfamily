@@ -833,18 +833,24 @@ function privatePage(name,api,access){
     '../../services/session':{canAccess:allowed,refreshAccess:access},'../../services/family-api':api,
   },uni);return{page,lifecycle,uni};
 }
-test('Notification subscription records only an explicit result for the requested template',async()=>{
-  for(const [raw,expected] of [['accept','ACCEPT'],['reject','REJECT'],['ban','BAN'],[undefined,undefined],['unknown',undefined]]){
-    const receipts=[];
-    const {page,uni}=privatePage('notifications',{recordSubscriptionReceipt:async value=>receipts.push(value)},async()=>family);
-    page.session.value={...family,effectivePermissions:{notifications:'VIEW'}};
-    page.settings.value={taskReminderTemplateId:'template-test',wechatSubscriptionAvailable:true};
-    uni.requestSubscribeMessage=options=>options.success({errMsg:'requestSubscribeMessage:ok',...(raw===undefined?{}:{'template-test':raw})});
-    await page.subscribeWechat();
-    assert.equal(receipts.length,expected?1:0);
-    if(expected){assert.equal(receipts[0].templateId,'template-test');assert.equal(receipts[0].result,expected);}
-    assert.equal(page.busy.value,false);
-  }
+test('Deferred WeChat subscriptions never fetch templates, request consent or record receipts; inbox still loads',async()=>{
+  let templateReads=0,requests=0,receipts=0;
+  const context={...family,effectivePermissions:{notifications:'VIEW'}};
+  const {page,uni,lifecycle}=privatePage('notifications',{
+    listInbox:async()=>[{id:'inbox-a',title:'清洗空调',readAt:null}],
+    listNotificationPreferences:async()=>[{version:1,enabled:true}],
+    getPublicNotificationSettings:async()=>{templateReads++;throw Error('deferred template service');},
+    recordSubscriptionReceipt:async()=>{receipts++;},
+  },async()=>context);
+  uni.requestSubscribeMessage=()=>{requests++;};
+  await lifecycle.show();assert.equal(page.inbox.value.length,1);assert.equal(page.preference.value.enabled,true);
+  assert.equal(page.wechatSubscriptionEnabled,false);assert.equal(templateReads,0);
+  page.settings.value={taskReminderTemplateId:'previous-template',wechatSubscriptionAvailable:true};
+  await page.subscribeWechat();assert.equal(requests,0);assert.equal(receipts,0);
+  assert.equal(page.busy.value,false);
+  const source=fs.readFileSync(path.join(ROOT,'src/pages/notifications/index.vue'),'utf8');
+  assert.match(source,/v-if="wechatSubscriptionEnabled && settings"/);
+  assert.match(source,/不发送微信推送/);
 });
 test('Switch handlers accept boolean detail values only; missing page query does not crash',async()=>{
   const archive=archivePage();

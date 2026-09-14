@@ -5,6 +5,8 @@ import { getPublicNotificationSettings, listInbox, listNotificationPreferences, 
 import { canAccess, refreshAccess, type HouseholdContext } from '../../services/session';
 
 const session=ref<HouseholdContext>(),inbox=ref<InboxItem[]>([]),preference=ref<NotificationPreference>(),settings=ref<{taskReminderTemplateId:string|null;wechatSubscriptionAvailable:boolean}>(),busy=ref(false);
+// R05 (2026-09-10): defer WeChat subscriptions; retain inbox reminders.
+const wechatSubscriptionEnabled=false;
 let viewEpoch=0;
 function changeEnabled(event:unknown){
   if(!event||typeof event!=='object'||!('detail' in event))return;
@@ -15,7 +17,7 @@ function clearPage(){viewEpoch++;session.value=undefined;inbox.value=[];preferen
 const unread=computed(()=>inbox.value.filter(item=>!item.readAt).length);
 function message(error:unknown){return error instanceof Error?error.message:'操作失败';}
 function time(value:string){const date=new Date(value);return`${date.getMonth()+1}月${date.getDate()}日 ${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`;}
-async function load(){clearPage();const epoch=viewEpoch;busy.value=true;try{const context=await refreshAccess();if(epoch!==viewEpoch||!canAccess(context,'notifications'))return;const [messages,preferences,publicSettings]=await Promise.all([listInbox(),listNotificationPreferences(),getPublicNotificationSettings()]);if(epoch!==viewEpoch)return;session.value=context;inbox.value=messages;preference.value=preferences[0];settings.value=publicSettings;}catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});}finally{if(epoch===viewEpoch)busy.value=false;}}
+async function load(){clearPage();const epoch=viewEpoch;busy.value=true;try{const context=await refreshAccess();if(epoch!==viewEpoch||!canAccess(context,'notifications'))return;const [messages,preferences,publicSettings]=await Promise.all([listInbox(),listNotificationPreferences(),wechatSubscriptionEnabled?getPublicNotificationSettings():Promise.resolve(undefined)]);if(epoch!==viewEpoch)return;session.value=context;inbox.value=messages;preference.value=preferences[0];settings.value=publicSettings;}catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});}finally{if(epoch===viewEpoch)busy.value=false;}}
 async function open(item:InboxItem){
   if(busy.value||!canAccess(session.value,'notifications')||!inbox.value.some(row=>row.id===item.id))return;
   const epoch=viewEpoch;busy.value=true;
@@ -24,6 +26,7 @@ async function open(item:InboxItem){
 }
 async function toggle(enabled:boolean){const current=preference.value;if(!current||busy.value||!canAccess(session.value,'notifications'))return;const epoch=viewEpoch;busy.value=true;try{const saved=await updateNotificationPreference(current,{enabled,leadMinutes:current.leadMinutes,quietStart:current.quietStart,quietEnd:current.quietEnd});if(epoch!==viewEpoch)return;preference.value=saved;uni.showToast({title:enabled?'站内提醒已开启':'站内提醒已关闭',icon:'success'});}catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});}finally{if(epoch===viewEpoch)busy.value=false;}}
 async function subscribeWechat(){
+  if(!wechatSubscriptionEnabled)return;
   if(busy.value||!canAccess(session.value,'notifications'))return;
   const templateId=settings.value?.taskReminderTemplateId;if(!templateId){uni.showToast({title:'微信订阅模板尚未配置，站内提醒不受影响',icon:'none',duration:3000});return;}
   const epoch=viewEpoch;busy.value=true;
@@ -40,9 +43,9 @@ onUnload(clearPage);
 
 <template>
   <view class="page">
-    <view class="head"><text class="eyebrow">消息与提醒</text><text class="title">该记得的，轻轻提醒</text><text class="subtitle">站内消息是主记录；微信订阅只在你主动点击后申请，不会反复弹窗。</text></view>
+    <view class="head"><text class="eyebrow">消息与提醒</text><text class="title">该记得的，轻轻提醒</text><text class="subtitle">待办提醒会收在这里，打开小程序时查看，不发送微信推送。</text></view>
     <view v-if="preference" class="card setting"><view><text class="setting-title">家庭待办站内提醒</text><text class="setting-note">按待办里明确设置的提醒时间生成</text></view><switch :checked="preference.enabled" color="#76a094" :disabled="busy" @change="changeEnabled"/></view>
-    <view v-if="settings" class="card wechat"><view><text class="setting-title">微信订阅消息（辅助）</text><text class="setting-note">{{settings.wechatSubscriptionAvailable?'模板已配置，可主动申请一次订阅':'模板尚未配置，当前只使用站内提醒'}}</text></view><view class="subscribe" @tap="subscribeWechat">主动申请</view></view>
+    <view v-if="wechatSubscriptionEnabled && settings" class="card wechat"><view><text class="setting-title">微信订阅消息（辅助）</text><text class="setting-note">{{settings.wechatSubscriptionAvailable?'模板已配置，可主动申请一次订阅':'模板尚未配置，当前只使用站内提醒'}}</text></view><view class="subscribe" @tap="subscribeWechat">主动申请</view></view>
     <view class="section"><text class="section-title">站内消息</text><text class="count">{{unread}} 条未读</text></view>
     <view v-for="item in inbox" :key="item.id" class="message" :class="{read:item.readAt}" @tap="open(item)"><text v-if="!item.readAt" class="dot"></text><view class="bell">🔔</view><view class="grow"><text class="message-title">{{item.title}}</text><text class="meta">待办提醒 · {{time(item.createdAt)}}</text></view><text class="go">›</text></view>
     <text v-if="!inbox.length" class="empty">暂时没有站内消息。</text>
