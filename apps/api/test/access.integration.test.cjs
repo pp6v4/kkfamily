@@ -525,6 +525,34 @@ test('A41/D13: task outbox produces an authorized inbox reminder, cancellation a
   assert.equal(await db.inboxItem.count({where:{sourceId:night.id,invalidatedAt:null}}),1,'explicit null quiet hours must not restore defaults');
   const deferred=await db.notificationJob.findFirst({where:{sourceId:quiet.id}});assert.equal(deferred.status,'PENDING');assert.equal(deferred.scheduledAt.toISOString(),'2026-09-11T00:00:00.000Z');
 });
+test('A41: stale inbox acknowledgements cannot bypass withdrawn source access or task reassignment', async () => {
+  const who = await owner(), member = await join(who, ['MEMBER']), worker = app.get(NotificationsService);
+  const created = await call(who, 'POST', '/tasks', { type: 'TODO', title: '提醒权限闭环验证', assigneeMembershipId: member.memberId,
+    dueAt: '2026-09-15T18:00:00+08:00', reminderAt: '2026-09-14T11:00:00+08:00', priority: 'NORMAL' });
+  assert.equal(created.status, 201);
+  await worker.runDue(new Date('2026-09-14T12:00:00+08:00'));
+  const item = (await call(member, 'GET', '/inbox')).body.data[0]; assert.ok(item);
+  const path = `/inbox/${item.id}/read`, body = { expectedVersion: item.version };
+  assert.equal((await call(who, 'PATCH', path, body)).status, 404, 'another recipient cannot acknowledge');
+  assert.equal((await call(member, 'PATCH', path, body)).status, 200);
+  const saved = await db.inboxItem.findUniqueOrThrow({ where: { id: item.id } });
+  assert.equal(saved.version, item.version + 1); assert.ok(saved.readAt);
+  assert.equal((await call(member, 'PATCH', path, body)).status, 200, 'retry is idempotent');
+  const membership = await db.membership.findUniqueOrThrow({ where: { id: member.memberId } });
+  const denied = await permissions(who, member.memberId, membership.version, ['MEMBER'], [{ module: 'tasks', level: 'VIEW', effect: 'DENY' }]);
+  assert.equal(denied.status, 200, JSON.stringify(denied.body));
+  assert.equal((await call(member, 'PATCH', path, body)).status, 403, 'already-read retry must reauthorize tasks');
+  const currentMember = await db.membership.findUniqueOrThrow({ where: { id: member.memberId } });
+  assert.equal((await permissions(who, member.memberId, currentMember.version, ['MEMBER'])).status, 200);
+  // Simulate stale imported messages whose source was changed without schedule invalidation.
+  for (const change of [{ assigneeMembershipId: who.memberId }, { assigneeMembershipId: member.memberId, status: 'COMPLETED' }, { status: 'CANCELLED' }, { status: 'PENDING', archivedAt: new Date() }]) {
+    await db.task.update({ where: { id: created.body.data.id }, data: change });
+    assert.equal((await call(member, 'PATCH', path, body)).status, 404, JSON.stringify(change));
+  }
+  const unchanged = await db.inboxItem.findUniqueOrThrow({ where: { id: item.id } });
+  assert.equal(unchanged.version, saved.version); assert.equal(unchanged.readAt.getTime(), saved.readAt.getTime());
+});
+
 test('A24/A25/A29: arbitrary template items stay exact, repeat apply skips, assignee remains read-only', async () => {
   const who=await owner(), member=await join(who,['CAMPER']);
   const trip=(await call(who,'POST','/trips',{title:'虚构验证出行',startsAt:'2026-09-01T09:00:00+08:00'})).body.data;

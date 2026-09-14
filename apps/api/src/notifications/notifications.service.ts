@@ -27,14 +27,21 @@ export class NotificationsService {
   }
 
   async markRead(userId: string, householdId: string, itemId: string, dto: ReadInboxItemDto) {
-    const member = await this.access.require(userId, householdId, 'notifications');
-    const item = await this.prisma.inboxItem.findFirst({ where: { id: itemId, recipientMembershipId: member.id, invalidatedAt: null } });
-    if (!item) throw new NotFoundException('消息不存在');
-    if (item.readAt && (item.version === dto.expectedVersion || item.version === dto.expectedVersion + 1)) return { data: item };
-    if (item.version !== dto.expectedVersion) throw new ConflictException('消息已更新，请刷新后重试');
-    const changed = await this.prisma.inboxItem.updateMany({ where: { id: itemId, recipientMembershipId: member.id, invalidatedAt: null, version: dto.expectedVersion }, data: { readAt: new Date(), version: { increment: 1 } } });
-    if (!changed.count) throw new ConflictException('消息已更新，请刷新后重试');
-    return { data: await this.prisma.inboxItem.findUniqueOrThrow({ where: { id: itemId } }) };
+    return serializable(this.prisma, async tx => {
+      const member = await this.access.require(userId, householdId, 'notifications', 'VIEW', tx);
+      const item = await tx.inboxItem.findFirst({ where: { id: itemId, recipientMembershipId: member.id, invalidatedAt: null } });
+      if (!item || item.sourceType !== 'TASK') throw new NotFoundException('消息不存在');
+      // Recheck source access even for an idempotent retry of an already-read item.
+      await this.access.require(userId, householdId, 'tasks', 'VIEW', tx);
+      const task = await tx.task.findFirst({ where: { id: item.sourceId, householdId, archivedAt: null,
+        status: { in: ['PENDING', 'IN_PROGRESS'] }, assigneeMembershipId: member.id }, select: { id: true } });
+      if (!task) throw new NotFoundException('消息不存在');
+      if (item.readAt && (item.version === dto.expectedVersion || item.version === dto.expectedVersion + 1)) return { data: item };
+      if (item.version !== dto.expectedVersion) throw new ConflictException('消息已更新，请刷新后重试');
+      const changed = await tx.inboxItem.updateMany({ where: { id: itemId, recipientMembershipId: member.id, invalidatedAt: null, version: dto.expectedVersion }, data: { readAt: new Date(), version: { increment: 1 } } });
+      if (!changed.count) throw new ConflictException('消息已更新，请刷新后重试');
+      return { data: await tx.inboxItem.findUniqueOrThrow({ where: { id: itemId } }) };
+    });
   }
 
   async preferences(userId: string, householdId: string) {

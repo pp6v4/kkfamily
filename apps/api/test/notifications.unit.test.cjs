@@ -62,3 +62,37 @@ test('Exhausted retries fail the current claim without rescheduling it', async (
   assert.equal(f.writes[0].data.status, 'FAILED'); assert.equal(f.writes[0].data.attempts, 4);
   assert.equal(f.writes[0].data.scheduledAt, undefined); assert.equal(f.writes[0].where.lockedAt, f.now);
 });
+
+test('Read acknowledgements recheck source access and update within one Serializable transaction', async () => {
+  for (const scenario of ['fresh', 'retry', 'revoked', 'missing-source', 'conflict', 'lost-update']) {
+    const item = { id: 'inbox-a', sourceType: 'TASK', sourceId: 'task-a', version: 2, readAt: scenario === 'retry' || scenario === 'revoked' ? new Date() : null };
+    const permissions = [], writes = [];
+    const tx = {
+      inboxItem: {
+        findFirst: async input => { assert.deepEqual(input.where, { id: 'inbox-a', recipientMembershipId: 'member-a', invalidatedAt: null }); return item; },
+        updateMany: async input => { writes.push(input); return { count: scenario === 'lost-update' ? 0 : 1 }; },
+        findUniqueOrThrow: async () => ({ ...item, version: 3, readAt: new Date() }),
+      },
+      task: { findFirst: async input => {
+        assert.deepEqual(input.where, { id: 'task-a', householdId: 'house-a', archivedAt: null, status: { in: ['PENDING', 'IN_PROGRESS'] }, assigneeMembershipId: 'member-a' });
+        return scenario === 'missing-source' ? null : { id: 'task-a' };
+      } },
+    };
+    const db = { $transaction: async (fn, options) => { assert.equal(options.isolationLevel, 'Serializable'); return fn(tx); } };
+    const access = { require: async (user, household, module, level, client) => {
+      assert.equal(client, tx); assert.equal(level, 'VIEW'); permissions.push(module);
+      if (module === 'tasks' && scenario === 'revoked') throw new ForbiddenException('revoked');
+      return { id: 'member-a' };
+    } };
+    const result = new NotificationsService(db, access, {}).markRead('user-a', 'house-a', 'inbox-a', { expectedVersion: scenario === 'retry' ? 1 : scenario === 'conflict' ? 0 : 2 });
+    if (['fresh', 'retry'].includes(scenario)) {
+      const response = await result;
+      assert.equal(response.data.version, scenario === 'fresh' ? 3 : 2); assert.ok(response.data.readAt);
+    } else {
+      await assert.rejects(result, error => error.getStatus() === ({ revoked: 403, 'missing-source': 404, conflict: 409, 'lost-update': 409 })[scenario]);
+    }
+    assert.deepEqual(permissions, ['notifications', 'tasks']);
+    assert.equal(writes.length, ['fresh', 'lost-update'].includes(scenario) ? 1 : 0);
+    if (writes.length) assert.deepEqual(writes[0].where, { id: 'inbox-a', recipientMembershipId: 'member-a', invalidatedAt: null, version: 2 });
+  }
+});
