@@ -11,7 +11,7 @@ const entries = [
   { icon: '💡', title: '收藏与灵感', subtitle: '收下想做的菜、想去的地方', tone: 'sun' },
   { icon: '📚', title: '家庭档案', subtitle: '一起留下值得记住的小事', tone: 'rose' },
   { icon: '📊', title: '生活小看板', subtitle: '看看日常，不比较谁更辛苦', tone: 'sky' },
-  { icon: '🔔', title: '消息与提醒', subtitle: '站内消息和微信订阅设置', tone: 'stone' },
+  { icon: '🔔', title: '消息与提醒', subtitle: '查看站内消息和待办提醒', tone: 'stone' },
   { icon: '⚙️', title: '账号与家庭', subtitle: '加入其他家庭或查看账号信息', tone: 'stone' },
 ];
 function open(title: string) {

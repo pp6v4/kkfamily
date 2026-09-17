@@ -268,6 +268,27 @@ test('Camping archive confirmation expires after choosing a different template f
   page.newTemplate();await dialog.success({confirm:true});assert.equal(writes,0);assert.equal(page.showingTemplateForm.value,true);
 });
 
+test('Camping empty overview retains the China map and marker taps open only a current visible trip',async()=>{
+  const reads=[];
+  const second={...sampleTrip,id:'trip-b',title:'第二趟',stops:[{latitude:'30',longitude:'110',title:'营地'}]};
+  const {page,lifecycle}=campingForm({getTrip:async id=>{reads.push(id);return second;},listTripPackingItems:async()=>[],listTripCandidates:async()=>[]});
+  assert.equal(page.overviewCenter.value.latitude,35.8617);assert.equal(page.overviewCenter.value.longitude,104.1954);
+  assert.equal(page.overviewMarkers.value.length,0);
+  const source=fs.readFileSync(path.join(ROOT,'src/pages/camping/index.vue'),'utf8');
+  assert.match(source,/<map v-if="pageVisible && canAccess\(session,'trips'\)"/);
+  assert.match(source,/@markertap="openOverviewMarker"/);assert.match(source,/@labeltap="openOverviewMarker"/);
+  assert.match(source,/不是道路导航/);
+  // More than 1000 stops used to collide with the next trip's first marker ID.
+  page.trips.value=[{...sampleTrip,stops:Array.from({length:1001},()=>({latitude:'39',longitude:'116',title:'地点'}))},second];
+  assert.equal(new Set(page.overviewMarkers.value.map(item=>item.id)).size,1002);
+  for(const markerId of [0,-1,1.5,99999,NaN])await page.openOverviewMarker({detail:{markerId}});
+  assert.equal(reads.length,0);
+  await page.openOverviewMarker({detail:{markerId:1002}});
+  assert.deepEqual(reads,['trip-b']);assert.equal(page.selectedTrip.value.id,'trip-b');
+  lifecycle.hide();await page.openOverviewMarker({detail:{markerId:1}});assert.deepEqual(reads,['trip-b']);
+  assert.equal(page.overviewMarkers.value.length,0);
+});
+
 test('Camping successful creation opens the new trip with fresh packing data and releases busy state',async()=>{
   let input;const{page}=campingForm({createTrip:async value=>{input=value;return sampleTrip;},getTrip:async()=>sampleTrip,listTripPackingItems:async()=>[{id:'new-item'}],listTripCandidates:async()=>[]});
   Object.assign(page.tripForm.value,{title:' 周末营地 ',startsAt:'2026-09-02',endsAt:'2026-09-03'});await page.saveTrip();

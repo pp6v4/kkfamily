@@ -126,13 +126,21 @@ async function mutateTrip<T>(write:(trip:Trip)=>Promise<T>,after:(result:T,scope
 }
 const overviewPoints = computed(() => trips.value.flatMap(trip => (trip.stops || []).map(stop => ({ latitude: Number(stop.latitude), longitude: Number(stop.longitude) }))));
 const overviewCenter = computed(() => overviewPoints.value[0] || { latitude: 35.8617, longitude: 104.1954 });
-const overviewMarkers = computed(() => trips.value.flatMap((trip, tripIndex) => (trip.stops || []).map((stop, stopIndex) => ({
-  id: tripIndex * 1000 + stopIndex + 1,
+const overviewEntries = computed(() => trips.value.flatMap(trip => (trip.stops || []).map((stop, stopIndex) => ({ trip, stop, stopIndex }))));
+const overviewMarkers = computed(() => overviewEntries.value.map(({ trip, stop, stopIndex }, index) => ({
+  id: index + 1,
   latitude: Number(stop.latitude),
   longitude: Number(stop.longitude),
   title: `${trip.title} · ${stop.title}`,
   label: { content: stopIndex === 0 ? trip.title : `${stopIndex + 1}`, color: '#3f5844', fontSize: 11, borderRadius: 8, bgColor: '#fffdf7', padding: 4 },
-}))));
+})));
+async function openOverviewMarker(event: { detail: { markerId: number } }) {
+  if (!current(stamp()) || active.value !== 'trips' || selectedTripId.value || pageBusy.value || nativeBusy.value) return;
+  const id = event.detail.markerId;
+  if (!Number.isInteger(id) || id < 1) return;
+  const entry = overviewEntries.value[id - 1];
+  if (entry) await openTrip(entry.trip.id);
+}
 const overviewPolylines = computed(() => trips.value.flatMap(trip => {
   const pending = trip.status === 'PLANNING' || trip.status === 'PENDING';
   return (trip.legs || []).map(leg => {
@@ -317,9 +325,9 @@ onUnmounted(unloadPage);
     <text v-if="nativeBusy" class="empty">正在处理选点或照片，请稍候…</text>
 
     <view v-if="active === 'trips' && !selectedTrip">
-      <map v-if="overviewPoints.length" class="overview-map" :latitude="overviewCenter.latitude" :longitude="overviewCenter.longitude" :scale="4" :markers="overviewMarkers" :polyline="overviewPolylines" :include-points="overviewPoints" show-scale />
-      <view v-else class="map"><text class="map-icon">🗺️</text><text>中国行程地图</text><text class="map-note">进入行程添加地点后，这里会汇总展示路线</text></view>
-      <text v-if="overviewPoints.length" class="map-note overview-note">待出行显示闪烁虚线，旅途中和已完成显示实线箭头。</text>
+      <map v-if="pageVisible && canAccess(session,'trips')" class="overview-map" :latitude="overviewCenter.latitude" :longitude="overviewCenter.longitude" :scale="4" :markers="overviewMarkers" :polyline="overviewPolylines" :include-points="overviewPoints" @markertap="openOverviewMarker" @labeltap="openOverviewMarker" show-scale />
+      <text v-if="canAccess(session,'trips') && !overviewPoints.length" class="map-note overview-note">从中国地图开始规划旅行。创建行程并添加地点后，这里会留下你们的足迹。</text>
+      <text v-if="overviewPoints.length" class="map-note overview-note">点地图标记查看行程。待出行显示闪烁虚线，旅途中和已完成显示实线箭头；直线仅为地点连线示意，不是道路导航。</text>
       <view v-if="!trips.length" class="empty">{{canAccess(session,'trips')?'尚未加入任何行程；拥有露营角色不自动加入行程':'尚未获得露营功能权限'}}</view>
       <view v-for="trip in trips" :key="trip.id" class="trip" @tap="openTrip(trip.id)"><view class="pin">📍</view><view class="trip-info"><text class="trip-title">{{ trip.title }}</text><text class="trip-sub">{{ trip.destination || '未填写目的地' }} · {{ dateText(trip.startsAt) }}{{ trip.endsAt ? ` 至 ${dateText(trip.endsAt)}` : '' }}</text><text class="trip-sub">行李 {{ trip._count?.packingItems || 0 }} 项</text></view><text class="state">{{ statusText(trip.status) }}</text></view>
       <view v-if="creatingTrip && canAccess(session,'trips','EDIT')" class="editor"><input v-model="tripForm.title" class="input" placeholder="行程名称" /><input v-model="tripForm.destination" class="input" placeholder="目的地" /><view class="date-row"><picker mode="date" @change="tripForm.startsAt = $event.detail.value"><view class="input">{{ tripForm.startsAt || '出发日期' }}</view></picker><picker mode="date" @change="tripForm.endsAt = $event.detail.value"><view class="input">{{ tripForm.endsAt || '结束日期' }}</view></picker></view><view class="button" @tap="saveTrip">保存行程</view></view>
