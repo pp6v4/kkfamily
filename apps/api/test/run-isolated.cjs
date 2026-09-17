@@ -27,6 +27,7 @@ function main() {
     ['legacy-upgrade', ['--test', '--test-reporter=tap', 'test/legacy-upgrade.test.cjs']],
     ['notification-unit', ['--test', '--test-reporter=tap', 'test/notifications.unit.test.cjs']],
     ['itinerary-unit', ['--test', '--test-reporter=tap', 'test/itinerary.unit.test.cjs']],
+    ['trip-create-unit', ['--test', '--test-reporter=tap', 'test/trip-create.unit.test.cjs']],
     ['patch-compatibility', ['--test', '--test-reporter=tap', 'test/patch-compatibility.test.cjs']],
     ['http-integration', ['--test', '--test-reporter=tap', 'test/access.integration.test.cjs']],
     ['http-post-patch-integration', ['--test', '--test-reporter=tap', 'test/access.integration.test.cjs']],

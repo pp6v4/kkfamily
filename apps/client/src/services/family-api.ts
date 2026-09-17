@@ -102,7 +102,7 @@ export function createAnniversary(input:{title:string;localDate:string;recurrenc
 export function updateAnniversary(anniversary:Pick<Anniversary,'id'|'version'>,input:{title?:string;localDate?:string;recurrence?:Anniversary['recurrence'];leapPolicy?:Anniversary['leapPolicy'];note?:string|null}){return request<Anniversary>(`/calendar/anniversaries/${anniversary.id}`,'PATCH',{expectedVersion:anniversary.version,...input});}
 export function archiveAnniversary(anniversary:Pick<Anniversary,'id'|'version'>){return request<{id:string;archived:boolean}>(`/calendar/anniversaries/${anniversary.id}/archive`,'POST',{expectedVersion:anniversary.version});}
 export function listTrips() { return request<Trip[]>('/trips'); }
-export function createTrip(input: { title: string; startsAt: string; endsAt?: string; destination?: string }) { return request<Trip>('/trips', 'POST', input); }
+export function createTrip(input: { title: string; startsAt: string; endsAt?: string; destination?: string; initialDestination?: { title: string; latitude: number; longitude: number } }) { return request<Trip>('/trips', 'POST', input); }
 export function getTrip(tripId: string) { return request<Trip>(`/trips/${tripId}`); }
 export function updateTrip(trip: Trip, input: { title?: string; startsAt?: string; endsAt?: string | null; destination?: string }) { return request<Trip>(`/trips/${trip.id}`, 'PATCH', { expectedVersion: trip.version, ...input }); }
 export function updateTripStatus(trip: Trip, status: Trip['status']) { return request<Trip>(`/trips/${trip.id}/status`, 'PATCH', { expectedVersion: trip.version, status }); }

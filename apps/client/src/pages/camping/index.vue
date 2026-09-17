@@ -5,7 +5,7 @@ import TripItinerary from '../../components/trip-itinerary.vue';
 import TripPhotos from '../../components/trip-photos.vue';
 import { canAccess, getStoredSession, refreshAccess, type HouseholdContext } from '../../services/session';
 import { takeCalendarTarget } from '../../services/calendar-navigation';
-import { assertTravelOrder, shanghaiDate, travelTimestamp } from '../../services/trip-form';
+import { assertTravelOrder, parseCoordinates, shanghaiDate, travelTimestamp } from '../../services/trip-form';
 import { ApiError } from '../../services/transport';
 import { authorizeNativeTrip, uploadTripSelection, type SelectedTripPhoto, type StopLocationDraft, type TripNativeTarget } from '../../services/trip-native';
 import { getMediaReadUrl, listTripPhotos, publicMediaUrl } from '../../services/family-api';
@@ -25,6 +25,9 @@ const editingTemplateId = ref('');
 const showingTemplateForm = ref(false);
 const showingItemForm = ref(false);
 const tripForm = ref({ title: '', destination: '', startsAt: '', endsAt: '' });
+const initialDestination = ref<{ title: string; latitude: number; longitude: number }>();
+type DestinationReturn = { householdId: string; membershipId: string; token: number; form: typeof tripForm.value; point: typeof initialDestination.value; notice?: string };
+let destinationReturn: DestinationReturn | undefined;
 const tripEditForm = ref({ title: '', destination: '', startsAt: '', endsAt: '' });
 const templateForm = ref<{ name: string; description: string; items: TemplateItemForm[] }>({ name: '', description: '', items: [{ name: '', quantity: '', unit: '', note: '' }] });
 const itemForm = ref({ name: '', quantity: '', unit: '', note: '' });
@@ -56,8 +59,35 @@ let returnTarget:{id:string;householdId:string;membershipId:string}|undefined;
 function stamp():ViewStamp{return{epoch:viewEpoch,detail:detailEpoch,householdId:session.value?.householdId||'',membershipId:session.value?.membershipId||'',tripId:selectedTripId.value,tab:active.value};}
 function current(scope:ViewStamp){const stored=getStoredSession();return!disposed&&pageVisible.value&&scope.epoch===viewEpoch&&scope.detail===detailEpoch&&scope.tab===active.value&&scope.tripId===selectedTripId.value&&Boolean(scope.membershipId)&&session.value?.householdId===scope.householdId&&session.value?.membershipId===scope.membershipId&&stored?.householdId===scope.householdId&&stored?.membershipId===scope.membershipId;}
 function clearForms(){creatingTrip.value=false;editingTrip.value=false;showingTemplateForm.value=false;editingTemplateId.value='';showingItemForm.value=false;showingCollaboration.value=false;tripForm.value={title:'',destination:'',startsAt:'',endsAt:''};tripEditForm.value={title:'',destination:'',startsAt:'',endsAt:''};templateForm.value={name:'',description:'',items:[{name:'',quantity:'',unit:'',note:''}]};itemForm.value={name:'',quantity:'',unit:'',note:''};resetGroupForm();}
-function clearView(){viewEpoch++;detailEpoch++;trips.value=[];templates.value=[];packingItems.value=[];candidates.value=[];session.value=undefined;selectedTripId.value='';loadingTrip.value=false;tripBusy.value=false;pageBusy.value=false;returnedStop.value=undefined;clearForms();}
-function cancelNative(){nativeEpoch++;nativeBusy.value=false;nativeReturn=undefined;returnedStop.value=undefined;}
+function clearView(){viewEpoch++;detailEpoch++;trips.value=[];templates.value=[];packingItems.value=[];candidates.value=[];session.value=undefined;selectedTripId.value='';loadingTrip.value=false;tripBusy.value=false;pageBusy.value=false;returnedStop.value=undefined;initialDestination.value=undefined;clearForms();}
+function cancelNative(){nativeEpoch++;nativeBusy.value=false;nativeReturn=undefined;returnedStop.value=undefined;destinationReturn=undefined;initialDestination.value=undefined;}
+async function restoreDestination() {
+  const retained = destinationReturn;
+  if (!retained || disposed || !pageVisible.value) return;
+  destinationReturn = undefined;
+  await loadData();
+  if (retained.token !== nativeEpoch || !current(stamp()) || session.value?.householdId !== retained.householdId || session.value?.membershipId !== retained.membershipId || !canAccess(session.value, 'trips', 'EDIT')) return;
+  creatingTrip.value = true; tripForm.value = retained.form; initialDestination.value = retained.point;
+  if (retained.notice) uni.showToast({ title: retained.notice, icon: 'none' });
+}
+async function chooseDestination() {
+  const scope = stamp();
+  if (!current(scope) || selectedTripId.value || active.value !== 'trips' || nativeBusy.value || pageBusy.value || !canAccess(session.value, 'trips', 'EDIT')) return;
+  const retained: DestinationReturn = { householdId: scope.householdId, membershipId: scope.membershipId, token: ++nativeEpoch, form: { ...tripForm.value }, point: initialDestination.value ? { ...initialDestination.value } : undefined };
+  nativeBusy.value = true;
+  try {
+    const picked = await new Promise<{ latitude: number; longitude: number; name: string; address: string }>((resolve, reject) => uni.chooseLocation({ success: resolve, fail: reject }));
+    const coordinates = parseCoordinates(String(picked.latitude), String(picked.longitude));
+    const title = (picked.name || picked.address || '目的地').trim().slice(0, 80);
+    retained.point = { title, ...coordinates }; retained.form.destination = title;
+    if (!retained.form.title.trim()) retained.form.title = title;
+  } catch { retained.notice = '未选定目的地，原草稿已保留'; }
+  if (disposed || retained.token !== nativeEpoch) return;
+  const stored = getStoredSession(); nativeBusy.value = false;
+  if (stored?.householdId !== retained.householdId || stored?.membershipId !== retained.membershipId) { clearView(); return; }
+  destinationReturn = retained;
+  if (pageVisible.value) await restoreDestination();
+}
 function childAccessLost(tripId:string){if(!current(stamp())||selectedTripId.value!==tripId)return;cancelNative();clearView();uni.showToast({title:'行程访问权限已变化，请重新进入',icon:'none'});}
 function beginNative(tripId:string,kind:'VIEW'|'PHOTO'|'LOCATION'){
   const scope=stamp();if(!current(scope)||scope.tripId!==tripId||nativeBusy.value||tripBusy.value||pageBusy.value)return;
@@ -200,15 +230,15 @@ async function itineraryChanged(version: number,tripId:string) {
 }
 function closeTrip() { cancelNative();detailEpoch++;selectedTripId.value='';packingItems.value=[];candidates.value=[];loadingTrip.value=false;tripBusy.value=false;clearForms(); }
 async function saveTrip() {
-  const scope=stamp();if(!current(scope)||pageBusy.value||!canAccess(session.value,'trips','EDIT'))return;
+  const scope=stamp();if(!current(scope)||pageBusy.value||nativeBusy.value||!canAccess(session.value,'trips','EDIT'))return;
   if (!tripForm.value.title.trim() || !tripForm.value.startsAt) { uni.showToast({ title: '请填写行程名称和出发日期', icon: 'none' }); return; }
   pageBusy.value=true;
   try {
     const startsAt=travelTimestamp(tripForm.value.startsAt,'08')!,endsAt=travelTimestamp(tripForm.value.endsAt,'20');
     assertTravelOrder(startsAt,endsAt);
-    const trip = await createTrip({ title: tripForm.value.title.trim(), destination: tripForm.value.destination.trim() || undefined, startsAt, endsAt });
+    const trip = await createTrip({ title: tripForm.value.title.trim(), destination: tripForm.value.destination.trim() || undefined, startsAt, endsAt, ...(initialDestination.value ? { initialDestination: { ...initialDestination.value } } : {}) });
     if(!current(scope))return;
-    tripForm.value={title:'',destination:'',startsAt:'',endsAt:''};creatingTrip.value=false;pageBusy.value=false;replaceTrip(trip);await openTrip(trip.id);
+    tripForm.value={title:'',destination:'',startsAt:'',endsAt:''};initialDestination.value=undefined;creatingTrip.value=false;pageBusy.value=false;replaceTrip(trip);await openTrip(trip.id);
   } catch(error){scopedError(scope,error);}finally{if(current(scope))pageBusy.value=false;}
 }
 function startTripEdit() {
@@ -308,7 +338,7 @@ function startOverviewPulse() {
 }
 function hidePage(){if(session.value)returnTarget={id:selectedTripId.value,householdId:session.value.householdId,membershipId:session.value.membershipId};pageVisible.value=false;if(overviewTimer){clearInterval(overviewTimer);overviewTimer=undefined;}clearView();}
 function unloadPage(){disposed=true;cancelNative();hidePage();returnTarget=undefined;}
-function showPage(){if(disposed)return;pageVisible.value=true;startOverviewPulse();if(nativeBusy.value)return;if(nativeReturn)return restoreNative();return loadData();}
+function showPage(){if(disposed)return;pageVisible.value=true;startOverviewPulse();if(nativeBusy.value)return;if(destinationReturn)return restoreDestination();if(nativeReturn)return restoreNative();return loadData();}
 watch(active,()=>{closeTrip();pageBusy.value=false;},{flush:'sync'});
 onShow(showPage);
 onHide(hidePage);
@@ -328,6 +358,8 @@ onUnmounted(unloadPage);
       <map v-if="pageVisible && canAccess(session,'trips')" class="overview-map" :latitude="overviewCenter.latitude" :longitude="overviewCenter.longitude" :scale="4" :markers="overviewMarkers" :polyline="overviewPolylines" :include-points="overviewPoints" @markertap="openOverviewMarker" @labeltap="openOverviewMarker" show-scale />
       <text v-if="canAccess(session,'trips') && !overviewPoints.length" class="map-note overview-note">从中国地图开始规划旅行。创建行程并添加地点后，这里会留下你们的足迹。</text>
       <text v-if="overviewPoints.length" class="map-note overview-note">点地图标记查看行程。待出行显示闪烁虚线，旅途中和已完成显示实线箭头；直线仅为地点连线示意，不是道路导航。</text>
+      <view v-if="canAccess(session,'trips','EDIT')" class="button" @tap="chooseDestination">📍 先选目的地，再安排出行</view>
+      <text v-if="initialDestination && creatingTrip" class="map-note">已选：{{initialDestination.title}} · {{initialDestination.latitude}}, {{initialDestination.longitude}}（保存时一起加入行程）</text>
       <view v-if="!trips.length" class="empty">{{canAccess(session,'trips')?'尚未加入任何行程；拥有露营角色不自动加入行程':'尚未获得露营功能权限'}}</view>
       <view v-for="trip in trips" :key="trip.id" class="trip" @tap="openTrip(trip.id)"><view class="pin">📍</view><view class="trip-info"><text class="trip-title">{{ trip.title }}</text><text class="trip-sub">{{ trip.destination || '未填写目的地' }} · {{ dateText(trip.startsAt) }}{{ trip.endsAt ? ` 至 ${dateText(trip.endsAt)}` : '' }}</text><text class="trip-sub">行李 {{ trip._count?.packingItems || 0 }} 项</text></view><text class="state">{{ statusText(trip.status) }}</text></view>
       <view v-if="creatingTrip && canAccess(session,'trips','EDIT')" class="editor"><input v-model="tripForm.title" class="input" placeholder="行程名称" /><input v-model="tripForm.destination" class="input" placeholder="目的地" /><view class="date-row"><picker mode="date" @change="tripForm.startsAt = $event.detail.value"><view class="input">{{ tripForm.startsAt || '出发日期' }}</view></picker><picker mode="date" @change="tripForm.endsAt = $event.detail.value"><view class="input">{{ tripForm.endsAt || '结束日期' }}</view></picker></view><view class="button" @tap="saveTrip">保存行程</view></view>

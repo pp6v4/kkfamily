@@ -82,6 +82,23 @@ async function attachReadyCover(who,recipe,bytes=TEST_PNG){
   return{...recipe,version:confirmed.body.data.ownerVersion,coverAssetId:confirmed.body.data.asset.id};
 }
 
+test('Destination-first creation persists one GCJ02 stop with the trip and calendar, rejects invalid coordinates without writes', async () => {
+  const who = await owner();
+  const payload = { title: '先选目的地', startsAt: '2026-10-01T08:00:00+08:00', initialDestination: { title: ' 目标营地 ', latitude: 39.123456, longitude: 116.234567 } };
+  const created = await call(who, 'POST', '/trips', payload);
+  assert.equal(created.status, 201, JSON.stringify(created.body));
+  const trip = created.body.data; assert.equal(trip.destination, '目标营地'); assert.equal(trip.stops.length, 1);
+  const stop = trip.stops[0]; assert.equal(stop.coordSystem, 'GCJ02'); assert.equal(stop.stopType, 'CAMPSITE');
+  assert.equal(Number(stop.latitude), 39.123456); assert.equal(Number(stop.longitude), 116.234567); assert.equal(stop.arriveAt, null);
+  assert.equal(await db.calendarEvent.count({ where: { householdId: who.householdId, sourceType: 'TRIP', sourceId: trip.id } }), 1);
+  assert.equal((await call(who, 'GET', `/trips/${trip.id}`)).body.data.stops[0].id, stop.id);
+  for (const initialDestination of [null, [], {}, { ...payload.initialDestination, longitude: 181 }, { ...payload.initialDestination, latitude: '39' }]) {
+    const result = await call(who, 'POST', '/trips', { ...payload, initialDestination }); assert.equal(result.status, 400);
+  }
+  assert.equal(await db.trip.count({ where: { householdId: who.householdId } }), 1);
+  assert.equal(await db.tripStop.count({ where: { tripId: trip.id } }), 1);
+});
+
 test('A01: unauthenticated household data returns 401', async () => {
   assert.equal((await call(null, 'GET', '/recipes')).status, 401);
 });

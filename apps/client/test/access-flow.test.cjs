@@ -289,6 +289,40 @@ test('Camping empty overview retains the China map and marker taps open only a c
   assert.equal(page.overviewMarkers.value.length,0);
 });
 
+for (const order of ['show-first', 'callback-first']) {
+  test(`Destination-first picker preserves dates and submits coordinates in one create request when ${order}`, async () => {
+    let chooser, submitted;
+    const {page,lifecycle,uni} = campingForm({createTrip:async input=>{submitted=input;return sampleTrip;},getTrip:async()=>sampleTrip,listTripPackingItems:async()=>[],listTripCandidates:async()=>[]});
+    uni.chooseLocation = input => chooser=input;
+    page.tripForm.value.startsAt='2026-10-01';
+    const pending=page.chooseDestination();lifecycle.hide();assert.equal(page.initialDestination.value,undefined);
+    if(order==='show-first')await lifecycle.show();
+    chooser.success({latitude:0,longitude:116.123456,name:'营地',address:'地址'});await pending;
+    if(order==='callback-first')await lifecycle.show();
+    assert.equal(page.creatingTrip.value,true);assert.equal(page.tripForm.value.startsAt,'2026-10-01');
+    assert.equal(page.initialDestination.value.latitude,0);assert.equal(page.initialDestination.value.longitude,116.123456);
+    await page.saveTrip();assert.equal(submitted.initialDestination.title,'营地');assert.equal(submitted.initialDestination.latitude,0);
+    assert.equal(submitted.startsAt,'2026-10-01T08:00:00+08:00');assert.equal(page.initialDestination.value,undefined);lifecycle.unload();
+  });
+}
+
+test('Destination cancellation retains the draft; identity change, revoked access and unload discard the selection', async () => {
+  for(const mode of ['cancel','identity','revoked','unload']) {
+    let chooser;
+    const {page,lifecycle,uni,setStored}=campingForm();uni.chooseLocation=input=>chooser=input;
+    page.tripForm.value.title='原草稿';page.initialDestination.value={title:'原地点',latitude:39,longitude:116};
+    const pending=page.chooseDestination();lifecycle.hide();
+    if(mode==='identity')setStored({...family,householdId:'other',effectivePermissions:{trips:'EDIT'}});
+    if(mode==='revoked')setStored({...family,effectivePermissions:{trips:'VIEW'}});
+    if(mode==='unload')lifecycle.unload();
+    if(mode==='cancel')chooser.fail({errMsg:'cancel'});else chooser.success({latitude:40,longitude:117,name:'新地点'});
+    await pending;await lifecycle.show();
+    if(mode==='cancel'){assert.equal(page.tripForm.value.title,'原草稿');assert.equal(page.initialDestination.value.title,'原地点');}
+    else {assert.equal(page.initialDestination.value,undefined);assert.equal(page.creatingTrip.value,false);}
+    lifecycle.unload();
+  }
+});
+
 test('Camping successful creation opens the new trip with fresh packing data and releases busy state',async()=>{
   let input;const{page}=campingForm({createTrip:async value=>{input=value;return sampleTrip;},getTrip:async()=>sampleTrip,listTripPackingItems:async()=>[{id:'new-item'}],listTripCandidates:async()=>[]});
   Object.assign(page.tripForm.value,{title:' 周末营地 ',startsAt:'2026-09-02',endsAt:'2026-09-03'});await page.saveTrip();

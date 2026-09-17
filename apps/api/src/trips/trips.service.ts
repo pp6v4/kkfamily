@@ -35,13 +35,17 @@ export class TripsService {
   }
 
   async create(userId: string, householdId: string, dto: CreateTripDto) {
-    const membership = await this.requireMember(userId, householdId, 'EDIT');
     const { startsAt, endsAt } = this.parseDates(dto.startsAt, dto.endsAt);
-    const trip = await this.prisma.$transaction(async tx => {
+    const trip = await serializable(this.prisma, async tx => {
+      const membership = await this.access.require(userId, householdId, 'trips', 'EDIT', tx);
       const created = await tx.trip.create({
         data: {
-          householdId, title: dto.title.trim(), startsAt, endsAt, destination: dto.destination?.trim(),
+          householdId, title: dto.title.trim(), startsAt, endsAt, destination: dto.destination?.trim() || dto.initialDestination?.title.trim(),
           members: { create: { membershipId: membership.id, canEdit: true, tripRole: TripMemberRole.OWNER, status: TripMemberStatus.ACTIVE } },
+          ...(dto.initialDestination ? { stops: { create: {
+            title: dto.initialDestination.title.trim(), latitude: dto.initialDestination.latitude,
+            longitude: dto.initialDestination.longitude, coordSystem: 'GCJ02', stopType: 'CAMPSITE', sortOrder: 0,
+          } } } : {}),
         }, include: tripInclude,
       });
       await tx.calendarEvent.create({ data: { householdId, type: 'TRIP', title: created.title, startsAt, endsAt, sourceType: 'TRIP', sourceId: created.id, createdById: userId } });
