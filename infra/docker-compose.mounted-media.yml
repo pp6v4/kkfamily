@@ -1,0 +1,13 @@
+# Opt-in only: verify the host directory is a live COS mount before starting.
+# After host remount, recreate API to bind the new mount. Never expose via nginx.
+services:
+  api:
+    environment:
+      MEDIA_DRIVER: mounted
+      MEDIA_MOUNT_ROOT: /mnt/family-life-cos
+    volumes:
+      - type: bind
+        source: /mnt/family-life-cos
+        target: /mnt/family-life-cos
+        bind:
+          create_host_path: false

@@ -1,5 +1,6 @@
 import { Injectable, Logger, ServiceUnavailableException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
+import { MountedObjectStore } from './mounted-object-store';
 
 interface CosClient {
   putObject(params: Record<string,unknown>): Promise<{headers?:Record<string,unknown>}>;
@@ -18,9 +19,12 @@ export class ObjectStorageService {
   private readonly cos?: CosClient;
   private readonly bucket?: string;
   private readonly region?: string;
+  private readonly mounted?: MountedObjectStore;
 
   constructor(config: ConfigService) {
     this.driver = config.get<string>('MEDIA_DRIVER') ?? 'disabled';
+    if (!['disabled', 'memory', 'cos', 'mounted'].includes(this.driver)) throw new Error('Unknown media driver');
+    if (this.driver === 'mounted') this.mounted = new MountedObjectStore(config.getOrThrow<string>('MEDIA_MOUNT_ROOT'));
     if (this.driver === 'memory' && config.get<string>('NODE_ENV') !== 'test') throw new Error('MEDIA_DRIVER=memory 仅允许测试环境');
     if (this.driver === 'cos') {
       this.bucket = config.getOrThrow<string>('COS_BUCKET'); this.region = config.getOrThrow<string>('COS_REGION');
@@ -31,16 +35,27 @@ export class ObjectStorageService {
   }
 
   private unavailable(): never { throw new ServiceUnavailableException('图片存储尚未配置'); }
-  assertAvailable(){if(this.driver==='disabled')this.unavailable();}
+  assertAvailable(){
+    if(this.driver==='disabled')this.unavailable();
+    if(this.mounted) { try { this.mounted.assertAvailable(); } catch { this.unavailable(); } }
+  }
 
   async put(key: string, body: Buffer, mimeType: string, checksumSha256: string) {
+    if (this.mounted) {
+      try { await this.mounted.put(key, body, mimeType, checksumSha256); return; }
+      catch (error) { this.logger.error(`Mounted put failed: ${this.errorCode(error)}`); this.unavailable(); }
+    }
     if (this.driver === 'memory') { this.memory.set(key, { body: Buffer.from(body), bytes: body.length, mimeType, checksumSha256 }); return; }
     if (!this.cos || !this.bucket || !this.region) this.unavailable();
     try { await this.cos.putObject({ Bucket: this.bucket, Region: this.region, Key: key, Body: body, ContentLength: body.length, ContentType: mimeType, ACL: 'private', 'x-cos-meta-sha256': checksumSha256 }); }
     catch (error) { this.logger.error(`COS putObject failed: ${this.errorCode(error)}`); this.unavailable(); }
   }
 
-  async head(key: string): Promise<StoredObjectHead> {
+  async head(key: string, expectedChecksum?: string): Promise<StoredObjectHead> {
+    if (this.mounted) {
+      try { const item = await this.mounted.get(key, expectedChecksum ?? ''); return { bytes: item.body.length, mimeType: item.mimeType, checksumSha256: expectedChecksum! }; }
+      catch (error) { this.logger.error(`Mounted head failed: ${this.errorCode(error)}`); this.unavailable(); }
+    }
     if (this.driver === 'memory') { const item=this.memory.get(key); if(!item)this.unavailable(); return { bytes:item.bytes,mimeType:item.mimeType,checksumSha256:item.checksumSha256 }; }
     if (!this.cos || !this.bucket || !this.region) this.unavailable();
     try {
@@ -49,7 +64,11 @@ export class ObjectStorageService {
     } catch(error){this.logger.error(`COS headObject failed: ${this.errorCode(error)}`);this.unavailable();}
   }
 
-  async get(key: string): Promise<{ body: Buffer; mimeType: string }> {
+  async get(key: string, expectedChecksum?: string): Promise<{ body: Buffer; mimeType: string }> {
+    if (this.mounted) {
+      try { return await this.mounted.get(key, expectedChecksum ?? ''); }
+      catch (error) { this.logger.error(`Mounted get failed: ${this.errorCode(error)}`); this.unavailable(); }
+    }
     if (this.driver === 'memory') { const item=this.memory.get(key); if(!item)this.unavailable(); return {body:Buffer.from(item.body),mimeType:item.mimeType}; }
     if (!this.cos || !this.bucket || !this.region) this.unavailable();
     try { const result=await this.cos.getObject({Bucket:this.bucket,Region:this.region,Key:key});return {body:result.Body,mimeType:String(result.headers?.['content-type']??'application/octet-stream')}; }

@@ -1,0 +1,13 @@
+# Explicit opt-in for isolated DB tests against the live COS mount.
+# Files use randomly generated verification households; never production DB.
+services:
+  verify:
+    environment:
+      VERIFY_MOUNTED_MEDIA: "yes"
+      MEDIA_MOUNT_ROOT: /mnt/family-life-cos
+    volumes:
+      - type: bind
+        source: /mnt/family-life-cos
+        target: /mnt/family-life-cos
+        bind:
+          create_host_path: false

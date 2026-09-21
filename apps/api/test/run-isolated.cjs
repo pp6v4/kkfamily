@@ -28,14 +28,20 @@ function main() {
     ['notification-unit', ['--test', '--test-reporter=tap', 'test/notifications.unit.test.cjs']],
     ['itinerary-unit', ['--test', '--test-reporter=tap', 'test/itinerary.unit.test.cjs']],
     ['trip-create-unit', ['--test', '--test-reporter=tap', 'test/trip-create.unit.test.cjs']],
+    ['mounted-media-unit', ['--test', '--test-reporter=tap', 'test/cos-mount-guard.unit.test.cjs', 'test/mounted-object-store.unit.test.cjs']],
     ['patch-compatibility', ['--test', '--test-reporter=tap', 'test/patch-compatibility.test.cjs']],
     ['http-integration', ['--test', '--test-reporter=tap', 'test/access.integration.test.cjs']],
     ['http-post-patch-integration', ['--test', '--test-reporter=tap', 'test/access.integration.test.cjs']],
   ];
+  if (process.env.VERIFY_MOUNTED_MEDIA === 'yes') {
+    steps.push(['http-mounted-integration', ['--test', '--test-reporter=tap', 'test/access.integration.test.cjs']],
+      ['http-mounted-post-patch-integration', ['--test', '--test-reporter=tap', 'test/access.integration.test.cjs']]);
+  }
   for (const [phase, args] of steps) {
     console.log(JSON.stringify({ phase, state: 'started' }));
     const result = spawnSync(process.execPath, args, { cwd: path.join(__dirname, '..'), stdio: 'inherit',
-      env: { ...process.env, TEST_PATCH_TRANSPORT: phase === 'http-post-patch-integration' ? 'post' : 'native' } });
+      env: { ...process.env, TEST_PATCH_TRANSPORT: phase.includes('post-patch') ? 'post' : 'native',
+        TEST_MEDIA_DRIVER: phase.startsWith('http-mounted-') ? 'mounted' : 'memory' } });
     const exitCode = result.status ?? 1;
     console.log(JSON.stringify({ phase, state: exitCode === 0 ? 'passed' : 'failed', exitCode }));
     if (exitCode !== 0) { process.exitCode = exitCode; return; }

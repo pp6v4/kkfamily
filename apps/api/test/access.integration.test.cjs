@@ -10,7 +10,10 @@ const { JwtService } = require('@nestjs/jwt');
 const { PrismaService } = require('../dist/prisma/prisma.service');
 process.env.JWT_ACCESS_SECRET = 'isolated-verification-signing-key-not-for-production';
 process.env.NODE_ENV = 'test';
-process.env.MEDIA_DRIVER = 'memory';
+if (process.env.TEST_MEDIA_DRIVER === 'mounted') {
+  if (process.env.VERIFY_MOUNTED_MEDIA !== 'yes' || process.env.MEDIA_MOUNT_ROOT !== '/mnt/family-life-cos') throw Error('Mounted integration requires explicit isolated verification');
+  process.env.MEDIA_DRIVER = 'mounted';
+} else process.env.MEDIA_DRIVER = 'memory';
 process.env.ARCHIVE_ENCRYPTION_KEY = Buffer.alloc(32,7).toString('base64');
 process.env.ARCHIVE_ENCRYPTION_KEY_VERSION = '1';
 const { AppModule } = require('../dist/app.module');

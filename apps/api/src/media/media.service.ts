@@ -49,7 +49,7 @@ export class MediaService {
     const intent=await this.intentFor(userId,householdId,dto.intentId);await this.notExpired(intent);
     if(intent.status==='CONFIRMED'){const asset=await this.prisma.mediaAsset.findUnique({where:{intentId:intent.id}});if(!asset)throw new ConflictException('图片确认记录不完整');return{data:{asset,ownerVersion:await this.ownerVersion(this.prisma,intent.ownerType,intent.ownerId)}};}
     if(intent.status!=='UPLOADED'||intent.checksumSha256!==dto.checksumSha256)throw new ConflictException('图片尚未上传完成或校验值不匹配');
-    const head=await this.storage.head(intent.objectKey);
+    const head=await this.storage.head(intent.objectKey,intent.checksumSha256);
     if(head.bytes!==intent.declaredBytes||head.mimeType!==intent.mimeType||head.checksumSha256!==dto.checksumSha256)throw new ConflictException('对象存储中的图片校验失败');
     return serializable(this.prisma,async tx=>{
       const current=await tx.uploadIntent.findFirst({where:{id:intent.id,householdId}});if(!current)throw new NotFoundException('上传申请不存在');
@@ -96,7 +96,7 @@ export class MediaService {
     let payload:{typ?:string;assetId?:string;householdId?:string};try{payload=await this.jwt.verifyAsync(token,{audience:'media'});}catch{throw new NotFoundException('图片链接无效或已过期');}
     if(payload.typ!=='media'||!payload.assetId||!payload.householdId)throw new NotFoundException('图片链接无效');
     const asset=await this.prisma.mediaAsset.findFirst({where:{id:payload.assetId,householdId:payload.householdId,status:'READY'}});if(!asset)throw new NotFoundException('图片不存在');
-    return this.storage.get(asset.objectKey);
+    return this.storage.get(asset.objectKey,asset.checksumSha256);
   }
 
   private async intentFor(userId:string,householdId:string,intentId:string){const intent=await this.prisma.uploadIntent.findFirst({where:{id:intentId,householdId}});if(!intent)throw new NotFoundException('上传申请不存在');if(intent.ownerType!==MediaOwnerType.RECIPE&&intent.ownerType!==MediaOwnerType.TRIP&&intent.ownerType!==MediaOwnerType.FAVORITE)throw new BadRequestException('不支持的图片归属');const owner=await this.requireOwnerWrite(this.prisma,userId,householdId,intent.ownerType,intent.ownerId);if(!this.canUseIntent(intent.ownerType,intent.requestedById,owner.memberId,owner.effectivePermissions))throw new NotFoundException('上传申请不存在');return intent;}

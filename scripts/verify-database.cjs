@@ -27,11 +27,13 @@ async function run(execDocker = docker) {
   const env = { ...process.env, VERIFY_RUN_ID: id, VERIFY_DB_PASSWORD: randomBytes(32).toString('hex') };
   const base = ['compose', '--env-file', path.join(root, 'infra/verification/empty.env'), '-p', project,
     '-f', path.join(root, 'infra/verification/compose.yml')];
+  if (process.env.VERIFY_MOUNTED_MEDIA === 'yes') base.push('-f', path.join(root, 'infra/verification/compose.mounted-media.yml'));
   const revision = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true });
   const changes = spawnSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8', windowsHide: true });
   const report = { project, mode: execDocker === docker ? 'docker' : 'simulated',
     sourceRevision: revision.status === 0 ? revision.stdout.trim() : null,
     worktreeStatus: changes.status === 0 ? changes.stdout.trim() : null,
+    mountedMedia: process.env.VERIFY_MOUNTED_MEDIA === 'yes',
     startedAt: new Date().toISOString(), finishedAt: null, status: 'running', phases: [] };
   const reportFile = path.join(output, 'result.json');
   const record = () => writeFileSync(reportFile, JSON.stringify(report, null, 2) + '\n');
