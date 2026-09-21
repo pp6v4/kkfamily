@@ -23,6 +23,8 @@
 
 ### 后续复核：必须补齐的照片隐私处理
 
+**21:00更新：此缺口已由589b0f5修复并部署；四组HTTP各54/54和生产图片专项4/4通过。见[隐私修复发布证据](deployment-20260921-privacy.md)。以下保留发现过程，不能继续当作当前未修复状态。真机验收仍待完成。**
+
 `contract-details.md` D10 明确要求 EXIF GPS 默认剥离。当前 `image-validation.ts`
 返回原 Buffer，`media.service.ts` 直接对该 Buffer 计算摘要并存储，未发现剥离或重新编码步骤。
 2026-09-21 调用编译后的校验器，含 Exif 标识的 JPEG 标记探针返回 sameBuffer=true、
