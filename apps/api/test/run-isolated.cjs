@@ -29,6 +29,7 @@ function main() {
     ['itinerary-unit', ['--test', '--test-reporter=tap', 'test/itinerary.unit.test.cjs']],
     ['trip-create-unit', ['--test', '--test-reporter=tap', 'test/trip-create.unit.test.cjs']],
     ['mounted-media-unit', ['--test', '--test-reporter=tap', 'test/cos-mount-guard.unit.test.cjs', 'test/mounted-object-store.unit.test.cjs']],
+    ['image-privacy-unit', ['--test', '--test-reporter=tap', 'test/image-sanitizer.unit.test.cjs']],
     ['patch-compatibility', ['--test', '--test-reporter=tap', 'test/patch-compatibility.test.cjs']],
     ['http-integration', ['--test', '--test-reporter=tap', 'test/access.integration.test.cjs']],
     ['http-post-patch-integration', ['--test', '--test-reporter=tap', 'test/access.integration.test.cjs']],

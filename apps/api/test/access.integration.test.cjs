@@ -1,6 +1,7 @@
 const { test, before, after } = require('node:test');
 const assert = require('node:assert/strict');
 const { randomUUID, createHash } = require('node:crypto');
+const sharp = require('sharp');
 const { assertIsolatedDatabase } = require('./run-isolated.cjs');
 require('reflect-metadata');
 const { NestFactory } = require('@nestjs/core');
@@ -21,10 +22,11 @@ const { configureImageBodyParser } = require('../dist/media/binary-parser');
 const { configurePatchCompatibility } = require('../dist/common/patch-compatibility');
 const { NotificationsService } = require('../dist/notifications/notifications.service');
 let app, db, jwt;
-const TEST_PNG = Buffer.from([0x89,0x50,0x4e,0x47,0x0d,0x0a,0x1a,0x0a,0x00,0x00,0x00,0x0d,0x49,0x48,0x44,0x52]);
+let TEST_PNG;
 
 before(async () => {
   assertIsolatedDatabase(process.env.DATABASE_URL);
+  TEST_PNG = await sharp({ create: { width: 2, height: 2, channels: 3, background: '#88aa44' } }).png().toBuffer();
   process.env.JWT_ACCESS_SECRET = 'isolated-verification-signing-key-not-for-production';
   app = await NestFactory.create(AppModule, new FastifyAdapter(), { logger: ['error'], abortOnError: false });
   configureImageBodyParser(app);
@@ -389,6 +391,35 @@ test('D04: recipe detail respects draft visibility and stale edits never overwri
   assert.equal(restored.status,200);assert.equal(restored.body.data.status,'DRAFT');assert.equal((await call(viewer,'GET',`/recipes/${recipe.id}`)).status,404);
 });
 
+test('D10: privacy re-encoding uses stored size/hash across upload retries, confirmation and private reads', async () => {
+  const who = await owner();
+  const recipe = (await call(who,'POST','/recipes',{name:'隐私图片验证',ingredients:[{name:'豆腐',quantity:1,unit:'块'}],seasonings:['盐'],steps:['煎']})).body.data;
+  const input = await sharp({create:{width:7,height:3,channels:3,background:'#88aa44'}})
+    .withMetadata({orientation:6}).withExifMerge({IFD0:{Artist:'private-artist'},IFD3:{GPSLatitudeRef:'N',GPSLatitude:'31/1 12/1 0/1',GPSLongitudeRef:'E',GPSLongitude:'121/1 30/1 0/1'}}).png().toBuffer();
+  assert.ok((await sharp(input).metadata()).exif);
+  const intent = await call(who,'POST','/media/upload-intents',{ownerType:'RECIPE',ownerId:recipe.id,expectedOwnerVersion:recipe.version,mimeType:'image/png',byteSize:input.length});
+  assert.equal(intent.status,201);
+  const upload = await callRaw(who,intent.body.data.uploadPath,input);
+  assert.equal(upload.status,200,JSON.stringify(upload.body));
+  assert.notEqual(upload.body.data.byteSize,input.length);
+  assert.notEqual(upload.body.data.checksumSha256,createHash('sha256').update(input).digest('hex'));
+  const retry = await callRaw(who,intent.body.data.uploadPath,input);
+  assert.equal(retry.status,200); assert.deepEqual(retry.body.data,upload.body.data);
+  const confirm = await call(who,'POST','/media/assets/confirm',{intentId:intent.body.data.id,checksumSha256:upload.body.data.checksumSha256});
+  assert.equal(confirm.status,201,JSON.stringify(confirm.body));
+  assert.equal(confirm.body.data.asset.byteSize,upload.body.data.byteSize);
+  const row = await db.uploadIntent.findUniqueOrThrow({where:{id:intent.body.data.id}});
+  assert.equal(row.declaredBytes,input.length); assert.equal(row.uploadedBytes,upload.body.data.byteSize);
+  const url = await call(who,'GET',`/media/assets/${confirm.body.data.asset.id}/url`);
+  const read = await app.inject({method:'GET',url:'/v1'+url.body.data.path});
+  assert.equal(read.statusCode,200); assert.equal(read.rawPayload.length,row.uploadedBytes);
+  assert.equal(createHash('sha256').update(read.rawPayload).digest('hex'),row.checksumSha256);
+  const metadata = await sharp(read.rawPayload).metadata();
+  assert.equal(metadata.exif,undefined); assert.equal(metadata.xmp,undefined);
+  assert.equal(metadata.width,3); assert.equal(metadata.height,7);
+  assert.equal(await db.mediaAsset.count({where:{intentId:row.id}}),1);
+});
+
 test('A33/A35: private recipe image validates bytes and ownership; revoked user gets no new URL while old URL expires shortly',async()=>{
   const ownerAccount=await owner(),chef=await join(ownerAccount,['CHEF']);
   const created=await call(chef,'POST','/recipes',{name:'带图菜谱',ingredients:[{name:'豆腐',quantity:1,unit:'块'}],seasonings:['盐'],steps:['煎']});
@@ -401,7 +432,7 @@ test('A33/A35: private recipe image validates bytes and ownership; revoked user 
   const confirmed=await call(chef,'POST','/media/assets/confirm',{intentId:intent.body.data.id,checksumSha256:uploaded.body.data.checksumSha256});assert.equal(confirmed.status,201);
   const retry=await call(chef,'POST','/media/assets/confirm',{intentId:intent.body.data.id,checksumSha256:uploaded.body.data.checksumSha256});assert.equal(retry.body.data.asset.id,confirmed.body.data.asset.id);
   const url=await call(chef,'GET',`/media/assets/${confirmed.body.data.asset.id}/url`);assert.equal(url.status,200);
-  const binary=await app.inject({method:'GET',url:'/v1'+url.body.data.path});assert.equal(binary.statusCode,200);assert.deepEqual(binary.rawPayload,TEST_PNG);assert.equal(binary.headers['content-type'],'image/png');
+  const binary=await app.inject({method:'GET',url:'/v1'+url.body.data.path});assert.equal(binary.statusCode,200);assert.deepEqual(await sharp(binary.rawPayload).raw().toBuffer(),await sharp(TEST_PNG).raw().toBuffer());assert.equal(binary.headers['content-type'],'image/png');
   assert.equal((await callRaw(chef,intent.body.data.uploadPath,TEST_PNG,'image/jpeg')).status,400,'Content type cannot be changed');
   await call(ownerAccount,'PATCH',`/members/${chef.memberId}/status`,{version:1,status:'DISABLED'});
   assert.equal((await call(chef,'GET',`/media/assets/${confirmed.body.data.asset.id}/url`)).status,403);

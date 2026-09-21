@@ -8,7 +8,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { serializable } from '../prisma/serializable';
 import { ConfirmUploadDto } from './dto/confirm-upload.dto';
 import { CreateUploadIntentDto } from './dto/create-upload-intent.dto';
-import { validateImageBytes } from './image-validation';
+import { sanitizeImage } from './image-sanitizer';
 import { ObjectStorageService } from './object-storage.service';
 
 const extensions: Record<string,string> = {'image/jpeg':'jpg','image/png':'png','image/webp':'webp'};
@@ -32,7 +32,7 @@ export class MediaService {
     await this.notExpired(intent);
     const contentType=(contentTypeHeader??'').split(';')[0].trim().toLowerCase();
     if(contentType!==intent.mimeType)throw new BadRequestException('上传Content-Type与申请不一致');
-    const bytes=validateImageBytes(body,intent.mimeType,intent.declaredBytes);
+    const bytes=await sanitizeImage(body,intent.mimeType,intent.declaredBytes);
     const checksumSha256=createHash('sha256').update(bytes).digest('hex');
     if(['UPLOADED','CONFIRMED'].includes(intent.status)){
       if(intent.checksumSha256===checksumSha256&&intent.uploadedBytes===bytes.length)return{data:{intentId,checksumSha256,byteSize:bytes.length}};
@@ -50,7 +50,7 @@ export class MediaService {
     if(intent.status==='CONFIRMED'){const asset=await this.prisma.mediaAsset.findUnique({where:{intentId:intent.id}});if(!asset)throw new ConflictException('图片确认记录不完整');return{data:{asset,ownerVersion:await this.ownerVersion(this.prisma,intent.ownerType,intent.ownerId)}};}
     if(intent.status!=='UPLOADED'||intent.checksumSha256!==dto.checksumSha256)throw new ConflictException('图片尚未上传完成或校验值不匹配');
     const head=await this.storage.head(intent.objectKey,intent.checksumSha256);
-    if(head.bytes!==intent.declaredBytes||head.mimeType!==intent.mimeType||head.checksumSha256!==dto.checksumSha256)throw new ConflictException('对象存储中的图片校验失败');
+    if(head.bytes!==intent.uploadedBytes||head.mimeType!==intent.mimeType||head.checksumSha256!==dto.checksumSha256)throw new ConflictException('对象存储中的图片校验失败');
     return serializable(this.prisma,async tx=>{
       const current=await tx.uploadIntent.findFirst({where:{id:intent.id,householdId}});if(!current)throw new NotFoundException('上传申请不存在');
       const owner=await this.requireOwnerWrite(tx,userId,householdId,current.ownerType,current.ownerId,current.expectedOwnerVersion);
