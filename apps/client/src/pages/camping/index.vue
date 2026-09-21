@@ -50,6 +50,23 @@ function canEditTemplate(template: PackingTemplate) { return canAccess(session.v
 const candidateNames = computed(() => candidates.value.map((entry,index)=>entry.user.nickname||`成员${index+1}`));
 const groupNames = computed(() => ['不分组',...(selectedTrip.value?.preparationGroups ?? []).map(group=>group.name)]);
 const packedCount = computed(() => packingItems.value.filter((item) => item.status === 'PACKED').length);
+const packingGroupFilter = ref(''), packingPersonFilter = ref(''), packingStateFilter = ref('');
+const packingGroupOptions = computed(() => [{id:'',name:'全部准备组'},{id:'none',name:'未分组'},...(selectedTrip.value?.preparationGroups ?? []).map(group=>({id:group.id,name:group.name}))]);
+const packingPersonOptions = computed(() => [{id:'',name:'全部负责人'},{id:'none',name:'未分配'},...(selectedTrip.value?.members ?? []).map(member=>({id:member.membershipId,name:member.membership.user.nickname || '家庭成员'}))]);
+const packingStateOptions = [{id:'',name:'全部状态'},{id:'PENDING',name:'未准备'},{id:'PACKED',name:'已准备'}];
+const visiblePackingItems = computed(() => packingItems.value.filter(item =>
+  (!packingGroupFilter.value || (packingGroupFilter.value==='none' ? !item.groupId : item.groupId===packingGroupFilter.value)) &&
+  (!packingPersonFilter.value || (packingPersonFilter.value==='none' ? !item.responsibleMembershipId : item.responsibleMembershipId===packingPersonFilter.value)) &&
+  (!packingStateFilter.value || item.status===packingStateFilter.value)));
+function resetPackingFilters(){packingGroupFilter.value='';packingPersonFilter.value='';packingStateFilter.value='';}
+function selectPackingFilter(kind:'group'|'person'|'state',value:unknown){
+  if(!pageVisible.value || !selectedTrip.value)return;
+  const index=Number(value), options=kind==='group'?packingGroupOptions.value:kind==='person'?packingPersonOptions.value:packingStateOptions;
+  if(!Number.isInteger(index)||!options[index])return;
+  (kind==='group'?packingGroupFilter:kind==='person'?packingPersonFilter:packingStateFilter).value=options[index].id;
+}
+watch(selectedTripId,resetPackingFilters);
+watch(session,resetPackingFilters);
 const pageVisible = ref(false);
 const overviewPulse = ref(false);
 let overviewTimer: ReturnType<typeof setInterval> | undefined;
@@ -384,7 +401,16 @@ onUnmounted(unloadPage);
       <view v-if="canAccess(session,'packing_templates','EDIT') && !templates.length" class="notice" @tap="active = 'templates'">还没有行李模板，先去创建一个 ›</view>
       <view v-if="showingItemForm" class="editor"><input v-model="itemForm.name" class="input" placeholder="本次要带什么" /><view class="item-inputs"><input v-model="itemForm.quantity" type="digit" class="input" placeholder="数量" /><input v-model="itemForm.unit" class="input" placeholder="单位" /></view><input v-model="itemForm.note" class="input" placeholder="备注（可选）" /><view class="button small" @tap="saveTripItem">加入本次行程</view></view>
       <view v-if="!packingItems.length" class="empty">本次行程还没有行李项</view>
-      <view v-for="item in packingItems" :key="item.id" class="packing-item" :class="{ packed: item.status === 'PACKED' }"><text class="check" @tap="canEditTrip && togglePacked(item)">{{ item.status === 'PACKED' ? '✓' : '' }}</text><view class="packing-info"><text class="packing-name">{{ item.name }}<text v-if="quantityText(item.quantity,item.unit)" class="quantity"> · {{ quantityText(item.quantity,item.unit) }}</text></text><text class="packing-meta">{{ item.sourceTemplateNameSnapshot ? `来自模板：${item.sourceTemplateNameSnapshot}` : '本次手工添加' }}{{ item.note ? ` · ${item.note}` : '' }}</text><text v-if="!canEditTrip" class="responsible">{{item.group?`准备组：${item.group.name} · `:''}}负责人：{{ responsibleName(item) }} · 只读</text><view v-else class="assignment"><picker :range="groupNames" @change="assignGroup(item,Number($event.detail.value))"><text class="responsible">准备组：{{item.group?.name||'未分组'}} ›</text></picker><picker :range="assignableMemberNames(item)" @change="assign(item, Number($event.detail.value))"><text class="responsible">负责人：{{ responsibleName(item) }} ›</text></picker></view></view><text v-if="canEditTrip" class="remove" @tap="removeItem(item)">×</text></view>
+      <view v-if="packingItems.length" class="packing-actions">
+        <picker :range="packingGroupOptions" range-key="name" @change="selectPackingFilter('group',$event.detail.value)"><text class="action">{{packingGroupOptions.find(option=>option.id===packingGroupFilter)?.name || '准备组已变化'}} ▾</text></picker>
+        <picker :range="packingPersonOptions" range-key="name" @change="selectPackingFilter('person',$event.detail.value)"><text class="action">{{packingPersonOptions.find(option=>option.id===packingPersonFilter)?.name || '负责人已变化'}} ▾</text></picker>
+        <picker :range="packingStateOptions" range-key="name" @change="selectPackingFilter('state',$event.detail.value)"><text class="action">{{packingStateOptions.find(option=>option.id===packingStateFilter)?.name}} ▾</text></picker>
+        <text class="action" @tap="resetPackingFilters">重置 · {{visiblePackingItems.length}}/{{packingItems.length}}项</text>
+      </view>
+      <view v-if="packingItems.length && !visiblePackingItems.length" class="empty">没有符合筛选条件的行李项</view>
+      <template v-for="item in packingItems" :key="item.id">
+      <view v-if="visiblePackingItems.includes(item)" class="packing-item" :class="{ packed: item.status === 'PACKED' }"><text class="check" @tap="canEditTrip && togglePacked(item)">{{ item.status === 'PACKED' ? '✓' : '' }}</text><view class="packing-info"><text class="packing-name">{{ item.name }}<text v-if="quantityText(item.quantity,item.unit)" class="quantity"> · {{ quantityText(item.quantity,item.unit) }}</text></text><text class="packing-meta">{{ item.sourceTemplateNameSnapshot ? `来自模板：${item.sourceTemplateNameSnapshot}` : '本次手工添加' }}{{ item.note ? ` · ${item.note}` : '' }}</text><text v-if="!canEditTrip" class="responsible">{{item.group?`准备组：${item.group.name} · `:''}}负责人：{{ responsibleName(item) }} · 只读</text><view v-else class="assignment"><picker :range="groupNames" @change="assignGroup(item,Number($event.detail.value))"><text class="responsible">准备组：{{item.group?.name||'未分组'}} ›</text></picker><picker :range="assignableMemberNames(item)" @change="assign(item, Number($event.detail.value))"><text class="responsible">负责人：{{ responsibleName(item) }} ›</text></picker></view></view><text v-if="canEditTrip" class="remove" @tap="removeItem(item)">×</text></view>
+      </template>
     </view>
 
     <view v-else>

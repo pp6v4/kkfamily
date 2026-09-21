@@ -67,6 +67,27 @@ function campingForm(api={},access){
   return{page,errors,lifecycle,uni,native,setStored:context=>{stored=context;}};
 }
 
+test('Packing filters combine group, person and preparation state without mutating source rows',async()=>{
+  const {page}=campingForm();
+  page.trips.value=[sampleTrip];page.selectedTripId.value=sampleTrip.id;
+  await vue.nextTick();
+  page.packingItems.value=[
+    {id:'a',groupId:'group-a',responsibleMembershipId:'member-a',status:'PENDING'},
+    {id:'b',groupId:'group-a',responsibleMembershipId:'member-a',status:'PACKED'},
+    {id:'c',groupId:null,responsibleMembershipId:null,status:'PENDING'},
+  ];
+  page.packingGroupFilter.value='group-a';page.packingPersonFilter.value='member-a';page.packingStateFilter.value='PENDING';
+  assert.equal(page.visiblePackingItems.value.map(item=>item.id).join(','),'a');
+  assert.equal(page.packingItems.value.length,3);assert.equal(page.packedCount.value,1);
+  page.packingGroupFilter.value='none';page.packingPersonFilter.value='none';
+  assert.equal(page.visiblePackingItems.value[0].id,'c');
+  page.packingStateFilter.value='PACKED';assert.equal(page.visiblePackingItems.value.length,0);
+  page.resetPackingFilters();assert.equal(page.visiblePackingItems.value.length,3);
+  page.selectPackingFilter('state',1);assert.equal(page.packingStateFilter.value,'PENDING');
+  page.selectPackingFilter('state',99);assert.equal(page.packingStateFilter.value,'PENDING');
+  page.selectedTripId.value='another-trip';await vue.nextTick();assert.equal(page.packingStateFilter.value,'');
+});
+
 test('Travel dates use Shanghai cross-day boundaries and preserve unchanged timestamp precision',()=>{
   assert.equal(tripForm.shanghaiDate('2026-09-01T23:30:15.123Z'),'2026-09-02');
   assert.equal(tripForm.shanghaiDate('2026-09-01T15:59:59.999Z'),'2026-09-01');
