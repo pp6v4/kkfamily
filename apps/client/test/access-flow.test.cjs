@@ -88,6 +88,21 @@ test('Packing filters combine group, person and preparation state without mutati
   page.selectedTripId.value='another-trip';await vue.nextTick();assert.equal(page.packingStateFilter.value,'');
 });
 
+test('Packing picker indices follow selected IDs; hiding and identity changes cannot retain stale filters',async()=>{
+  const {page,lifecycle}=campingForm();
+  page.trips.value=[{...sampleTrip,preparationGroups:[{id:'group-a',name:'我们家',members:[]}]}];
+  page.selectedTripId.value=sampleTrip.id;
+  page.selectPackingFilter('group',2);page.selectPackingFilter('person',2);page.selectPackingFilter('state',2);
+  assert.equal(page.packingGroupFilter.value,'group-a');assert.equal(page.packingGroupIndex.value,2);
+  assert.equal(page.packingPersonFilter.value,'member-a');assert.equal(page.packingPersonIndex.value,2);
+  assert.equal(page.packingStateFilter.value,'PACKED');assert.equal(page.packingStateIndex.value,2);
+  lifecycle.hide();
+  assert.equal(page.packingGroupFilter.value,'');assert.equal(page.packingPersonFilter.value,'');assert.equal(page.packingStateFilter.value,'');
+  page.selectPackingFilter('state',2);assert.equal(page.packingStateFilter.value,'');
+  page.packingStateFilter.value='PENDING';page.session.value={...family,membershipId:'other'};
+  assert.equal(page.packingStateFilter.value,'');
+});
+
 test('Travel dates use Shanghai cross-day boundaries and preserve unchanged timestamp precision',()=>{
   assert.equal(tripForm.shanghaiDate('2026-09-01T23:30:15.123Z'),'2026-09-02');
   assert.equal(tripForm.shanghaiDate('2026-09-01T15:59:59.999Z'),'2026-09-01');
