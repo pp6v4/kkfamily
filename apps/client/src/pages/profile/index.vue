@@ -1,10 +1,24 @@
 <script setup lang="ts">
 import { ref } from 'vue';
-import { onShow } from '@dcloudio/uni-app';
-import { canAccess, refreshAccess, type HouseholdContext } from '../../services/session';
+import { onShow, onHide, onUnload } from '@dcloudio/uni-app';
+import { canAccess, refreshAccess, getSessionEpoch, type HouseholdContext } from '../../services/session';
 const session = ref<HouseholdContext>();
 const ICP_NUMBER = '辽ICP备2026020161号-1';
-onShow(async () => { session.value = undefined; try { session.value = await refreshAccess(); } catch (error) { uni.showToast({ title: error instanceof Error ? error.message : '读取家庭信息失败', icon: 'none' }); } });
+let visible = false, request = 0, loadedEpoch = -1;
+function clearPage() { visible = false; request++; session.value = undefined; loadedEpoch = -1; }
+onHide(clearPage);
+onUnload(clearPage);
+onShow(async () => {
+  visible = true; session.value = undefined; loadedEpoch = -1;
+  const currentRequest = ++request, epoch = getSessionEpoch();
+  const current = () => visible && request === currentRequest && getSessionEpoch() === epoch;
+  try {
+    const context = await refreshAccess();
+    if (current()) { session.value = context; loadedEpoch = epoch; }
+  } catch (error) {
+    if (current()) uni.showToast({ title: error instanceof Error ? error.message : '读取家庭信息失败', icon: 'none' });
+  }
+});
 const entries = [
   { icon: '👨‍👩‍👧', title: '家庭成员与权限', subtitle: '邀请家人和朋友，配置可访问的功能', tone: 'leaf' },
   { icon: '📮', title: '家庭待办', subtitle: '清洗空调、补充物资等日常安排', tone: 'sky' },
@@ -15,6 +29,9 @@ const entries = [
   { icon: '⚙️', title: '账号与家庭', subtitle: '加入其他家庭或查看账号信息', tone: 'stone' },
 ];
 function open(title: string) {
+  if (!visible) return;
+  if (title === '账号与家庭') { uni.navigateTo({ url: '/pages/join/index' }); return; }
+  if (loadedEpoch !== getSessionEpoch()) { session.value = undefined; uni.showToast({ title: '家庭信息已变化，请重新进入我的家', icon: 'none' }); return; }
   if (title === '家庭成员与权限') {
     if (!canAccess(session.value, 'members')) { uni.showToast({ title: '请联系管理员授予成员目录权限', icon: 'none' }); return; }
     uni.navigateTo({ url: '/pages/members/index' }); return;
@@ -39,7 +56,6 @@ function open(title: string) {
     if (!canAccess(session.value, 'notifications')) { uni.showToast({ title: '尚未获得消息提醒权限', icon: 'none' }); return; }
     uni.navigateTo({ url: '/pages/notifications/index' }); return;
   }
-  if (title === '账号与家庭') { uni.navigateTo({ url: '/pages/join/index' }); return; }
   uni.showToast({ title: `${title}尚未实现，当前不是可用功能`, icon: 'none' });
 }
 function copyIcpNumber() {

@@ -726,6 +726,23 @@ test('My home displays the approved website ICP filing number and supports copyi
   assert.match(source,/setClipboardData/);
 });
 
+test('My home discards hidden and out-of-order access replies and blocks stale identity navigation',async()=>{
+  const uni=mockUni(),life={},pending=[];let epoch=0;
+  const page=loadPage('src/pages/profile/index.vue',{
+    '@dcloudio/uni-app':{onShow:fn=>life.show=fn,onHide:fn=>life.hide=fn,onUnload:fn=>life.unload=fn},
+    '../../services/session':{canAccess:allowed,getSessionEpoch:()=>epoch,refreshAccess:()=>new Promise(resolve=>pending.push(resolve))},
+  },uni);
+  const old=life.show();life.hide();pending.shift()(family);await old;
+  assert.equal(page.session.value,undefined);page.open('账号与家庭');assert.equal(uni.routes.length,0);
+  const first=life.show(),second=life.show();const a=pending.shift(),b=pending.shift();
+  b({...family,householdName:'最新家庭'});await second;a(family);await first;
+  assert.equal(page.session.value.householdName,'最新家庭');
+  page.open('家庭成员与权限');assert.deepEqual(uni.routes,['/pages/members/index']);
+  epoch++;page.open('家庭成员与权限');assert.equal(uni.routes.length,1);assert.equal(page.session.value,undefined);
+  page.open('账号与家庭');assert.equal(uni.routes[1],'/pages/join/index');
+  life.unload();assert.equal(page.session.value,undefined);
+});
+
 const mealSession={...family,effectivePermissions:{meals:'MANAGE',recipes:'VIEW',inventory:'EDIT',shopping:'EDIT'}};
 function mealRecord(overrides={}) {return {id:'meal-a',version:7,snapshotVersion:1,localDate:'2026-09-01',slotKey:'',scheduledAt:'2026-09-01T18:00:00+08:00',mealType:'DINNER',status:'CONFIRMED',legacyWithoutSnapshot:false,items:[],menu:[],...overrides};}
 function mealDependencies(overrides={}) {
