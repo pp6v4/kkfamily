@@ -467,6 +467,36 @@ test('A33/A35: private recipe image validates bytes and ownership; revoked user 
   const stillShortLived=await app.inject({method:'GET',url:'/v1'+url.body.data.path});assert.equal(stillShortLived.statusCode,200);
   const token=new URL('http://test'+url.body.data.path).searchParams.get('token');assert.equal((await call(ownerAccount,'GET','/recipes',undefined,ownerAccount.householdId)).status,200);assert.equal((await call(ownerAccount,'GET','/recipes',undefined,'not-the-household')).status,403);assert.ok(token.length>20);
 });
+test('A33: expired intents and another participant cannot create an asset or change its trip ownership',async()=>{
+  const who=await owner(),member=await join(who,['CAMPER']);
+  const trip=(await call(who,'POST','/trips',{title:'上传归属验证',startsAt:'2026-10-03T08:00:00+08:00'})).body.data;
+  assert.equal((await call(who,'POST',`/trips/${trip.id}/members`,{membershipId:member.memberId,photoAdd:true})).status,201);
+  const makeIntent=async()=>{
+    const response=await call(who,'POST','/media/upload-intents',{ownerType:'TRIP',ownerId:trip.id,expectedOwnerVersion:trip.version,mimeType:'image/png',byteSize:TEST_PNG.length});
+    assert.equal(response.status,201);return response.body.data;
+  };
+  const pending=await makeIntent();
+  await db.uploadIntent.update({where:{id:pending.id},data:{expiresAt:new Date(Date.now()-1000)}});
+  assert.equal((await callRaw(who,pending.uploadPath,TEST_PNG)).status,410);
+  assert.equal((await db.uploadIntent.findUniqueOrThrow({where:{id:pending.id}})).status,'EXPIRED');
+  const uploaded=await makeIntent();const content=await callRaw(who,uploaded.uploadPath,TEST_PNG);assert.equal(content.status,200);
+  const confirm={intentId:uploaded.id,checksumSha256:content.body.data.checksumSha256};
+  const original=await db.uploadIntent.findUniqueOrThrow({where:{id:uploaded.id}});
+  assert.equal((await call(member,'POST','/media/assets/confirm',confirm)).status,404);
+  assert.equal((await callRaw(member,uploaded.uploadPath,TEST_PNG)).status,404);
+  assert.deepEqual(await db.uploadIntent.findUniqueOrThrow({where:{id:uploaded.id}}),original);
+  // Unknown fields are stripped by the shared validation pipe. They must not
+  // let another participant claim the original uploader's intent.
+  assert.equal((await call(member,'POST','/media/assets/confirm',{...confirm,objectKey:'households/forged/other.png'})).status,404);
+  assert.deepEqual(await db.uploadIntent.findUniqueOrThrow({where:{id:uploaded.id}}),original);
+  await db.uploadIntent.update({where:{id:uploaded.id},data:{expiresAt:new Date(Date.now()-1000)}});
+  assert.equal((await call(who,'POST','/media/assets/confirm',confirm)).status,410);
+  assert.equal(await db.mediaAsset.count({where:{intentId:{in:[pending.id,uploaded.id]}}}),0);
+  assert.equal(await db.mediaReference.count({where:{ownerType:'TRIP',ownerId:trip.id}}),0);
+  const unchanged=await db.trip.findUniqueOrThrow({where:{id:trip.id}});assert.equal(unchanged.version,trip.version);
+  const expired=await db.uploadIntent.findUniqueOrThrow({where:{id:uploaded.id}});assert.equal(expired.status,'EXPIRED');assert.equal(expired.ownerId,trip.id);assert.equal(expired.requestedById,who.memberId);
+});
+
 test('D10: trip photos require trip membership, revoke new reads, and allow history members to add photos',async()=>{
   const who=await owner(),member=await join(who,['CAMPER']);
   let trip=(await call(who,'POST','/trips',{title:'行程相册验证',startsAt:'2026-09-20T08:00:00+08:00'})).body.data;
@@ -647,6 +677,33 @@ test('A24/A25/A29: arbitrary template items stay exact, repeat apply skips, assi
   assert.equal((await call(member,'PATCH',`${path}/${item.id}`,{expectedVersion:item.version,status:'PACKED'})).status,403);
   assert.equal((await call(member,'GET','/packing-templates')).status,403);
 });
+test('A26/A27: equal names from different templates remain distinct and trip edits never mutate template originals',async()=>{
+  const who=await owner(),member=await join(who,['CAMPER']);
+  const trip=(await call(who,'POST','/trips',{title:'同名行李来源验证',startsAt:'2026-10-02T08:00:00+08:00'})).body.data;
+  assert.equal((await call(who,'POST',`/trips/${trip.id}/members`,{membershipId:member.memberId})).status,201);
+  const templates=[];
+  for(const name of ['烧烤装备','住宿装备']){
+    const response=await call(who,'POST','/packing-templates',{name,items:[{name:'水',quantity:2,unit:'瓶'}]});
+    assert.equal(response.status,201);templates.push(response.body.data);
+  }
+  const originals=await db.packingTemplate.findMany({where:{id:{in:templates.map(row=>row.id)}},include:{items:true},orderBy:{id:'asc'}});
+  const path=`/trips/${trip.id}/packing-items`;
+  for(const template of templates){
+    const result=await call(who,'POST',path+'/apply-template',{templateId:template.id});
+    assert.equal(result.status,201);assert.equal(result.body.data.addedCount,1);
+  }
+  const rows=(await call(who,'GET',path)).body.data;
+  assert.equal(rows.length,2);assert.deepEqual(rows.map(row=>row.name),['水','水']);
+  assert.equal(new Set(rows.map(row=>row.sourceTemplateItemId)).size,2);
+  assert.deepEqual(rows.map(row=>row.sourceTemplateItemId).sort(),templates.map(row=>row.items[0].id).sort());
+  const changed=await call(who,'PATCH',`${path}/${rows[0].id}`,{expectedVersion:rows[0].version,name:'大瓶饮用水',quantity:5,unit:'桶',responsibleMembershipId:member.memberId});
+  assert.equal(changed.status,200,JSON.stringify(changed.body));
+  const persisted=await db.tripPackingItem.findUniqueOrThrow({where:{id:rows[0].id}});
+  assert.equal(persisted.name,'大瓶饮用水');assert.equal(persisted.quantity.toString(),'5');assert.equal(persisted.unit,'桶');assert.equal(persisted.responsibleMembershipId,member.memberId);
+  assert.deepEqual(await db.packingTemplate.findMany({where:{id:{in:templates.map(row=>row.id)}},include:{items:true},orderBy:{id:'asc'}}),originals);
+  const untouched=await db.tripPackingItem.findUniqueOrThrow({where:{id:rows[1].id}});assert.equal(untouched.name,'水');assert.equal(untouched.quantity.toString(),'2');
+});
+
 test('A28: template edits are versioned, removed items are archived, and existing trip snapshots stay unchanged',async()=>{
   const who=await owner();
   const firstTrip=(await call(who,'POST','/trips',{title:'旧行程快照',startsAt:'2026-09-12T08:00:00+08:00'})).body.data;
