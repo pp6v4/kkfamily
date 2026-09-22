@@ -27,9 +27,19 @@ const entries = [
   { icon: '📊', title: '生活小看板', subtitle: '看看日常，不比较谁更辛苦', tone: 'sky' },
   { icon: '🔔', title: '消息与提醒', subtitle: '查看站内消息和待办提醒', tone: 'stone' },
   { icon: '⚙️', title: '账号与家庭', subtitle: '加入其他家庭或查看账号信息', tone: 'stone' },
+  { icon: '🛡️', title: '隐私保护指引', subtitle: '查看本小程序的隐私保护说明', tone: 'leaf' },
 ];
+function openPrivacy() {
+  if (typeof uni.openPrivacyContract !== 'function') {
+    uni.showToast({ title: '当前环境不支持，请更新微信后查看', icon: 'none' }); return;
+  }
+  const generation = request;
+  const failed = () => { if (visible && request === generation) uni.showToast({ title: '暂时打不开隐私指引，请稍后重试或联系管理员', icon: 'none' }); };
+  try { uni.openPrivacyContract({ fail: failed }); } catch { failed(); }
+}
 function open(title: string) {
   if (!visible) return;
+  if (title === '隐私保护指引') { openPrivacy(); return; }
   if (title === '账号与家庭') { uni.navigateTo({ url: '/pages/join/index' }); return; }
   if (loadedEpoch !== getSessionEpoch()) { session.value = undefined; uni.showToast({ title: '家庭信息已变化，请重新进入我的家', icon: 'none' }); return; }
   if (title === '家庭成员与权限') {

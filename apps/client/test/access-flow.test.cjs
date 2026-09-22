@@ -726,6 +726,22 @@ test('My home displays the approved website ICP filing number and supports copyi
   assert.match(source,/setClipboardData/);
 });
 
+test('Privacy guide opens without family access and reports unsupported or failed calls without granting consent',async()=>{
+  const uni=mockUni(),life={},toasts=[];uni.showToast=value=>toasts.push(value.title);
+  const page=loadPage('src/pages/profile/index.vue',{
+    '@dcloudio/uni-app':{onShow:fn=>life.show=fn,onHide:fn=>life.hide=fn,onUnload:fn=>life.unload=fn},
+    '../../services/session':{canAccess:allowed,getSessionEpoch:()=>0,refreshAccess:async()=>undefined},
+  },uni);
+  await life.show();page.open('隐私保护指引');assert.match(toasts.pop(),/不支持/);
+  let calls=0,callback;uni.openPrivacyContract=input=>{calls++;callback=input.fail;};
+  page.open('隐私保护指引');assert.equal(calls,1);assert.equal(toasts.length,0);assert.equal(uni.values.size,0);
+  callback();assert.match(toasts.pop(),/暂时打不开/);
+  page.open('隐私保护指引');life.hide();callback();assert.equal(toasts.length,0);
+  page.open('隐私保护指引');assert.equal(calls,2);
+  await life.show();uni.openPrivacyContract=()=>{throw Error('native failure');};
+  page.open('隐私保护指引');assert.match(toasts.pop(),/暂时打不开/);assert.equal(uni.values.size,0);
+});
+
 test('My home discards hidden and out-of-order access replies and blocks stale identity navigation',async()=>{
   const uni=mockUni(),life={},pending=[];let epoch=0;
   const page=loadPage('src/pages/profile/index.vue',{
