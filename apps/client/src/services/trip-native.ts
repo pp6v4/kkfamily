@@ -26,7 +26,8 @@ export async function authorizeNativeTrip(target: TripNativeTarget, mode: 'VIEW'
   checkNativeIdentity(target, alive);
   const member = trip.members.find(row => row.membershipId === target.membershipId);
   if (!member || !['ACTIVE', 'HISTORY'].includes(member.status)) throw new Error('已不再拥有这趟行程的访问权限');
-  if (mode !== 'VIEW' && !member.canEdit) throw new Error('没有这趟行程的协作权限');
+  if (mode === 'PHOTO' && !member.photoAdd) throw new Error('没有这趟行程的照片上传权限');
+  if (mode === 'LOCATION' && !member.canEdit) throw new Error('没有这趟行程的协作权限');
   if (mode === 'LOCATION' && (member.status !== 'ACTIVE' || ['COMPLETED', 'CANCELLED'].includes(trip.status))) throw new Error('当前行程不能修改地图节点');
   return trip;
 }

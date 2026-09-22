@@ -41,7 +41,7 @@ export class TripsService {
       const created = await tx.trip.create({
         data: {
           householdId, title: dto.title.trim(), startsAt, endsAt, destination: dto.destination?.trim() || dto.initialDestination?.title.trim(),
-          members: { create: { membershipId: membership.id, canEdit: true, tripRole: TripMemberRole.OWNER, status: TripMemberStatus.ACTIVE } },
+          members: { create: { membershipId: membership.id, canEdit: true, photoAdd: true, tripRole: TripMemberRole.OWNER, status: TripMemberStatus.ACTIVE } },
           ...(dto.initialDestination ? { stops: { create: {
             title: dto.initialDestination.title.trim(), latitude: dto.initialDestination.latitude,
             longitude: dto.initialDestination.longitude, coordSystem: 'GCJ02', stopType: 'CAMPSITE', sortOrder: 0,
@@ -100,8 +100,8 @@ export class TripsService {
       if (!target) throw new NotFoundException('可加入的家庭成员不存在');
       const existing = await tx.tripMember.findUnique({ where: { tripId_membershipId: { tripId, membershipId: target.id } } });
       if (existing && existing.status !== TripMemberStatus.REVOKED) throw new ConflictException('该成员已经在行程中');
-      if (existing) await tx.tripMember.update({ where: { tripId_membershipId: { tripId, membershipId: target.id } }, data: { status: TripMemberStatus.ACTIVE, tripRole: TripMemberRole.MEMBER, canEdit: dto.canEdit ?? true, leftAt: null, joinedAt: new Date(), version: { increment: 1 } } });
-      else await tx.tripMember.create({ data: { tripId, membershipId: target.id, status: TripMemberStatus.ACTIVE, tripRole: TripMemberRole.MEMBER, canEdit: dto.canEdit ?? true } });
+      if (existing) await tx.tripMember.update({ where: { tripId_membershipId: { tripId, membershipId: target.id } }, data: { status: TripMemberStatus.ACTIVE, tripRole: TripMemberRole.MEMBER, canEdit: dto.canEdit ?? true, photoAdd: dto.photoAdd ?? dto.canEdit ?? true, leftAt: null, joinedAt: new Date(), version: { increment: 1 } } });
+      else await tx.tripMember.create({ data: { tripId, membershipId: target.id, status: TripMemberStatus.ACTIVE, tripRole: TripMemberRole.MEMBER, canEdit: dto.canEdit ?? true, photoAdd: dto.photoAdd ?? dto.canEdit ?? true } });
       await this.audit(tx, householdId, actor.membershipId, 'TRIP_MEMBER_ADD', tripId, { membershipId: target.id });
       return this.tripOrThrow(tx, householdId, tripId);
     }) };
@@ -126,7 +126,7 @@ export class TripsService {
         if (dto.clearResponsibilities) await tx.tripPackingItem.updateMany({ where: { tripId, responsibleMembershipId: membershipId, excludedAt: null }, data: { responsibleMembershipId: null, version: { increment: 1 } } });
         await tx.tripPreparationGroupMember.deleteMany({ where: { tripId, membershipId } });
       }
-      await tx.tripMember.update({ where: { tripId_membershipId: { tripId, membershipId } }, data: { canEdit: nextRole === TripMemberRole.OWNER ? true : dto.canEdit ?? target.canEdit, tripRole: nextRole, status: nextStatus, leftAt: nextStatus === TripMemberStatus.REVOKED ? new Date() : null, version: { increment: 1 } } });
+      await tx.tripMember.update({ where: { tripId_membershipId: { tripId, membershipId } }, data: { canEdit: nextRole === TripMemberRole.OWNER ? true : dto.canEdit ?? target.canEdit, photoAdd: dto.photoAdd ?? target.photoAdd, tripRole: nextRole, status: nextStatus, leftAt: nextStatus === TripMemberStatus.REVOKED ? new Date() : null, version: { increment: 1 } } });
       await this.audit(tx, householdId, actor.membershipId, 'TRIP_MEMBER_UPDATE', tripId, { membershipId, status: nextStatus, role: nextRole });
       return this.tripOrThrow(tx, householdId, tripId);
     }) };

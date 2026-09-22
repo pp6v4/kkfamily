@@ -44,7 +44,7 @@ let nativeReturn:{target:TripNativeTarget;draft?:StopLocationDraft;notice?:strin
 const selectedTrip = computed(() => loadingTrip.value ? undefined : trips.value.find((trip) => trip.id === selectedTripId.value));
 const currentTripMember = computed(() => selectedTrip.value?.members.find(m=>m.membershipId===session.value?.membershipId));
 const canEditTrip = computed(() => canAccess(session.value,'trips','EDIT') && currentTripMember.value?.status === 'ACTIVE' && Boolean(currentTripMember.value?.canEdit) && !['COMPLETED','CANCELLED'].includes(selectedTrip.value?.status || ''));
-const canAddTripPhotos = computed(() => canAccess(session.value,'trips','EDIT') && ['ACTIVE','HISTORY'].includes(currentTripMember.value?.status || '') && Boolean(currentTripMember.value?.canEdit));
+const canAddTripPhotos = computed(() => canAccess(session.value,'trips','EDIT') && ['ACTIVE','HISTORY'].includes(currentTripMember.value?.status || '') && Boolean(currentTripMember.value?.photoAdd));
 const isTripOwner = computed(() => canEditTrip.value && currentTripMember.value?.tripRole === 'OWNER');
 function canEditTemplate(template: PackingTemplate) { return canAccess(session.value,'packing_templates','EDIT') && (template.createdById===session.value?.membershipId || canAccess(session.value,'packing_templates','MANAGE')); }
 const candidateNames = computed(() => candidates.value.map((entry,index)=>entry.user.nickname||`成员${index+1}`));
@@ -347,6 +347,17 @@ function removeItem(item: TripPackingItem) {
 async function addMemberByIndex(event:{detail:{value:string}}){const candidate=candidates.value[Number(event.detail.value)];if(!candidate)return;await mutateTrip(trip=>addTripMember(trip.id,candidate.id),async(updated,scope)=>{replaceTrip(updated);await refreshCandidates(scope);},true);}
 function revokeMember(member: Trip['members'][number]){const trip=selectedTrip.value,scope=stamp();if(!trip||!current(scope)||!isTripOwner.value||tripBusy.value)return;uni.showModal({title:'撤销行程访问',content:`撤销“${member.membership.user.nickname||'该成员'}”后会立即失去访问，未完成的负责人分配将被清空。`,success:async result=>{if(!result.confirm||!current(scope))return;await mutateTrip(()=>updateTripMember(trip.id,member,{status:'REVOKED',clearResponsibilities:true}),async(updated,latest)=>{replaceTrip(updated);await refreshPacking(latest);await refreshCandidates(latest);},true);}});}
 async function advanceStatus(){const trip=selectedTrip.value,scope=stamp();if(!trip||!current(scope)||!isTripOwner.value||tripBusy.value)return;const next=({PLANNING:'PENDING',PENDING:'DEPARTING',DEPARTING:'COMPLETED'} as Partial<Record<Trip['status'],Trip['status']>>)[trip.status];if(!next)return;uni.showModal({title:next==='COMPLETED'?'完成行程':'更新行程状态',content:next==='COMPLETED'?'完成后保留历史查看和有权限成员补照片，行程及行李不能继续修改。':`将行程更新为“${statusText(next)}”？`,success:async result=>{if(!result.confirm||!current(scope))return;await mutateTrip(()=>updateTripStatus(trip,next),updated=>{replaceTrip(updated);candidates.value=[];},true);}});}
+async function toggleMemberPermission(member:Trip['members'][number],permission:'canEdit'|'photoAdd'){
+  const trip=selectedTrip.value,scope=stamp();
+  if(!trip||!current(scope)||!isTripOwner.value||tripBusy.value||member.status!=='ACTIVE')return;
+  if(permission==='canEdit'&&member.tripRole==='OWNER')return;
+  const expectedVersion=member.version,next=!member[permission],memberId=member.membershipId;
+  await mutateTrip(currentTrip=>{
+    const latest=currentTrip.members.find(item=>item.membershipId===memberId);
+    if(!latest||latest.version!==expectedVersion)throw new Error('成员权限已更新，请刷新后重试');
+    return updateTripMember(currentTrip.id,latest,{[permission]:next});
+  },updated=>replaceTrip(updated),true);
+}
 function groupSelection(event:{detail:{value:string[]}}){groupMemberIds.value=event.detail.value;}
 function editGroup(group:TripPreparationGroup){editingGroupId.value=group.id;groupName.value=group.name;groupMemberIds.value=group.members.map(member=>member.membershipId);}
 function resetGroupForm(){editingGroupId.value='';groupName.value='';groupMemberIds.value=[];}
@@ -394,7 +405,15 @@ onUnmounted(unloadPage);
       <TripPhotos :key="`${session?.membershipId}:${selectedTrip.id}:${detailEpoch}`" :trip="selectedTrip" :can-upload="canAddTripPhotos && !nativeBusy" :active="pageVisible" @choose-photos="chooseTripPhotos" @preview="previewTripPhoto" @access-lost="childAccessLost" />
       <view class="collab-summary" @tap="showingCollaboration=!showingCollaboration"><text>同行 {{selectedTrip.members.length}} 人 · 准备小组 {{selectedTrip.preparationGroups.length}} 个</text><text>{{showingCollaboration?'收起':'管理协作'}} ›</text></view>
       <view v-if="showingCollaboration" class="editor collab-panel">
-        <view v-for="member in selectedTrip.members" :key="member.membershipId" class="member-row"><view><text class="member-name">{{member.membership.user.nickname||'家庭成员'}}</text><text class="member-role">{{member.tripRole==='OWNER'?'行程负责人':'同行成员'}} · {{member.status==='HISTORY'?'历史可见':member.canEdit?'可协作':'只读'}}</text></view><text v-if="isTripOwner && member.membershipId!==session?.membershipId" class="danger-link" @tap="revokeMember(member)">撤销</text></view>
+        <view v-for="member in selectedTrip.members" :key="member.membershipId" class="member-row"><view><text class="member-name">{{member.membership.user.nickname||'家庭成员'}}</text><text class="member-role">{{member.tripRole==='OWNER'?'行程负责人':'同行成员'}} · {{member.status==='HISTORY'?'历史可见':member.canEdit?'可协作':'只读'}} · {{member.photoAdd?'可加照片':'不可加照片'}}</text></view><text v-if="isTripOwner && member.membershipId!==session?.membershipId" class="danger-link" @tap="revokeMember(member)">撤销</text></view>
+      <view v-if="isTripOwner" class="hint">协作编辑与添加照片分别授权；家庭露营模块权限仍需管理员授予。</view>
+      <view v-if="isTripOwner" class="member-permissions">
+        <view v-for="member in selectedTrip.members.filter(item=>item.status==='ACTIVE')" :key="member.membershipId" class="packing-actions">
+          <text>{{member.membership.user.nickname||'家庭成员'}}</text>
+          <text v-if="member.tripRole!=='OWNER'" class="action" @tap="toggleMemberPermission(member,'canEdit')">{{member.canEdit?'关闭协作编辑':'允许协作编辑'}}</text>
+          <text class="action" @tap="toggleMemberPermission(member,'photoAdd')">{{member.photoAdd?'关闭添加照片':'允许添加照片'}}</text>
+        </view>
+      </view>
         <picker v-if="isTripOwner && candidates.length" :range="candidateNames" @change="addMemberByIndex"><view class="action full">＋ 添加家庭或朋友账号</view></picker>
         <view v-if="selectedTrip.preparationGroups.length" class="group-list"><view v-for="group in selectedTrip.preparationGroups" :key="group.id" class="group-row"><text class="chip">{{group.name}} · {{group.members.length}}人</text><text v-if="isTripOwner" class="edit" @tap="editGroup(group)">编辑</text></view></view>
         <view v-if="isTripOwner" class="group-editor"><text class="editor-title">{{editingGroupId?'编辑准备小组':'新建准备小组'}}</text><input v-model="groupName" class="input" placeholder="准备小组，例如：我们家"/><checkbox-group @change="groupSelection"><label v-for="member in selectedTrip.members.filter(m=>m.status==='ACTIVE')" :key="member.membershipId" class="check-member"><checkbox :value="member.membershipId" :checked="groupMemberIds.includes(member.membershipId)" color="#69a778"/>{{member.membership.user.nickname||'家庭成员'}}</label></checkbox-group><view class="button small" @tap="saveGroup">{{editingGroupId?'保存准备小组':'创建准备小组'}}</view><view v-if="editingGroupId" class="cancel" @tap="resetGroupForm">取消编辑</view></view>

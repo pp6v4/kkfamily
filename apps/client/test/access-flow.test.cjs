@@ -35,7 +35,7 @@ const family={householdId:'house-a',householdName:'虚构家庭',membershipId:'m
 function allowed(context,module,level='VIEW') {const ranks={VIEW:1,EDIT:2,MANAGE:3};return (ranks[context?.effectivePermissions?.[module]]||0)>=ranks[level];}
 
 const tripForm = loadTs('src/services/trip-form.ts',{},{});
-const sampleTrip={id:'trip-a',version:4,title:'露营',status:'PENDING',startsAt:'2026-09-01T23:30:00.000Z',endsAt:'2026-09-02T13:45:00.000Z',members:[{membershipId:'member-a',tripRole:'OWNER',status:'ACTIVE',canEdit:true,membership:{user:{id:'user-a',nickname:'小扣'}}}],preparationGroups:[]};
+const sampleTrip={id:'trip-a',version:4,title:'露营',status:'PENDING',startsAt:'2026-09-01T23:30:00.000Z',endsAt:'2026-09-02T13:45:00.000Z',members:[{membershipId:'member-a',tripRole:'OWNER',status:'ACTIVE',canEdit:true,photoAdd:true,version:1,membership:{user:{id:'user-a',nickname:'小扣'}}}],preparationGroups:[]};
 function itineraryForm(api={},canEdit=true){
   const uni=mockUni(),errors=[];uni.showToast=input=>errors.push(input.title);
   const page=loadPage('src/components/trip-itinerary.vue',{
@@ -101,6 +101,30 @@ test('Packing picker indices follow selected IDs; hiding and identity changes ca
   page.selectPackingFilter('state',2);assert.equal(page.packingStateFilter.value,'');
   page.packingStateFilter.value='PENDING';page.session.value={...family,membershipId:'other'};
   assert.equal(page.packingStateFilter.value,'');
+});
+
+test('Photo-only member can authorize photos but cannot authorize location edits; explicit photo denial wins',async()=>{
+  const {page,native,setTrip}=nativeCamping();
+  const target={id:'trip-a',householdId:family.householdId,membershipId:family.membershipId};
+  const trip={...sampleTrip,members:[{...sampleTrip.members[0],tripRole:'MEMBER',canEdit:false,photoAdd:true}]};
+  setTrip(trip);page.trips.value=[trip];
+  assert.equal(page.canEditTrip.value,false);assert.equal(page.canAddTripPhotos.value,true);
+  await native.authorizeNativeTrip(target,'PHOTO',()=>true);
+  await assert.rejects(native.authorizeNativeTrip(target,'LOCATION',()=>true),/协作权限/);
+  setTrip({...trip,members:[{...trip.members[0],canEdit:true,photoAdd:false}]});
+  await assert.rejects(native.authorizeNativeTrip(target,'PHOTO',()=>true),/照片上传权限/);
+});
+
+test('Trip owner changes photo grant independently using member version; stale and hidden writes are refused',async()=>{
+  const writes=[];
+  const member={...sampleTrip.members[0],membershipId:'friend',tripRole:'MEMBER',canEdit:false,photoAdd:false,version:3};
+  const trip={...sampleTrip,members:[sampleTrip.members[0],member]};
+  const {page,lifecycle}=campingForm({updateTripMember:async(id,row,input)=>{writes.push({id,version:row.version,input});return{...trip,members:[trip.members[0],{...member,photoAdd:true,version:4}]};}});
+  selectCamping(page,trip);
+  await page.toggleMemberPermission(member,'photoAdd');
+  assert.equal(writes.length,1);assert.equal(writes[0].version,3);assert.equal(writes[0].input.photoAdd,true);assert.equal(writes[0].input.canEdit,undefined);
+  await page.toggleMemberPermission(member,'photoAdd');assert.equal(writes.length,1);
+  lifecycle.hide();await page.toggleMemberPermission(member,'photoAdd');assert.equal(writes.length,1);
 });
 
 test('Travel dates use Shanghai cross-day boundaries and preserve unchanged timestamp precision',()=>{
@@ -459,7 +483,7 @@ test('Camping media pipeline rechecks authority between read, intent, upload and
     });
     if(stage==='read')uni.getFileSystemManager=()=>({readFile:input=>{calls.push('read');pending.promise.then(input.success);}});
     const upload=page.chooseTripPhotos('trip-a');chosen().success({tempFiles:[{tempFilePath:'one.png',size:4}]});await new Promise(setImmediate);
-    setTrip({...sampleTrip,members:[{...sampleTrip.members[0],canEdit:false}]});
+    setTrip({...sampleTrip,members:[{...sampleTrip.members[0],photoAdd:false}]});
     pending.resolve(stage==='read'?{data:new ArrayBuffer(4)}:stage==='intent'?{id:'intent-a',uploadPath:'/upload'}:{checksumSha256:'checksum'});await upload;
     assert.deepEqual(calls,stage==='read'?['read']:stage==='intent'?['intent']:['intent','bytes']);lifecycle.unload();
   }

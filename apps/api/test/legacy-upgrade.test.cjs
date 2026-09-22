@@ -50,8 +50,8 @@ test('Legacy three-migration data upgrades without losing dates, votes, quantiti
     });
     await t.test('One deterministic trip owner is assigned without losing members', async () => {
       const members=await db.tripMember.findMany({orderBy:{membershipId:'asc'}});
-      assert.deepEqual(members.map(row=>[row.membershipId,row.tripRole,row.canEdit]),[
-        ['legacy-member-a','OWNER',true],['legacy-member-b','MEMBER',false],
+      assert.deepEqual(members.map(row=>[row.membershipId,row.tripRole,row.canEdit,row.photoAdd]),[
+        ['legacy-member-a','OWNER',true,true],['legacy-member-b','MEMBER',false,false],
       ]);
     });
     await t.test('Accounts and shopping records survive; repeated migrate deploy is a no-op', async () => {

@@ -27,6 +27,8 @@ export class AddTripMemberDto {
   membershipId!: string;
   @IsOptional() @IsBoolean()
   canEdit?: boolean;
+  @IsOptional() @IsBoolean()
+  photoAdd?: boolean;
 }
 
 export class UpdateTripMemberDto {
@@ -34,6 +36,8 @@ export class UpdateTripMemberDto {
   expectedVersion!: number;
   @IsOptional() @IsBoolean()
   canEdit?: boolean;
+  @IsOptional() @IsBoolean()
+  photoAdd?: boolean;
   @IsOptional() @IsEnum(TripMemberRole)
   tripRole?: TripMemberRole;
   @IsOptional() @IsEnum(TripMemberStatus)

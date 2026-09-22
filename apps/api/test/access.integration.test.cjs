@@ -391,6 +391,34 @@ test('D04: recipe detail respects draft visibility and stale edits never overwri
   assert.equal(restored.status,200);assert.equal(restored.body.data.status,'DRAFT');assert.equal((await call(viewer,'GET',`/recipes/${recipe.id}`)).status,404);
 });
 
+test('D10: photo-only trip member cannot edit itinerary; revoked photo grant blocks an existing upload intent', async () => {
+  const who=await owner(),member=await join(who,['CAMPER']);
+  let trip=(await call(who,'POST','/trips',{title:'只读加照片',startsAt:'2026-10-01T08:00:00+08:00'})).body.data;
+  trip=(await call(who,'POST',`/trips/${trip.id}/members`,{membershipId:member.memberId,canEdit:false,photoAdd:true})).body.data;
+  assert.equal(trip.members.find(row=>row.membershipId===member.memberId).photoAdd,true);
+  assert.equal((await call(member,'PATCH',`/trips/${trip.id}`,{expectedVersion:trip.version,title:'不允许修改'})).status,403);
+  const allowed=await call(member,'POST','/media/upload-intents',{ownerType:'TRIP',ownerId:trip.id,expectedOwnerVersion:trip.version,mimeType:'image/png',byteSize:TEST_PNG.length});
+  assert.equal(allowed.status,201,JSON.stringify(allowed.body));
+  const bytes=await callRaw(member,allowed.body.data.uploadPath,TEST_PNG);assert.equal(bytes.status,200);
+  const confirmed=await call(member,'POST','/media/assets/confirm',{intentId:allowed.body.data.id,checksumSha256:bytes.body.data.checksumSha256});
+  assert.equal(confirmed.status,201,JSON.stringify(confirmed.body));
+  assert.equal(await db.mediaAsset.count({where:{intentId:allowed.body.data.id}}),1);
+  const readable=await call(member,'GET',`/media/assets/${confirmed.body.data.asset.id}/url`);assert.equal(readable.status,200);
+  const binary=await app.inject({method:'GET',url:'/v1'+readable.body.data.path});assert.equal(binary.statusCode,200);
+  assert.deepEqual(await sharp(binary.rawPayload).raw().toBuffer(),await sharp(TEST_PNG).raw().toBuffer());
+  trip=(await call(who,'GET',`/trips/${trip.id}`)).body.data;
+  const intent=await call(member,'POST','/media/upload-intents',{ownerType:'TRIP',ownerId:trip.id,expectedOwnerVersion:trip.version,mimeType:'image/png',byteSize:TEST_PNG.length});
+  assert.equal(intent.status,201,JSON.stringify(intent.body));
+  const uploaded=await callRaw(member,intent.body.data.uploadPath,TEST_PNG);assert.equal(uploaded.status,200);
+  const memberRow=trip.members.find(row=>row.membershipId===member.memberId);
+  const revoke=await call(who,'PATCH',`/trips/${trip.id}/members/${member.memberId}`,{expectedVersion:memberRow.version,photoAdd:false});
+  assert.equal(revoke.status,200,JSON.stringify(revoke.body));
+  assert.equal(revoke.body.data.members.find(row=>row.membershipId===member.memberId).canEdit,false);
+  assert.equal((await call(member,'POST','/media/assets/confirm',{intentId:intent.body.data.id,checksumSha256:uploaded.body.data.checksumSha256})).status,404);
+  assert.equal((await call(member,'GET',`/trips/${trip.id}`)).status,200);
+  assert.equal(await db.mediaAsset.count({where:{intentId:intent.body.data.id}}),0);
+});
+
 test('D10: privacy re-encoding uses stored size/hash across upload retries, confirmation and private reads', async () => {
   const who = await owner();
   const recipe = (await call(who,'POST','/recipes',{name:'隐私图片验证',ingredients:[{name:'豆腐',quantity:1,unit:'块'}],seasonings:['盐'],steps:['煎']})).body.data;

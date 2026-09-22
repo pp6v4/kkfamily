@@ -449,6 +449,7 @@ model TripMember {
   tripId           String
   membershipId     String
   canEdit          Boolean                      @default(false)
+  photoAdd         Boolean                      @default(false)
   tripRole         TripMemberRole               @default(MEMBER)
   status           TripMemberStatus             @default(ACTIVE)
   leftAt           DateTime?
