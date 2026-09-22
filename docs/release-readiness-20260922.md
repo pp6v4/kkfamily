@@ -20,6 +20,12 @@
 
 ## 范围冻结
 
+### 部署暴露面补充实测
+
+2026-09-22通过Paramiko执行只读检查：5个生产容器均运行；API、worker、PostgreSQL、Redis均无宿主机端口映射，仅Nginx映射80/443。PostgreSQL和Redis各仅连接一个Internal=true网络。
+实际API镜像摘要与a65e884发布一致；镜像固化环境变量名称仅PATH、NODE_VERSION、YARN_VERSION、NODE_ENV，无SECRET/TOKEN/PASSWORD/DATABASE_URL/PRIVATE_KEY名称。
+以无网络、只读、去能力的临时容器检查最终镜像/workspace应用目录484个文件，常见.env/私钥/证书/数据库dump文件名命中0。排除了node_modules，未逐层扫描历史镜像，也未作全内容秘密识别，因此仍不将该检查称为全面安全审计。检查未修改生产服务或数据库。
+
 自动库存扣增、账本预算、微信订阅消息继续延期；路线保留已明确的示意线路，不声称已有道路导航。
 不为填满测试表增加演示生产数据、不代替用户确认实际体验、不自动提交未验收版本。
 
