@@ -28,6 +28,7 @@ async function mutate(write:(trip:Trip)=>Promise<{tripVersion:number}>,after?:()
 }
 
 function message(error:unknown){return error instanceof Error?error.message:'操作失败';}
+function assertTextLimit(value:string,label:string,maximum:number){if(Array.from(value.trim()).length>maximum)throw new Error(`${label}最多填写${maximum}个字`);}
 function toast(error:unknown){if(error instanceof ApiError&&[401,403].includes(error.statusCode)){invalidate();emit('accessLost',props.trip.id);return;}uni.showToast({title:message(error),icon:'none',duration:3000});}
 function labelStop(type:TripStop['stopType']){return stopTypes.find(item=>item.value===type)?.label||type;}
 function labelMode(mode:TripLeg['mode']){return transportModes.find(item=>item.value===mode)?.label||mode;}
@@ -53,6 +54,7 @@ async function saveStop(){
   const form=stopForm.value,original=editingStop.value;
   try{
     if(!form.title.trim())throw new Error('请填写节点名称');
+    assertTextLimit(form.title,'地点名称',80);assertTextLimit(form.note,'地点备注',500);
     const coordinates=parseCoordinates(form.latitude,form.longitude);
     const stopType=stopTypes[form.typeIndex]?.value;
     if(!stopType)throw new Error('请选择节点类型');
@@ -78,6 +80,7 @@ async function saveLodging(){
   const form=lodgingForm.value;
   try{
     if(!form.name.trim()||!isCalendarDate(form.checkInDate)||!isCalendarDate(form.checkOutDate))throw new Error('填写住宿名称和有效的入住退房日期');
+    assertTextLimit(form.name,'住宿名称',100);assertTextLimit(form.address,'住宿地址',200);assertTextLimit(form.contact,'联系人或电话',100);assertTextLimit(form.reservationNote,'预订备注',1000);
     if(form.checkOutDate<=form.checkInDate)throw new Error('退房日期必须晚于入住日期');
     const stopId=form.stopIndex?itinerary.value.stops[form.stopIndex-1]?.id:undefined;
     if(form.stopIndex&&!stopId)throw new Error('关联节点已变更，请重新选择');
@@ -117,12 +120,12 @@ function deleteLodging(item:Accommodation){const token=epoch,trip=props.trip;if(
     <view v-else>
       <view v-for="item in itinerary.accommodations" :key="item.id" class="lodging-row"><view class="grow" @tap="canEdit&&editLodging(item)"><text class="row-title">{{item.name}}</text><text class="row-meta">{{dateOnly(item.checkInDate)}} 至 {{dateOnly(item.checkOutDate)}}{{item.stop?` · ${item.stop.title}`:''}}</text><text v-if="item.address" class="row-meta">{{item.address}}</text></view><text v-if="canEdit" class="danger" @tap="deleteLodging(item)">移除</text></view>
       <view v-if="showingLodgingForm" class="form">
-        <text class="field-label">住宿名称 · 必填</text><input v-model="lodgingForm.name" :disabled="busy" maxlength="120" class="input" placeholder="例如：山间民宿、营地木屋"/>
-        <text class="field-label">住宿地址 · 可选</text><input v-model="lodgingForm.address" :disabled="busy" maxlength="300" class="input" placeholder="例如：酒店完整地址或营地区域"/>
+        <text class="field-label">住宿名称 · 必填，最多100字</text><input v-model="lodgingForm.name" :disabled="busy" maxlength="100" class="input" placeholder="例如：山间民宿、营地木屋"/>
+        <text class="field-label">住宿地址 · 可选，最多200字</text><input v-model="lodgingForm.address" :disabled="busy" maxlength="200" class="input" placeholder="例如：酒店完整地址或营地区域"/>
         <text class="field-label">关联行程地点 · 可选</text><picker :disabled="busy" :value="lodgingForm.stopIndex" :range="['不关联地点',...itinerary.stops.map(stop=>stop.title)]" @change="lodgingForm.stopIndex=Number($event.detail.value)"><view class="input">{{lodgingForm.stopIndex?itinerary.stops[lodgingForm.stopIndex-1]?.title:'不关联地点'}} ›</view></picker>
         <view class="grid"><view><text class="field-label">入住日期 · 必填</text><picker mode="date" :disabled="busy" :value="lodgingForm.checkInDate" @change="lodgingForm.checkInDate=$event.detail.value"><view class="input">{{lodgingForm.checkInDate||'点这里选择日期'}}</view></picker></view><view><text class="field-label">退房日期 · 必填</text><picker mode="date" :disabled="busy" :value="lodgingForm.checkOutDate" @change="lodgingForm.checkOutDate=$event.detail.value"><view class="input">{{lodgingForm.checkOutDate||'点这里选择日期'}}</view></picker></view></view>
-        <text class="field-label">联系人或电话 · 可选</text><input v-model="lodgingForm.contact" :disabled="busy" maxlength="120" class="input" placeholder="例如：前台电话、预订联系人"/>
-        <text class="field-label">预订备注 · 可选</text><textarea v-model="lodgingForm.reservationNote" :disabled="busy" maxlength="500" class="textarea" placeholder="例如：已订两间房，入住时报姓名（不记录金额）"/>
+        <text class="field-label">联系人或电话 · 可选，最多100字</text><input v-model="lodgingForm.contact" :disabled="busy" maxlength="100" class="input" placeholder="例如：前台电话、预订联系人"/>
+        <text class="field-label">预订备注 · 可选，最多1000字</text><textarea v-model="lodgingForm.reservationNote" :disabled="busy" maxlength="1000" class="textarea" placeholder="例如：已订两间房，入住时报姓名（不记录金额）"/>
         <view class="save" @tap="saveLodging">{{busy?'正在保存…':editingLodging?'保存住宿':'添加住宿'}}</view><view class="cancel" @tap="showingLodgingForm=false">取消</view>
       </view>
       <view v-else-if="canEdit" class="add" @tap="newLodging">＋ 添加住宿</view>

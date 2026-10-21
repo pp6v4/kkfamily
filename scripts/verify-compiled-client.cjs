@@ -11,6 +11,11 @@
  *
  * node scripts/verify-compiled-client.cjs
  * node scripts/verify-compiled-client.cjs --dir ../outputs/mp-weixin
+ * node scripts/verify-compiled-client.cjs --api-contracts
+ *
+ * --api-contracts additionally validates the emitted payloads using the current
+ * API source DTOs and the real Nest ValidationPipe. It needs the API's existing
+ * dependencies; missing dependencies fail rather than silently skip validation.
  */
 const assert = require('node:assert/strict');
 const fs = require('node:fs');
@@ -25,10 +30,13 @@ let vue, parseSfc;
 
 function argumentsFor(argv) {
   let directory = path.join(repository, 'apps/client/dist/build/mp-weixin');
+  let apiContracts = false;
   for (let index = 0; index < argv.length; index++) {
     const argument = argv[index];
     if (argument === '--help') return { help: true };
-    if (argument === '--dir') {
+    if (argument === '--api-contracts') {
+      apiContracts = true;
+    } else if (argument === '--dir') {
       assert.ok(argv[index + 1] && !argv[index + 1].startsWith('--'), '--dir requires a directory');
       directory = path.resolve(argv[++index]);
     } else if (argument.startsWith('--dir=')) {
@@ -36,13 +44,98 @@ function argumentsFor(argv) {
       directory = path.resolve(argument.slice(6));
     } else throw new Error(`Unknown argument: ${argument}`);
   }
-  return { directory };
+  return { directory, apiContracts };
 }
 
 function requiredFile(directory, relative) {
   const filename = path.join(directory, relative);
   assert.ok(fs.existsSync(filename) && fs.statSync(filename).isFile(), `Missing compiled artifact: ${filename}`);
   return fs.readFileSync(filename, 'utf8');
+}
+
+function createApiContracts() {
+  const apiRoot = path.join(repository, 'apps/api');
+  const apiRequire = createRequire(path.join(apiRoot, 'package.json'));
+  apiRequire('reflect-metadata');
+  const typescript = apiRequire('typescript');
+  const { ValidationPipe } = apiRequire('@nestjs/common');
+  const validator = apiRequire('class-validator');
+  const transformer = apiRequire('class-transformer');
+  const sources = {
+    createRecipe: ['src/recipes/dto/create-recipe.dto.ts', 'CreateRecipeDto'],
+    createPackingTemplate: ['src/packing/dto/create-packing-template.dto.ts', 'CreatePackingTemplateDto'],
+    createTrip: ['src/trips/dto/create-trip.dto.ts', 'CreateTripDto'],
+  };
+  const allowed = new Set(['src/common/trim-text.ts', ...Object.values(sources).map(([relative]) => relative)].map(relative => path.join(apiRoot, relative)));
+  const external = new Map([['class-validator', validator], ['class-transformer', transformer]]);
+  const cache = new Map();
+  function load(filename) {
+    assert.ok(allowed.has(filename), `API source loader denied: ${filename}`);
+    if (cache.has(filename)) return cache.get(filename).exports;
+    const module = { exports: {} };
+    cache.set(filename, module);
+    const source = fs.readFileSync(filename, 'utf8');
+    const compiled = typescript.transpileModule(source, {
+      fileName: filename,
+      reportDiagnostics: true,
+      compilerOptions: {
+        target: typescript.ScriptTarget.ES2022,
+        module: typescript.ModuleKind.CommonJS,
+        experimentalDecorators: true,
+        emitDecoratorMetadata: true,
+        useDefineForClassFields: false,
+      },
+    });
+    const errors = (compiled.diagnostics || []).filter(item => item.category === typescript.DiagnosticCategory.Error);
+    assert.equal(errors.length, 0, `Invalid API DTO source: ${errors.map(item => typescript.flattenDiagnosticMessageText(item.messageText, '\n')).join('; ')}`);
+    const dtoRequire = id => {
+      if (external.has(id)) return external.get(id);
+      assert.ok(id.startsWith('.'), `API source loader denied import: ${id}`);
+      const dependency = path.resolve(path.dirname(filename), id);
+      return load(dependency.endsWith('.ts') ? dependency : `${dependency}.ts`);
+    };
+    // Execute these explicitly allowlisted repository DTO modules in Node's
+    // normal realm, just like the application. A separate VM realm changes
+    // instanceof/metadata semantics; never alter DTO prototypes to hide that.
+    const execute = vm.compileFunction(compiled.outputText, ['exports', 'require', 'module', '__filename', '__dirname'], { filename });
+    execute(module.exports, dtoRequire, module, filename, path.dirname(filename));
+    return module.exports;
+  }
+  const contracts = new Map(Object.entries(sources).map(([operation, [relative, exported]]) => {
+    const dto = load(path.join(apiRoot, relative))[exported];
+    assert.equal(typeof dto, 'function', `Missing source DTO export: ${exported}`);
+    return [operation, dto];
+  }));
+  const pipe = new ValidationPipe({ transform: true, whitelist: true, forbidNonWhitelisted: true, validatorPackage: validator, transformerPackage: transformer });
+  const checked = new Set();
+  const badRequest = error => error?.getStatus?.() === 400;
+  return {
+    async verify(calls) {
+      for (const { operation, args } of calls) {
+        const metatype = contracts.get(operation);
+        if (!metatype) continue; // Navigation and template application are not these three create contracts.
+        const metadata = { type: 'body', metatype };
+        const payload = clone(args[0]);
+        let validated;
+        try { validated = await pipe.transform(payload, metadata); }
+        catch (error) { throw new Error(`${operation}: current source DTO rejected the compiled payload: ${JSON.stringify(error.getResponse?.() || error.message)}`, { cause: error }); }
+        assert.ok(validated instanceof metatype, `${operation}: transform did not create a DTO instance`);
+        // Controls prove that strict whitelisting and nested decorators really
+        // execute, rather than passing because of missing/cross-realm metadata.
+        await assert.rejects(() => pipe.transform({ ...clone(payload), __unexpectedProbeField: true }, metadata), badRequest, `${operation}: unknown field was accepted`);
+        const invalid = clone(payload);
+        if (operation === 'createRecipe') invalid.ingredients[0].quantity = 0;
+        else if (operation === 'createPackingTemplate') invalid.items[0].quantity = 0;
+        else invalid.initialDestination.latitude = 91;
+        await assert.rejects(() => pipe.transform(invalid, metadata), badRequest, `${operation}: invalid nested value was accepted`);
+        checked.add(operation);
+      }
+    },
+    finish() {
+      assert.deepEqual([...checked].sort(), [...contracts.keys()].sort(), 'Not all current-source create DTOs were exercised');
+      console.log('PASS 3/3 current-source API DTO contracts (real ValidationPipe; strict whitelist/nested negative controls)');
+    },
+  };
 }
 
 function lookup(expression, scope) {
@@ -261,6 +354,7 @@ async function recipeCase(directory) {
     assert.equal(writes.length, 1);
     assert.deepEqual(writes[0].args[0], { name: '探针菜', ingredients: [{ name: '鸡蛋', quantity: 2.125, unit: '个' }, { name: '番茄', unit: 'g' }], seasonings: ['生抽'], steps: ['打散后炒熟', '加入番茄翻炒'] });
     assert.equal(page.calls.filter(call => call.operation === 'navigateBack').length, 1);
+    return page.calls;
   } finally { page.dispose(); }
 }
 
@@ -297,6 +391,7 @@ async function templateCase(directory) {
     assert.deepEqual(applications.map(call => call.args), [['probe-trip', 'probe-template']]);
     assert.ok(page.contains('来自模板：烧烤'));
     assert.ok(page.contains('天幕') && page.contains('折叠椅'));
+    return page.calls;
   } finally { page.dispose(); }
 }
 
@@ -316,26 +411,31 @@ async function destinationCase(directory) {
     assert.equal(writes.length, 1);
     assert.deepEqual(writes[0].args[0], { title: '探针周末行程', destination: '探针营地', startsAt: '2026-10-28T08:00:00+08:00', initialDestination: { title: '探针营地', latitude: 40.5, longitude: 116.5 } });
     assert.ok(page.notices.includes('行程已创建，接下来添加行李或套用模板'));
+    return page.calls;
   } finally { page.dispose(); }
 }
 
 async function main() {
   const options = argumentsFor(process.argv.slice(2));
   if (options.help) {
-    console.log('Usage: node scripts/verify-compiled-client.cjs [--dir <mp-weixin directory>]');
+    console.log('Usage: node scripts/verify-compiled-client.cjs [--dir <mp-weixin directory>] [--api-contracts]');
     return;
   }
   for (const relative of ['common/vendor.js', 'app.json', 'services/trip-form.js', 'pages/recipe-editor/index.js', 'pages/recipe-editor/index.wxml', 'pages/recipe-editor/index.wxss', 'pages/camping/index.js', 'pages/camping/index.wxml', 'pages/camping/index.wxss']) requiredFile(options.directory, relative);
   const clientRequire = createRequire(path.join(repository, 'apps/client/package.json'));
   vue = clientRequire('vue');
   ({ parse: parseSfc } = clientRequire('vue/compiler-sfc'));
+  const contracts = options.apiContracts ? createApiContracts() : undefined;
   console.log(`Compiled client: ${options.directory}`);
   console.log('Vue reactivity + compiled JS/WXML; simulated vendor/native callbacks/backend. Not native-device acceptance.');
+  if (contracts) console.log('API contracts: current source DTOs + real Nest ValidationPipe; persistence/auth/services remain simulated.');
   for (const [name, verify] of [['recipe input/add rows/exact save', recipeCase], ['trip template create/return/explicit apply', templateCase], ['destination callback/date/exact trip save', destinationCase]]) {
-    await verify(options.directory);
+    const calls = await verify(options.directory);
+    if (contracts) await contracts.verify(calls);
     console.log(`PASS ${name}`);
   }
   console.log('PASS 3/3 compiled-client scenarios');
+  contracts?.finish();
 }
 
 main().catch(error => {

@@ -74,6 +74,50 @@ test('Recipe amounts reject malformed, nonpositive and overprecision values befo
   for (const value of ['abc', '0', '-1', '0.0001', '1.2345', '1e3', '0x10', 'Infinity', '1000000000']) { page.ingredients.value[0].quantity = value; await page.persist(false); }
   assert.equal(writes, 0); page.ingredients.value[0].quantity = ''; await page.persist(false); assert.equal(writes, 1);
 });
+
+test('Recipe add-row actions stop at backend array limits without submitting or losing existing inputs', async () => {
+  let writes = 0; const { page, show, toasts } = form({ createRecipe: async () => { writes++; return recipe; } });
+  await show(''); fill(page);
+  for (const [field, action, limit, value] of [
+    ['ingredients', 'addIngredient', 100, { name: '鸡蛋', quantity: '2', unit: '个' }],
+    ['steps', 'addStep', 50, '炒熟'], ['seasonings', 'addSeasoning', 40, '盐'],
+  ]) {
+    page[field].value = Array.from({ length: limit - 1 }, () => typeof value === 'string' ? value : { ...value });
+    page[action](); assert.equal(page[field].value.length, limit);
+    page[action](); assert.equal(page[field].value.length, limit); assert.match(toasts.at(-1), new RegExp(String(limit)));
+    if (field === 'ingredients') assert.equal(page[field].value[0].name, '鸡蛋'); else assert.equal(page[field].value[0], value);
+  }
+  assert.equal(writes, 0); assert.equal(page.name.value, ' 新菜 ');
+});
+
+test('Recipe save rejects backend length and array-limit violations locally while retaining drafts', async () => {
+  let writes = 0; const { page, show, toasts } = form({ createRecipe: async () => { writes++; return recipe; } });
+  await show('');
+  const cases = [
+    [() => { page.name.value = '名'.repeat(81); }, /80/],
+    [() => { page.ingredients.value = Array.from({ length: 101 }, (_, i) => ({ name: `食材${i}`, quantity: '', unit: '克' })); }, /100/],
+    [() => { page.ingredients.value[0].name = '材'.repeat(61); }, /60/],
+    [() => { page.ingredients.value[0].unit = '位'.repeat(13); }, /12/],
+    [() => { page.steps.value = Array.from({ length: 51 }, (_, i) => `步骤${i}`); }, /50/],
+    [() => { page.steps.value = ['法'.repeat(4001)]; }, /4000/],
+    [() => { page.seasonings.value = Array.from({ length: 41 }, (_, i) => `调料${i}`); }, /40/],
+  ];
+  for (const [mutate, expected] of cases) {
+    fill(page); mutate(); const original = page.snapshot(); assert.equal(await page.persist(false), false);
+    assert.match(toasts.at(-1), expected); assert.equal(JSON.stringify(page.snapshot()), JSON.stringify(original));
+  }
+  assert.equal(writes, 0);
+});
+
+test('Recipe exact backend maxima remain savable without silent truncation', async () => {
+  let input; const { page, show } = form({ createRecipe: async value => { input = value; return { ...recipe, version: 1 }; } });
+  await show(''); page.name.value = '名'.repeat(80);
+  page.ingredients.value = Array.from({ length: 100 }, (_, i) => ({ name: i ? `食材${i}` : '材'.repeat(60), quantity: '', unit: '位'.repeat(12) }));
+  page.steps.value = Array.from({ length: 50 }, () => '法'.repeat(4000)); page.seasonings.value = Array.from({ length: 40 }, (_, i) => `调料${i}`);
+  assert.equal(await page.persist(false), true);
+  assert.equal(input.name.length, 80); assert.equal(input.ingredients.length, 100); assert.equal(input.ingredients[0].name.length, 60); assert.equal(input.ingredients[0].unit.length, 12);
+  assert.equal(input.steps.length, 50); assert.equal(input.steps[0].length, 4000); assert.equal(input.seasonings.length, 40);
+});
 test('Recipe saves cannot navigate or restore content after hiding, unloading or changing identity', async () => {
   for (const ending of ['hide', 'unload', 'identity']) {
     const pending = deferred(); const { page, show, life, setStored, routes, toasts } = form({ updateRecipe: () => pending.promise });

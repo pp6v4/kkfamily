@@ -198,6 +198,26 @@ test('Accommodation edit clears optional fields explicitly without shifting cale
   assert.equal(submitted.checkInDate,'2026-09-02');assert.equal(submitted.checkOutDate,'2026-09-03');
 });
 
+for(const editing of [false,true])test(`Accommodation ${editing?'update':'create'} validates DTO text bounds only when saved and accepts every maximum`,async()=>{
+  const writes=[];const api=editing?{updateAccommodation:async(trip,item,input)=>{writes.push(input);return{tripVersion:5};}}:{createAccommodation:async(trip,input)=>{writes.push(input);return{tripVersion:5};}};
+  const{page,errors}=itineraryForm(api);
+  if(editing)page.editLodging({id:'hotel-a',version:2,name:'小屋',address:'',contact:'',reservationNote:'',stopId:null,checkInDate:'2026-09-02',checkOutDate:'2026-09-03'});else page.newLodging();
+  const baseline={name:'住宿',address:'地址',contact:'前台',reservationNote:'备注',checkInDate:'2026-09-02',checkOutDate:'2026-09-03',stopIndex:0};
+  for(const[field,max,label]of[['name',100,'住宿名称'],['address',200,'住宿地址'],['contact',100,'联系人或电话'],['reservationNote',1000,'预订备注']]){
+    Object.assign(page.lodgingForm.value,baseline,{[field]:'字'.repeat(max+1)});const before=errors.length;assert.equal(writes.length,0);assert.equal(errors.length,before);
+    await page.saveLodging();assert.equal(writes.length,0);assert.equal(page.lodgingForm.value[field].length,max+1);assert.equal(page.showingLodgingForm.value,true);assert.equal(page.busy.value,false);assert.equal(errors.at(-1),`${label}最多填写${max}个字`);
+  }
+  const maximum={name:'名'.repeat(100),address:'址'.repeat(200),contact:'联'.repeat(100),reservationNote:'注'.repeat(1000)};Object.assign(page.lodgingForm.value,baseline,maximum);
+  await page.saveLodging();assert.equal(writes.length,1);for(const[field,value]of Object.entries(maximum))assert.equal(writes[0][field],value);assert.equal(page.showingLodgingForm.value,false);
+});
+
+test('Stop save rejects oversized restored text before writing and preserves maximum legal title and note',async()=>{
+  const writes=[];const{page,errors}=itineraryForm({createTripStop:async(trip,input)=>{writes.push(input);return{tripVersion:5};}});page.newStop();
+  Object.assign(page.stopForm.value,{title:'地'.repeat(81),latitude:'39',longitude:'116'});await page.saveStop();assert.equal(writes.length,0);assert.match(errors.at(-1),/地点名称.*80/);
+  page.stopForm.value.title='地'.repeat(80);page.stopForm.value.note='注'.repeat(501);await page.saveStop();assert.equal(writes.length,0);assert.match(errors.at(-1),/地点备注.*500/);
+  page.stopForm.value.note='注'.repeat(500);await page.saveStop();assert.equal(writes.length,1);assert.equal(writes[0].title.length,80);assert.equal(writes[0].note.length,500);
+});
+
 test('Read-only itinerary cannot submit lingering stop or accommodation forms',async()=>{
   let writes=0;const{page}=itineraryForm({createTripStop:async()=>writes++,createAccommodation:async()=>writes++},false);
   page.newStop();Object.assign(page.stopForm.value,{title:'营地',latitude:'39',longitude:'116'});
@@ -378,6 +398,46 @@ test('Camping invalid luggage amounts are rejected at save without losing the fo
   assert.equal(writes,0);page.switchView('templates');page.newTemplate();page.templateForm.value.name='烧烤';page.templateForm.value.items[0].name='炉子';
   for(const text of ['0','-1','NaN','1.2345','1e3','1000000000']){page.templateForm.value.items[0].quantity=text;await page.saveTemplate();}
   assert.equal(writes,0);assert.equal(page.templateForm.value.name,'烧烤');assert.equal(page.showingTemplateForm.value,true);
+});
+
+test('Camping template item addition caps at 100 and saving 101 injected rows is rejected before writing',async()=>{
+  const writes=[];const{page,errors}=campingForm({createPackingTemplate:async input=>{writes.push(input);return{};},listPackingTemplates:async()=>[]});page.switchView('templates');page.newTemplate();
+  page.templateForm.value.name='满额模板';page.templateForm.value.items=Array.from({length:99},(_,index)=>({name:`物品${index+1}`,quantity:'',unit:'',note:''}));page.addTemplateItem();assert.equal(page.templateForm.value.items.length,100);
+  page.templateForm.value.items[99].name='最后一件';page.addTemplateItem();assert.equal(page.templateForm.value.items.length,100);assert.match(errors.at(-1),/最多添加100件/);assert.equal(writes.length,0);
+  page.templateForm.value.items.push({name:'绕过界面第101件',quantity:'',unit:'',note:''});await page.saveTemplate();assert.equal(writes.length,0);assert.match(errors.at(-1),/最多保存100件/);assert.equal(page.templateForm.value.items.length,101);assert.equal(page.showingTemplateForm.value,true);
+  page.templateForm.value.items.pop();await page.saveTemplate();assert.equal(writes.length,1);assert.equal(writes[0].items.length,100);assert.equal(writes[0].items[99].name,'最后一件');assert.equal(writes[0].items[99].sortOrder,99);
+});
+
+test('Camping template save validates all DTO text bounds and accepts maximum trimmed values',async()=>{
+  const writes=[];const{page,errors}=campingForm({createPackingTemplate:async input=>{writes.push(input);return{};},listPackingTemplates:async()=>[]});page.switchView('templates');page.newTemplate();
+  const reset=()=>{page.templateForm.value={name:'烧烤',description:'',items:[{name:'炉子',quantity:'',unit:'',note:''}]};};
+  for(const[field,max,label,item]of[['name',80,'模板名称',false],['description',300,'模板说明',false],['name',80,'第1件物品名称',true],['unit',20,'第1件物品单位',true],['note',200,'第1件物品备注',true]]){
+    reset();(item?page.templateForm.value.items[0]:page.templateForm.value)[field]='字'.repeat(max+1);await page.saveTemplate();assert.equal(writes.length,0);assert.equal(errors.at(-1),`${label}最多填写${max}个字`);assert.equal(page.showingTemplateForm.value,true);
+  }
+  page.templateForm.value={name:` ${'名'.repeat(80)} `,description:` ${'述'.repeat(300)} `,items:[{name:` ${'物'.repeat(80)} `,quantity:'1',unit:` ${'单'.repeat(20)} `,note:` ${'注'.repeat(200)} `}]};await page.saveTemplate();
+  assert.equal(writes.length,1);assert.equal(writes[0].name,'名'.repeat(80));assert.equal(writes[0].description,'述'.repeat(300));assert.equal(writes[0].items[0].name,'物'.repeat(80));assert.equal(writes[0].items[0].unit,'单'.repeat(20));assert.equal(writes[0].items[0].note,'注'.repeat(200));
+});
+
+for(const editing of [false,true])test(`Camping preparation group ${editing?'update':'create'} rejects 41 characters and submits exactly 40`,async()=>{
+  const calls=[],group={id:'group-a',version:2,name:'旧组',members:[{membershipId:'member-a'}]},trip={...sampleTrip,preparationGroups:[group]};
+  const{page,errors}=campingForm({createTripPreparationGroup:async(id,name,ids)=>{calls.push(['create',id,name,Array.from(ids)]);return{};},updateTripPreparationGroup:async(id,row,name,ids)=>{calls.push(['update',id,name,Array.from(ids)]);return{};},getTrip:async()=>trip});selectCamping(page,trip);
+  if(editing)page.editGroup(group);page.groupSelection({detail:{value:['member-a']}});page.groupName.value='组'.repeat(41);assert.equal(calls.length,0);assert.equal(errors.length,0);await page.saveGroup();assert.equal(calls.length,0);assert.equal(page.groupName.value.length,41);assert.equal(errors.at(-1),'准备小组名称最多填写40个字');
+  page.groupName.value=` ${'组'.repeat(40)} `;await page.saveGroup();assert.deepEqual(calls,[[editing?'update':'create','trip-a','组'.repeat(40),['member-a']]]);assert.equal(page.groupName.value,'');
+});
+
+test('Camping trip and manual luggage saves reject restored text beyond DTO limits without discarding it',async()=>{
+  let writes=0;const{page,errors}=campingForm({createTrip:async()=>writes++,updateTrip:async()=>writes++,createTripPackingItem:async()=>writes++});selectCamping(page);page.startTripEdit();
+  page.tripEditForm.value.title='名'.repeat(81);await page.saveTripEdit();assert.equal(writes,0);assert.match(errors.at(-1),/行程名称.*80/);page.tripEditForm.value.title='行程';page.tripEditForm.value.destination='地'.repeat(121);await page.saveTripEdit();assert.equal(writes,0);assert.match(errors.at(-1),/目的地.*120/);
+  for(const[field,max,label]of[['name',80,'行李名称'],['unit',20,'行李单位'],['note',200,'行李备注']]){page.itemForm.value={name:'天幕',quantity:'',unit:'',note:'',[field]:'字'.repeat(max+1)};await page.saveTripItem();assert.equal(writes,0);assert.equal(page.itemForm.value[field].length,max+1);assert.equal(errors.at(-1),`${label}最多填写${max}个字`);}
+  page.closeTrip();page.tripForm.value={title:'名'.repeat(81),destination:'',startsAt:'2026-10-25',endsAt:''};await page.saveTrip();assert.equal(writes,0);assert.equal(page.pageBusy.value,false);assert.match(errors.at(-1),/行程名称.*80/);
+});
+
+test('Camping trip create/update and manual luggage accept every maximum legal trimmed text value',async()=>{
+  const calls=[],items=[];let trip={...sampleTrip};
+  const{page}=campingForm({createTrip:async input=>{calls.push(['create',input]);trip={...trip,...input};return trip;},updateTrip:async(_,input)=>{calls.push(['update',input]);trip={...trip,...input,version:trip.version+1};return trip;},getTrip:async()=>trip,listTripPackingItems:async()=>items,listTripCandidates:async()=>[],createTripPackingItem:async(id,input)=>{calls.push(['item',input]);const row={id:'max-item',...input,status:'PENDING'};items.push(row);return row;}});
+  page.tripForm.value={title:` ${'名'.repeat(80)} `,destination:` ${'地'.repeat(120)} `,startsAt:'2026-10-25',endsAt:''};await page.saveTrip();assert.equal(calls[0][0],'create');assert.equal(calls[0][1].title,'名'.repeat(80));assert.equal(calls[0][1].destination,'地'.repeat(120));
+  page.startTripEdit();page.tripEditForm.value.title=` ${'改'.repeat(80)} `;await page.saveTripEdit();assert.equal(calls[1][0],'update');assert.equal(calls[1][1].title,'改'.repeat(80));assert.equal(calls[1][1].destination,'地'.repeat(120));
+  page.itemForm.value={name:` ${'物'.repeat(80)} `,quantity:'1',unit:` ${'单'.repeat(20)} `,note:` ${'注'.repeat(200)} `};await page.saveTripItem();assert.equal(calls[2][0],'item');assert.equal(calls[2][1].name,'物'.repeat(80));assert.equal(calls[2][1].unit,'单'.repeat(20));assert.equal(calls[2][1].note,'注'.repeat(200));assert.equal(page.packingItems.value[0].id,'max-item');
 });
 
 test('Camping a current forbidden response clears loaded trip, candidates and draft content',async()=>{

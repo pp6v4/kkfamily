@@ -212,6 +212,9 @@ const overviewPolylines = computed(() => trips.value.flatMap(trip => {
 }));
 
 function message(error: unknown) { return error instanceof Error ? error.message : '操作失败'; }
+function assertTextLimit(value: string, label: string, maximum: number) {
+  if (Array.from(value.trim()).length > maximum) throw new Error(`${label}最多填写${maximum}个字`);
+}
 function dateText(value: string) { return shanghaiDate(value); }
 function statusText(status: Trip['status']) { return ({ PLANNING: '规划中', PENDING: '待出行', DEPARTING: '旅途中', COMPLETED: '已完成', CANCELLED: '已取消' } as Record<Trip['status'], string>)[status]; }
 function quantityText(quantity: string | number | null, unit: string | null) { return quantity === null ? '' : `${Number(quantity)}${unit ? ` ${unit}` : ''}`; }
@@ -281,6 +284,7 @@ async function saveTrip() {
   if (!tripForm.value.title.trim() || !tripForm.value.startsAt) { uni.showToast({ title: '请填写行程名称和出发日期', icon: 'none' }); return; }
   pageBusy.value=true;
   try {
+    assertTextLimit(tripForm.value.title, '行程名称', 80); assertTextLimit(tripForm.value.destination, '目的地', 120);
     const startsAt=travelTimestamp(tripForm.value.startsAt,'08')!,endsAt=travelTimestamp(tripForm.value.endsAt,'20');
     assertTravelOrder(startsAt,endsAt);
     const trip = await createTrip({ title: tripForm.value.title.trim(), destination: tripForm.value.destination.trim() || undefined, startsAt, endsAt, ...(initialDestination.value ? { initialDestination: { ...initialDestination.value } } : {}) });
@@ -300,6 +304,7 @@ async function saveTripEdit() {
   if (!trip || !form.title.trim() || !form.startsAt) { uni.showToast({ title: '请填写行程名称和出发日期', icon: 'none' }); return; }
   if (form.endsAt && form.endsAt < form.startsAt) { uni.showToast({ title: '返回日期不能早于出发日期', icon: 'none' }); return; }
   try {
+    assertTextLimit(form.title, '行程名称', 80); assertTextLimit(form.destination, '目的地', 120);
     const startsAt=travelTimestamp(form.startsAt,'08',trip.startsAt)!,endsAt=travelTimestamp(form.endsAt,'20',trip.endsAt);
     assertTravelOrder(startsAt,endsAt);
     await mutateTrip(currentTrip=>updateTrip(currentTrip,{title:form.title.trim(),destination:form.destination.trim(),startsAt,endsAt:endsAt??null}),updated=>{replaceTrip(updated);editingTrip.value=false;uni.showToast({title:'行程已更新',icon:'success'});});
@@ -318,7 +323,11 @@ function editTemplate(template: PackingTemplate) {
   templateForm.value = { name: template.name, description: template.description || '', items: template.items.map((item) => ({ id: item.id, name: item.name, quantity: item.defaultQuantity === null ? '' : String(Number(item.defaultQuantity)), unit: item.unit || '', note: item.note || '' })) };
   showingTemplateForm.value = true;
 }
-function addTemplateItem() { if (current(stamp()) && !pageBusy.value) templateForm.value.items.push({ name: '', quantity: '', unit: '', note: '' }); }
+function addTemplateItem() {
+  if (!current(stamp()) || pageBusy.value || !canAccess(session.value, 'packing_templates', 'EDIT')) return;
+  if (templateForm.value.items.length >= 100) { uni.showToast({ title: '一个行李模板最多添加100件物品', icon: 'none' }); return; }
+  templateForm.value.items.push({ name: '', quantity: '', unit: '', note: '' });
+}
 function removeTemplateItem(index: number) { if (current(stamp()) && !pageBusy.value && templateForm.value.items.length > 1) templateForm.value.items.splice(index, 1); }
 function packingQuantity(text: string) {
   const value = text.trim();
@@ -328,10 +337,15 @@ function packingQuantity(text: string) {
 }
 async function saveTemplate() {
   const scope=stamp();if(!current(scope)||pageBusy.value||!canAccess(session.value,'packing_templates','EDIT'))return;
+  if (templateForm.value.items.length > 100) { uni.showToast({ title: '一个行李模板最多保存100件物品，请移除多余项', icon: 'none' }); return; }
   const rows = templateForm.value.items.filter((item) => item.name.trim());
   if (!templateForm.value.name.trim() || !rows.length) { uni.showToast({ title: '请填写模板名称和至少一件物品', icon: 'none' }); return; }
   let payload;
-  try { payload = { name: templateForm.value.name.trim(), description: templateForm.value.description.trim() || null, items: rows.map((item, index) => ({ id: item.id, name: item.name.trim(), quantity: packingQuantity(item.quantity) ?? null, unit: item.unit.trim() || null, note: item.note.trim() || null, sortOrder: index })) }; }
+  try {
+    assertTextLimit(templateForm.value.name, '模板名称', 80); assertTextLimit(templateForm.value.description, '模板说明', 300);
+    rows.forEach((item, index) => { assertTextLimit(item.name, `第${index + 1}件物品名称`, 80); assertTextLimit(item.unit, `第${index + 1}件物品单位`, 20); assertTextLimit(item.note, `第${index + 1}件物品备注`, 200); });
+    payload = { name: templateForm.value.name.trim(), description: templateForm.value.description.trim() || null, items: rows.map((item, index) => ({ id: item.id, name: item.name.trim(), quantity: packingQuantity(item.quantity) ?? null, unit: item.unit.trim() || null, note: item.note.trim() || null, sortOrder: index })) };
+  }
   catch (error) { uni.showToast({ title: message(error), icon: 'none' }); return; }
   pageBusy.value=true;
   try {
@@ -361,7 +375,7 @@ async function saveTripItem() {
   if (!selectedTrip.value || !itemForm.value.name.trim()) { uni.showToast({ title: '请输入行李名称', icon: 'none' }); return; }
   const form={...itemForm.value};
   let quantity;
-  try { quantity = packingQuantity(form.quantity); } catch (error) { uni.showToast({ title: message(error), icon: 'none' }); return; }
+  try { assertTextLimit(form.name, '行李名称', 80); assertTextLimit(form.unit, '行李单位', 20); assertTextLimit(form.note, '行李备注', 200); quantity = packingQuantity(form.quantity); } catch (error) { uni.showToast({ title: message(error), icon: 'none' }); return; }
   await mutateTrip(trip=>createTripPackingItem(trip.id,{name:form.name.trim(),quantity,unit:form.unit.trim()||undefined,note:form.note.trim()||undefined}),async(_,scope)=>{itemForm.value={name:'',quantity:'',unit:'',note:''};showingItemForm.value=false;resetPackingFilters();await refreshPacking(scope);if(current(scope))uni.showToast({title:'已加入本次行李清单',icon:'success'});});
 }
 async function togglePacked(item: TripPackingItem) {
@@ -400,7 +414,12 @@ async function toggleMemberPermission(member:Trip['members'][number],permission:
 function groupSelection(event:{detail:{value:string[]}}){groupMemberIds.value=event.detail.value;}
 function editGroup(group:TripPreparationGroup){editingGroupId.value=group.id;groupName.value=group.name;groupMemberIds.value=group.members.map(member=>member.membershipId);}
 function resetGroupForm(){editingGroupId.value='';groupName.value='';groupMemberIds.value=[];}
-async function saveGroup(){const trip=selectedTrip.value;if(!trip||!groupName.value.trim()||!groupMemberIds.value.length){uni.showToast({title:'填写小组名并选择成员',icon:'none'});return;}const name=groupName.value.trim(),members=[...groupMemberIds.value],editingId=editingGroupId.value;await mutateTrip(async currentTrip=>{const editing=currentTrip.preparationGroups.find(group=>group.id===editingId);if(editingId&&!editing)throw new Error('准备小组已变更，请刷新后重试');if(editing)return updateTripPreparationGroup(currentTrip.id,editing,name,members);return createTripPreparationGroup(currentTrip.id,name,members);},async(_,scope)=>{resetGroupForm();await refreshTrip(scope);},true);}
+async function saveGroup(){
+  const trip=selectedTrip.value;if(!trip||!groupName.value.trim()||!groupMemberIds.value.length){uni.showToast({title:'填写小组名并选择成员',icon:'none'});return;}
+  try { assertTextLimit(groupName.value, '准备小组名称', 40); } catch (error) { uni.showToast({ title: message(error), icon: 'none' }); return; }
+  const name=groupName.value.trim(),members=[...groupMemberIds.value],editingId=editingGroupId.value;
+  await mutateTrip(async currentTrip=>{const editing=currentTrip.preparationGroups.find(group=>group.id===editingId);if(editingId&&!editing)throw new Error('准备小组已变更，请刷新后重试');if(editing)return updateTripPreparationGroup(currentTrip.id,editing,name,members);return createTripPreparationGroup(currentTrip.id,name,members);},async(_,scope)=>{resetGroupForm();await refreshTrip(scope);},true);
+}
 
 function startOverviewPulse() {
   if (overviewTimer) clearInterval(overviewTimer);
@@ -484,7 +503,7 @@ onUnmounted(unloadPage);
       </view>
         <picker v-if="isTripOwner && candidates.length" :range="candidateNames" @change="addMemberByIndex"><view class="action full">＋ 添加家庭或朋友账号</view></picker>
         <view v-if="selectedTrip.preparationGroups.length" class="group-list"><view v-for="group in selectedTrip.preparationGroups" :key="group.id" class="group-row"><text class="chip">{{group.name}} · {{group.members.length}}人</text><text v-if="isTripOwner" class="edit" @tap="editGroup(group)">编辑</text></view></view>
-        <view v-if="isTripOwner" class="group-editor"><text class="editor-title">{{editingGroupId?'编辑准备小组':'新建准备小组'}}</text><text class="field-label">小组名称 · 必填</text><input v-model="groupName" :disabled="tripBusy" maxlength="80" class="input" placeholder="例如：我们家、朋友一家"/><text class="field-help">勾选这个小组的同行成员，再保存；行李可以分配给不同小组准备。</text><checkbox-group @change="groupSelection"><label v-for="member in selectedTrip.members.filter(m=>m.status==='ACTIVE')" :key="member.membershipId" class="check-member"><checkbox :value="member.membershipId" :checked="groupMemberIds.includes(member.membershipId)" color="#69a778"/>{{member.membership.user.nickname||'家庭成员'}}</label></checkbox-group><view class="button small" @tap="saveGroup">{{editingGroupId?'保存准备小组':'创建准备小组'}}</view><view v-if="editingGroupId" class="cancel" @tap="resetGroupForm">取消编辑</view></view>
+        <view v-if="isTripOwner" class="group-editor"><text class="editor-title">{{editingGroupId?'编辑准备小组':'新建准备小组'}}</text><text class="field-label">小组名称 · 必填，最多40字</text><input v-model="groupName" :disabled="tripBusy" maxlength="40" class="input" placeholder="例如：我们家、朋友一家"/><text class="field-help">勾选这个小组的同行成员，再保存；行李可以分配给不同小组准备。</text><checkbox-group @change="groupSelection"><label v-for="member in selectedTrip.members.filter(m=>m.status==='ACTIVE')" :key="member.membershipId" class="check-member"><checkbox :value="member.membershipId" :checked="groupMemberIds.includes(member.membershipId)" color="#69a778"/>{{member.membership.user.nickname||'家庭成员'}}</label></checkbox-group><view class="button small" @tap="saveGroup">{{editingGroupId?'保存准备小组':'创建准备小组'}}</view><view v-if="editingGroupId" class="cancel" @tap="resetGroupForm">取消编辑</view></view>
         <view v-if="isTripOwner && ['PLANNING','PENDING','DEPARTING'].includes(selectedTrip.status)" class="button small" @tap="advanceStatus">{{selectedTrip.status==='DEPARTING'?'完成本次行程':`进入${statusText(selectedTrip.status==='PLANNING'?'PENDING':'DEPARTING')}`}}</view>
       </view>
     </view>
@@ -506,7 +525,7 @@ onUnmounted(unloadPage);
           <view class="item-inputs"><view><text class="field-label">数量 · 可选</text><input v-model="item.quantity" :disabled="pageBusy" type="digit" class="input" placeholder="例如：1" /></view><view><text class="field-label">单位 · 可选</text><input v-model="item.unit" :disabled="pageBusy" maxlength="20" class="input" placeholder="例如：张、顶、个" /></view></view>
           <text class="field-label">物品备注 · 可选</text><input v-model="item.note" :disabled="pageBusy" maxlength="200" class="input" placeholder="例如：带上配套地钉和风绳" />
         </view>
-        <text class="add-row" @tap="addTemplateItem">＋ 添加下一件物品</text><view class="button small" :class="{disabled:pageBusy}" @tap="saveTemplate">{{pageBusy?'正在保存…':templateTripTarget?'保存模板并返回行程':editingTemplateId?'保存模板修改':'创建模板'}}</view><view class="cancel" @tap="showingTemplateForm = false">取消</view>
+        <text class="field-help">已添加 {{templateForm.items.length}} / 100 件物品</text><text class="add-row" :class="{disabled:templateForm.items.length>=100 || pageBusy}" @tap="addTemplateItem">{{templateForm.items.length>=100?'已达到100件上限':'＋ 添加下一件物品'}}</text><view class="button small" :class="{disabled:pageBusy}" @tap="saveTemplate">{{pageBusy?'正在保存…':templateTripTarget?'保存模板并返回行程':editingTemplateId?'保存模板修改':'创建模板'}}</view><view class="cancel" @tap="showingTemplateForm = false">取消</view>
       </view>
       <view v-else-if="canAccess(session,'packing_templates','EDIT')" class="button" @tap="newTemplate">＋ 新建自定义模板</view>
     </view>

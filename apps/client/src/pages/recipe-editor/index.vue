@@ -31,10 +31,14 @@ const categoryOptions = computed(() => [{ id: '', name: '未分类', archivedAt:
 const categoryName = computed(() => categoryOptions.value[categoryIndex.value]?.name ?? '未分类');
 
 function message(error: unknown) { return error instanceof Error ? error.message : '操作失败'; }
-function addIngredient() { if (ready()) ingredients.value.push({ name: '', quantity: '', unit: 'g' }); }
+function allowRow(total: number, limit: number, label: string) {
+  if (total < limit) return true;
+  uni.showToast({ title: `${label}最多添加${limit}项`, icon: 'none' }); return false;
+}
+function addIngredient() { if (ready() && allowRow(ingredients.value.length, 100, '食材')) ingredients.value.push({ name: '', quantity: '', unit: 'g' }); }
 function removeIngredient(index: number) { if (ready() && ingredients.value.length > 1) ingredients.value.splice(index, 1); }
-function addSeasoning() { if (ready()) seasonings.value.push(''); }
-function addStep() { if (ready()) steps.value.push(''); }
+function addSeasoning() { if (ready() && allowRow(seasonings.value.length, 40, '调料')) seasonings.value.push(''); }
+function addStep() { if (ready() && allowRow(steps.value.length, 50, '做法步骤')) steps.value.push(''); }
 function removeStep(index: number) { if (ready() && steps.value.length > 1) steps.value.splice(index, 1); }
 function pickCategory(event: { detail: { value: string } }) { if (ready()) categoryIndex.value = Number(event.detail.value); }
 function sameIdentity(a?: HouseholdContext, b?: HouseholdContext) { return Boolean(a && b && a.householdId === b.householdId && a.membershipId === b.membershipId); }
@@ -73,11 +77,19 @@ function restore(draft: Draft) {
 }
 function recipeInput(draft: Draft) {
   const rows = draft.ingredients.filter(item => item.name.trim()), cleanSteps = draft.steps.map(item => item.trim()).filter(Boolean);
+  const cleanSeasonings = draft.seasonings.map(item => item.trim()).filter(Boolean);
   if (!draft.name.trim()) throw new Error('请填写菜品名称，例如：番茄炒蛋');
+  if (draft.name.trim().length > 80) throw new Error('菜品名称最多80字，请缩短后保存');
   if (!rows.length) throw new Error('请至少填写一种食材，例如：鸡蛋');
+  if (rows.length > 100) throw new Error('一道菜最多保存100种食材，请合并后保存');
   if (draft.ingredients.some(item => !item.name.trim() && item.quantity.trim())) throw new Error('填写了数量的食材还需要填写名称');
+  if (rows.some(item => item.name.trim().length > 60)) throw new Error('每种食材名称最多60字，请缩短后保存');
   if (rows.some(item => !item.unit.trim())) throw new Error('请填写食材单位，例如：个、克、把');
+  if (rows.some(item => item.unit.trim().length > 12)) throw new Error('食材单位最多12字，请缩短后保存');
   if (!cleanSteps.length) throw new Error('请至少填写一个做法步骤');
+  if (cleanSteps.length > 50) throw new Error('一道菜最多保存50个做法步骤，请合并后保存');
+  if (cleanSteps.some(item => item.length > 4000)) throw new Error('每个做法步骤最多4000字，请拆分后保存');
+  if (cleanSeasonings.length > 40) throw new Error('一道菜最多保存40种调料，请合并后保存');
   const prepared = rows.map(item => {
     const text = item.quantity.trim();
     if (text && (!/^\d+(?:\.\d{1,3})?$/.test(text) || Number(text) < 0.001 || Number(text) > 999999999.999)) throw new Error('食材数量请填大于0、最多3位小数的数字，或留空待确认');
@@ -86,7 +98,7 @@ function recipeInput(draft: Draft) {
   const selected = draft.categoryIndex === 0 ? undefined : draft.categories[draft.categoryIndex - 1];
   if (draft.categoryIndex !== 0 && !selected) throw new Error('分类已变化，请重新选择');
   const keepArchived = Boolean(selected?.archivedAt && selected.id === draft.originalCategoryId);
-  return { name: draft.name.trim(), ingredients: prepared, seasonings: draft.seasonings.map(item => item.trim()).filter(Boolean), steps: cleanSteps,
+  return { name: draft.name.trim(), ingredients: prepared, seasonings: cleanSeasonings, steps: cleanSteps,
     ...(draft.id ? (keepArchived ? {} : { categoryId: selected?.id || null }) : (selected ? { categoryId: selected.id } : {})) };
 }
 async function writeDraft(draft: Draft) {
