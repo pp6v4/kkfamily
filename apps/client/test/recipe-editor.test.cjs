@@ -114,14 +114,105 @@ test('Cancelling native cover selection restores a new unsaved recipe and makes 
   assert.equal(writes, 0); assert.equal(page.recipeId.value, ''); assert.equal(page.name.value, ' 新菜 '); assert.equal(toasts.length, 0); assert.equal(page.coverUploading.value, false);
 });
 
-test('New recipe cover creates exactly one draft before upload and reuses it after upload failure', async () => {
+test('New recipe image stays local until save; a failed upload retains its saved draft for retry', async () => {
   let creates = 0, uploads = 0; const intents = [];
   const { page, show, pickers } = form({ createRecipe: async input => { creates++; return { ...recipe, ...input, version: 3 }; }, createMediaUploadIntent: async input => { intents.push(input); return { id: 'intent-a', uploadPath: '/upload' }; }, uploadMediaContent: async () => { if (++uploads === 1) throw new Error('network'); return { checksumSha256: 'fake' }; } });
   await show(''); fill(page);
   const first = page.chooseCover(); pickers[0].success({ tempFiles: [photo] }); await first;
+  assert.equal(creates, 0); assert.equal(intents.length, 0); assert.equal(page.recipeId.value, ''); assert.equal(page.coverPreview.value, photo.tempFilePath);
+  assert.equal(await page.persist(false), false);
   assert.equal(creates, 1); assert.equal(page.recipeId.value, recipe.id); assert.equal(page.recipeVersion.value, 3); assert.equal(page.coverUploading.value, false);
-  const second = page.chooseCover(); pickers[1].success({ tempFiles: [photo] }); await second;
-  assert.equal(creates, 1); assert.equal(intents.length, 2); assert.equal(page.coverAssetId.value, 'asset-a'); assert.equal(page.recipeVersion.value, 4);
+  assert.equal(page.pendingCover.value.tempFilePath, photo.tempFilePath); assert.match(page.coverError.value, /文字已保存/);
+  assert.equal(await page.persist(false), true);
+  assert.equal(creates, 1); assert.equal(intents.length, 2); assert.equal(page.coverAssetId.value, 'asset-a'); assert.equal(page.recipeVersion.value, 5);
+  assert.equal(intents[0].expectedOwnerVersion, 3); assert.equal(intents[1].expectedOwnerVersion, 4); assert.equal(page.pendingCover.value, undefined);
+});
+
+test('Blank recipe can choose a cover and add fields; validation runs only on explicit save', async () => {
+  let writes = 0;
+  const { page, show, pickers, toasts } = form({ createRecipe: async () => { writes++; return recipe; }, createMediaUploadIntent: async () => { writes++; } });
+  await show(''); assert.deepEqual(toasts, []);
+  page.addIngredient(); page.addSeasoning(); page.addStep(); assert.deepEqual(toasts, []);
+  const selecting = page.chooseCover(); pickers[0].success({ tempFiles: [photo] }); await selecting;
+  assert.equal(writes, 0); assert.equal(page.recipeId.value, ''); assert.equal(page.coverPreview.value, photo.tempFilePath);
+  assert.match(toasts.at(-1), /保存菜谱时上传/);
+  assert.equal(await page.persist(false), false); assert.match(toasts.at(-1), /菜品名称/);
+  page.name.value = '番茄炒蛋'; assert.equal(await page.persist(false), false); assert.match(toasts.at(-1), /食材/);
+  page.ingredients.value[0].name = '鸡蛋'; assert.equal(await page.persist(false), false); assert.match(toasts.at(-1), /做法/);
+  assert.equal(writes, 0); assert.equal(page.pendingCover.value.tempFilePath, photo.tempFilePath);
+});
+
+test('New recipe staged cover saves text then uploads to the returned id before navigating', async () => {
+  const intents = [], transfers = [];
+  const { page, show, pickers, routes } = form({ createMediaUploadIntent: async input => { intents.push(input); return { id: 'intent-a', uploadPath: '/media/intent-a/content' }; }, uploadMediaContent: async (path, bytes, mime) => { transfers.push([path, bytes.byteLength, mime]); return { checksumSha256: 'fictional-checksum' }; } });
+  await show(''); const selecting = page.chooseCover(); pickers[0].success({ tempFiles: [photo] }); await selecting;
+  fill(page); assert.equal(await page.persist(true), true);
+  assert.equal(intents.length, 1); assert.equal(intents[0].ownerId, recipe.id); assert.equal(intents[0].expectedOwnerVersion, 1);
+  assert.deepEqual(transfers, [['/media/intent-a/content', 4, 'image/jpeg']]); assert.deepEqual(routes, ['back']);
+  assert.equal(page.recipeVersion.value, 2); assert.equal(page.pendingCover.value, undefined); assert.equal(page.coverAssetId.value, 'asset-a');
+});
+
+test('Staged cover retry never claims edited text was saved when validation or text update fails', async () => {
+  const { page, show, pickers, toasts } = form({ uploadMediaContent: async () => { throw new Error('offline'); }, updateRecipe: async () => { throw new ApiError('版本冲突', 409); } });
+  await show(''); fill(page); const selecting = page.chooseCover(); pickers[0].success({ tempFiles: [photo] }); await selecting;
+  assert.equal(await page.persist(false), false); assert.match(page.coverError.value, /文字已保存/);
+  page.name.value = '尚未保存的新名字'; assert.equal(await page.persist(false), false);
+  assert.equal(page.coverError.value, ''); assert.equal(page.name.value, '尚未保存的新名字'); assert.equal(toasts.at(-1), '版本冲突');
+  page.name.value = ''; assert.equal(await page.persist(false), false); assert.equal(page.coverError.value, ''); assert.match(toasts.at(-1), /菜品名称/);
+  assert.equal(page.pendingCover.value.tempFilePath, photo.tempFilePath);
+});
+
+test('Lost cover confirmation response retries the same intent before saving text with its own confirmed version', async () => {
+  let confirms = 0, binary = 0, creates = 0;
+  const confirmations = [], writes = [];
+  const { page, show, pickers } = form({
+    createRecipe: async input => { creates++; return { ...recipe, ...input, version: 3 }; },
+    uploadMediaContent: async () => { binary++; return { checksumSha256: 'original-bytes' }; },
+    confirmMediaAsset: async (id, checksum) => { confirmations.push([id, checksum]); if (++confirms === 1) throw new Error('confirmation response lost'); return { asset: { id: 'asset-a' }, ownerVersion: 4 }; },
+    updateRecipe: async (id, input) => { writes.push(input); return { ...recipe, ...input, version: input.expectedVersion + 1 }; },
+  });
+  await show(''); fill(page); const selecting = page.chooseCover(); pickers[0].success({ tempFiles: [photo] }); await selecting;
+  assert.equal(await page.persist(false), false); assert.match(page.coverError.value, /确认结果待核实/);
+  page.name.value = '继续完善的菜名'; assert.equal(await page.persist(false), true);
+  assert.equal(creates, 1); assert.equal(binary, 1); assert.equal(confirms, 2);
+  assert.deepEqual(confirmations, [['intent-a', 'original-bytes'], ['intent-a', 'original-bytes']]);
+  assert.equal(writes[0].expectedVersion, 4); assert.equal(writes[0].name, '继续完善的菜名'); assert.equal(page.recipeVersion.value, 5);
+  assert.equal(page.pendingCover.value, undefined); assert.equal(page.coverAssetId.value, 'asset-a');
+});
+
+test('Cover confirmation retry never adopts an unrelated newer recipe version', async () => {
+  let confirms = 0, textUpdates = 0;
+  const { page, show, pickers, toasts } = form({
+    confirmMediaAsset: async () => { if (++confirms === 1) throw new Error('response lost'); return { asset: { id: 'asset-a' }, ownerVersion: 3 }; },
+    updateRecipe: async () => { textUpdates++; },
+  });
+  await show(''); fill(page); const selecting = page.chooseCover(); pickers[0].success({ tempFiles: [photo] }); await selecting;
+  assert.equal(await page.persist(false), false); assert.equal(page.recipeVersion.value, 1);
+  assert.equal(await page.persist(false), false); assert.equal(textUpdates, 0); assert.equal(page.recipeVersion.value, 1);
+  assert.match(toasts.at(-1), /新改动/); assert.ok(page.pendingCover.value.confirmation); assert.equal(page.name.value, ' 新菜 ');
+});
+
+test('Staged cover save rechecks editing rights before binary and confirmation', async () => {
+  for (const boundary of ['intent', 'binary']) {
+    let allowed = true, binary = 0, confirmations = 0;
+    const { page, show, pickers } = form({
+      createMediaUploadIntent: async () => { if (boundary === 'intent') allowed = false; return { id: 'intent-a', uploadPath: '/upload' }; },
+      uploadMediaContent: async () => { binary++; if (boundary === 'binary') allowed = false; return { checksumSha256: 'fake' }; },
+      confirmMediaAsset: async () => { confirmations++; },
+    }, async () => allowed ? context : { ...context, effectivePermissions: {} });
+    await show(''); fill(page); const selecting = page.chooseCover(); pickers[0].success({ tempFiles: [photo] }); await selecting;
+    assert.equal(await page.persist(true), false); assert.equal(binary, boundary === 'intent' ? 0 : 1); assert.equal(confirmations, 0);
+    assert.equal(page.session.value, undefined); assert.equal(page.pendingCover.value, undefined); assert.equal(page.name.value, '');
+  }
+});
+
+test('Leaving during staged cover save cannot confirm or restore the hidden draft', async () => {
+  const transfer = deferred(); let started = false, confirmations = 0;
+  const { page, show, pickers, life, routes, toasts } = form({ uploadMediaContent: () => { started = true; return transfer.promise; }, confirmMediaAsset: async () => { confirmations++; } });
+  await show(''); fill(page); const selecting = page.chooseCover(); pickers[0].success({ tempFiles: [photo] }); await selecting;
+  toasts.length = 0; const save = page.persist(true); await tick(); assert.equal(started, true);
+  life.hide(); transfer.resolve({ checksumSha256: 'fake' }); assert.equal(await save, false);
+  assert.equal(confirmations, 0); assert.equal(page.name.value, ''); assert.equal(page.pendingCover.value, undefined); assert.deepEqual(routes, []); assert.deepEqual(toasts, []);
 });
 
 test('Native cover selection cannot upload after switching household, revocation or unload', async () => {

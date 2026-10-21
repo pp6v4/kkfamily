@@ -314,6 +314,72 @@ test('Camping template save ignores completion after leaving the tab',async()=>{
   page.active.value='trips';write.resolve({});await saving;assert.equal(reads,0);assert.equal(page.showingTemplateForm.value,false);assert.equal(page.pageBusy.value,false);
 });
 
+test('Camping creates a template from a trip, returns to that trip and applies only on explicit choice',async()=>{
+  const calls=[],template={id:'barbecue',name:'烧烤',version:1,createdById:'member-a',archived:false,items:[{id:'table',name:'蛋卷桌',defaultQuantity:1,unit:'张'}]};
+  const item={id:'trip-table',name:'蛋卷桌',quantity:1,unit:'张',status:'PENDING',sourceTemplateNameSnapshot:'烧烤'};
+  const {page}=campingForm({
+    createPackingTemplate:async input=>{calls.push(['create',input.name,input.items[0].name,input.items[0].quantity,input.items[0].unit]);return template;},
+    listPackingTemplates:async()=>[template],getTrip:async id=>{calls.push(['trip',id]);return sampleTrip;},listTripPackingItems:async()=>[],listTripCandidates:async()=>[],
+    applyPackingTemplate:async(tripId,templateId)=>{calls.push(['apply',tripId,templateId]);return{addedCount:1,items:[item]};},
+  });
+  selectCamping(page);page.openTemplatePicker();assert.equal(page.showingTemplatePicker.value,true);
+  page.openTemplateLibrary(true);assert.equal(page.active.value,'templates');assert.equal(page.showingTemplateForm.value,true);assert.equal(page.selectedTripId.value,'');assert.equal(page.templateTripTarget.value.id,'trip-a');
+  page.templateForm.value.name=' 烧烤 ';page.templateForm.value.items=[{name:' 蛋卷桌 ',quantity:'1',unit:' 张 ',note:''}];
+  await page.saveTemplate();
+  assert.equal(page.active.value,'trips');assert.equal(page.selectedTripId.value,'trip-a');assert.equal(page.showingTemplatePicker.value,true);assert.equal(page.pageBusy.value,false);
+  assert.equal(page.availableTemplates.value[0].id,'barbecue');assert.equal(calls.some(row=>row[0]==='apply'),false);assert.equal(page.templateTripTarget.value,undefined);
+  await page.applyTemplate('barbecue');
+  assert.deepEqual(calls,[['create','烧烤','蛋卷桌',1,'张'],['trip','trip-a'],['apply','trip-a','barbecue']]);assert.equal(page.packingItems.value[0].id,'trip-table');assert.equal(page.showingTemplatePicker.value,false);
+});
+
+test('Camping template navigation keeps no return target after hiding, changing identity or explicit tab navigation',async()=>{
+  for(const mode of ['hidden','identity','switch']){
+    let reads=0;const{page,lifecycle,setStored}=campingForm({getTrip:async()=>{reads++;return sampleTrip;}});
+    selectCamping(page);page.openTemplateLibrary();assert.equal(page.templateTripTarget.value.id,'trip-a');
+    if(mode==='hidden')lifecycle.hide();
+    if(mode==='identity')setStored({...campingContext,membershipId:'other-member'});
+    if(mode==='switch')page.switchView('trips');
+    await page.returnToTrip();assert.equal(reads,0);assert.equal(page.selectedTripId.value,'');
+    if(mode!=='identity')assert.equal(page.templateTripTarget.value,undefined);
+  }
+});
+
+test('Camping returning to a read-only trip never offers template application or sends packing writes',async()=>{
+  let writes=0;const readonly={...sampleTrip,members:[{...sampleTrip.members[0],canEdit:false}]};
+  const{page}=campingForm({getTrip:async()=>readonly,listTripPackingItems:async()=>[],listTripCandidates:async()=>[],applyPackingTemplate:async()=>writes++});
+  selectCamping(page);page.openTemplateLibrary();await page.returnToTrip();assert.equal(page.selectedTripId.value,'trip-a');assert.equal(page.canEditTrip.value,false);assert.equal(page.showingTemplatePicker.value,false);
+  page.templates.value=[{id:'t',archived:false}];await page.applyTemplate('t');assert.equal(writes,0);
+});
+
+test('Camping template picker explains missing permission and cannot apply archived or unknown templates',async()=>{
+  let writes=0;const{page,errors}=campingForm({applyPackingTemplate:async()=>writes++});selectCamping(page);
+  page.session.value={...campingContext,effectivePermissions:{trips:'EDIT'}};page.openTemplatePicker();assert.equal(page.showingTemplatePicker.value,false);assert.match(errors.at(-1),/行李模板访问权限/);
+  page.templates.value=[{id:'archived',archived:true}];await page.applyTemplate('archived');assert.equal(writes,0);
+  page.session.value=campingContext;await page.applyTemplate('archived');await page.applyTemplate('missing');assert.equal(writes,0);assert.equal(page.availableTemplates.value.length,0);
+});
+
+test('Camping template application clears stale filters and repeat application uses server idempotency result',async()=>{
+  let writes=0;const rows=[{id:'from-template',name:'天幕',status:'PENDING'}];
+  const{page,errors}=campingForm({applyPackingTemplate:async()=>({addedCount:++writes===1?1:0,items:rows})});selectCamping(page);page.templates.value=[{id:'t',archived:false}];
+  page.packingStateFilter.value='PACKED';await page.applyTemplate('t');assert.equal(page.visiblePackingItems.value.length,1);assert.equal(page.packingStateFilter.value,'');
+  await page.applyTemplate('t');assert.equal(page.packingItems.value.length,1);assert.match(errors.at(-1),/没有新增行李/);
+});
+
+test('Camping manual luggage save sends exact labels and optional amount then shows the returned row',async()=>{
+  const calls=[],rows=[{id:'tent',name:'天幕',status:'PENDING'}];const{page,errors}=campingForm({createTripPackingItem:async(id,input)=>{calls.push({id,input});return rows[0];},listTripPackingItems:async()=>rows});
+  selectCamping(page);page.showingItemForm.value=true;page.itemForm.value={name:' 天幕 ',quantity:'2.125',unit:' 顶 ',note:' 带上地钉 '};page.packingStateFilter.value='PACKED';await page.saveTripItem();
+  assert.equal(calls.length,1);assert.equal(calls[0].id,'trip-a');assert.equal(calls[0].input.name,'天幕');assert.equal(calls[0].input.quantity,2.125);assert.equal(calls[0].input.unit,'顶');assert.equal(calls[0].input.note,'带上地钉');
+  assert.equal(page.visiblePackingItems.value[0].id,'tent');assert.equal(page.showingItemForm.value,false);assert.equal(page.itemForm.value.name,'');assert.match(errors.at(-1),/已加入本次行李清单/);
+});
+
+test('Camping invalid luggage amounts are rejected at save without losing the form or sending requests',async()=>{
+  let writes=0;const{page}=campingForm({createTripPackingItem:async()=>writes++,createPackingTemplate:async()=>writes++});selectCamping(page);page.itemForm.value.name='天幕';
+  for(const text of ['0','-1','NaN','1.2345','1e3','1000000000']){page.itemForm.value.quantity=text;await page.saveTripItem();assert.equal(page.itemForm.value.name,'天幕');}
+  assert.equal(writes,0);page.switchView('templates');page.newTemplate();page.templateForm.value.name='烧烤';page.templateForm.value.items[0].name='炉子';
+  for(const text of ['0','-1','NaN','1.2345','1e3','1000000000']){page.templateForm.value.items[0].quantity=text;await page.saveTemplate();}
+  assert.equal(writes,0);assert.equal(page.templateForm.value.name,'烧烤');assert.equal(page.showingTemplateForm.value,true);
+});
+
 test('Camping a current forbidden response clears loaded trip, candidates and draft content',async()=>{
   const{page,errors}=campingForm({updateTripPackingItem:async()=>{throw new ApiError('行程权限已撤销',403);}});
   selectCamping(page);page.packingItems.value=[{id:'item-a'}];page.candidates.value=[{id:'candidate-a'}];page.tripEditForm.value.title='私有行程';
@@ -352,7 +418,7 @@ test('Camping empty overview retains the China map and marker taps open only a c
 for (const order of ['show-first', 'callback-first']) {
   test(`Destination-first picker preserves dates and submits coordinates in one create request when ${order}`, async () => {
     let chooser, submitted;
-    const {page,lifecycle,uni} = campingForm({createTrip:async input=>{submitted=input;return sampleTrip;},getTrip:async()=>sampleTrip,listTripPackingItems:async()=>[],listTripCandidates:async()=>[]});
+    const {page,lifecycle,uni,errors} = campingForm({createTrip:async input=>{submitted=input;return sampleTrip;},getTrip:async()=>sampleTrip,listTripPackingItems:async()=>[],listTripCandidates:async()=>[]});
     uni.chooseLocation = input => chooser=input;
     page.tripForm.value.startsAt='2026-10-01';
     const pending=page.chooseDestination();lifecycle.hide();assert.equal(page.initialDestination.value,undefined);
@@ -360,9 +426,10 @@ for (const order of ['show-first', 'callback-first']) {
     chooser.success({latitude:0,longitude:116.123456,name:'营地',address:'地址'});await pending;
     if(order==='callback-first')await lifecycle.show();
     assert.equal(page.creatingTrip.value,true);assert.equal(page.tripForm.value.startsAt,'2026-10-01');
+    assert.match(errors.at(-1),/目的地已选好.*出发日期.*保存行程/);
     assert.equal(page.initialDestination.value.latitude,0);assert.equal(page.initialDestination.value.longitude,116.123456);
     await page.saveTrip();assert.equal(submitted.initialDestination.title,'营地');assert.equal(submitted.initialDestination.latitude,0);
-    assert.equal(submitted.startsAt,'2026-10-01T08:00:00+08:00');assert.equal(page.initialDestination.value,undefined);lifecycle.unload();
+    assert.equal(submitted.startsAt,'2026-10-01T08:00:00+08:00');assert.equal(page.initialDestination.value,undefined);assert.match(errors.at(-1),/行程已创建.*添加行李.*模板/);lifecycle.unload();
   });
 }
 
