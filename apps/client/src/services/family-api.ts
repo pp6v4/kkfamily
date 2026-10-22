@@ -86,6 +86,7 @@ export function recalculateMeal(mealId: string) { return request<IngredientCompa
 export function completeMeal(meal: Meal) { return request<Meal>(`/meals/${meal.id}/complete`, 'POST', { expectedVersion: meal.version }); }
 export function transitionMeal(meal: Meal, action: 'confirm' | 'reopen' | 'start' | 'cancel', reason?: string) { return request<Meal>(`/meals/${meal.id}/${action}`, 'POST', { expectedVersion: meal.version, reason }); }
 export function updateMealDish(meal: Meal, recipeId: string, cookMultiplier: number) { return request<Meal>(`/meals/${meal.id}/dishes/${recipeId}`, 'PATCH', { expectedVersion: meal.version, cookMultiplier }); }
+export function removeMealDish(meal: Meal, recipeId: string) { return request<Meal>(`/meals/${meal.id}/dishes/${recipeId}/remove`, 'POST', { expectedVersion: meal.version }); }
 export function listMealSnapshots(mealId: string) { return request<Array<{ version: number; createdAt: string; data: { dishes: MealDish[] } }>>(`/meals/${mealId}/snapshots`); }
 export function listShoppingLists() { return request<ShoppingList[]>('/shopping-lists'); }
 export function addShoppingItem(input: { name: string; quantity?: number; unit?: string; status?: 'WISHLIST' | 'NEXT_TRIP' | 'REPLENISH' }) { return request<ShoppingItem>('/shopping-lists/next-trip/items', 'POST', input); }

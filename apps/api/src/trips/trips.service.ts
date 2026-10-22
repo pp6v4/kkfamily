@@ -109,7 +109,14 @@ export class TripsService {
 
   async updateMember(userId: string, householdId: string, tripId: string, membershipId: string, dto: UpdateTripMemberDto) {
     return { data: await serializable(this.prisma, async tx => {
-      const { tripMember: actor } = await this.requireTripOwner(userId, householdId, tripId, tx);
+      const { tripMember: actor, trip } = await this.requireTripAccessOwner(userId, householdId, tripId, tx);
+      const ended = trip.status === TripStatus.COMPLETED || trip.status === TripStatus.CANCELLED;
+      if (ended && (dto.canEdit !== undefined || dto.tripRole !== undefined ||
+        (dto.status !== undefined && dto.status !== TripMemberStatus.REVOKED) || dto.photoAdd === true ||
+        (dto.status !== TripMemberStatus.REVOKED && dto.photoAdd !== false) ||
+        (dto.status !== TripMemberStatus.REVOKED && dto.clearResponsibilities === true))) {
+        throw new ConflictException('已结束行程只允许撤销访问或关闭添加照片权限');
+      }
       const target = await tx.tripMember.findUnique({ where: { tripId_membershipId: { tripId, membershipId } } });
       if (!target || target.status === TripMemberStatus.REVOKED) throw new NotFoundException('行程成员不存在');
       if (target.version !== dto.expectedVersion) throw new ConflictException('成员信息已更新，请刷新后重试');
@@ -117,17 +124,23 @@ export class TripsService {
       const nextRole = dto.tripRole ?? target.tripRole, nextStatus = dto.status ?? target.status;
       if (nextRole === TripMemberRole.OWNER && dto.canEdit === false) throw new ConflictException('行程负责人必须保留编辑权限');
       if (target.tripRole === TripMemberRole.OWNER && (nextRole !== TripMemberRole.OWNER || nextStatus === TripMemberStatus.REVOKED)) {
-        const owners = await tx.tripMember.count({ where: { tripId, tripRole: TripMemberRole.OWNER, status: TripMemberStatus.ACTIVE, canEdit: true, membershipId: { not: membershipId } } });
+        const owners = await tx.tripMember.count({ where: { tripId, tripRole: TripMemberRole.OWNER, status: { in: visibleMemberStatuses }, canEdit: true, membershipId: { not: membershipId } } });
         if (owners === 0) throw new ConflictException('行程必须至少保留一名负责人');
       }
-      if (nextStatus === TripMemberStatus.REVOKED) {
+      if (nextStatus === TripMemberStatus.REVOKED && !ended) {
         const unresolved = await tx.tripPackingItem.count({ where: { tripId, responsibleMembershipId: membershipId, excludedAt: null, status: PackingItemStatus.PENDING } });
         if (unresolved && !dto.clearResponsibilities) throw new ConflictException(`该成员仍负责 ${unresolved} 项未准备物品，请先清空或重新分配`);
         if (dto.clearResponsibilities) await tx.tripPackingItem.updateMany({ where: { tripId, responsibleMembershipId: membershipId, excludedAt: null }, data: { responsibleMembershipId: null, version: { increment: 1 } } });
         await tx.tripPreparationGroupMember.deleteMany({ where: { tripId, membershipId } });
       }
-      await tx.tripMember.update({ where: { tripId_membershipId: { tripId, membershipId } }, data: { canEdit: nextRole === TripMemberRole.OWNER ? true : dto.canEdit ?? target.canEdit, photoAdd: dto.photoAdd ?? target.photoAdd, tripRole: nextRole, status: nextStatus, leftAt: nextStatus === TripMemberStatus.REVOKED ? new Date() : null, version: { increment: 1 } } });
-      await this.audit(tx, householdId, actor.membershipId, 'TRIP_MEMBER_UPDATE', tripId, { membershipId, status: nextStatus, role: nextRole });
+      const nextCanEdit = nextRole === TripMemberRole.OWNER ? true : dto.canEdit ?? target.canEdit;
+      const nextPhotoAdd = dto.photoAdd ?? target.photoAdd;
+      await tx.tripMember.update({ where: { tripId_membershipId: { tripId, membershipId } }, data: { canEdit: nextCanEdit, photoAdd: nextPhotoAdd, tripRole: nextRole, status: nextStatus, leftAt: nextStatus === TripMemberStatus.REVOKED ? new Date() : target.leftAt, version: { increment: 1 } } });
+      await this.audit(tx, householdId, actor.membershipId, 'TRIP_MEMBER_UPDATE', tripId, {
+        membershipId, status: nextStatus, role: nextRole, fromVersion: target.version, toVersion: target.version + 1,
+        before: { photoAdd: target.photoAdd, canEdit: target.canEdit },
+        after: { photoAdd: nextPhotoAdd, canEdit: nextCanEdit },
+      });
       return this.tripOrThrow(tx, householdId, tripId);
     }) };
   }
@@ -173,6 +186,22 @@ export class TripsService {
     const result = await this.requireTripAccess(userId, householdId, tripId, true, tx);
     if (result.tripMember.tripRole !== TripMemberRole.OWNER) throw new ForbiddenException('只有行程负责人可以管理成员和小组');
     return result;
+  }
+
+  // Managing access is separate from editing completed business records. Historical
+  // owners may only reduce access; updateMember enforces the closed operation set.
+  private async requireTripAccessOwner(userId: string, householdId: string, tripId: string, tx: Prisma.TransactionClient) {
+    const membership = await this.access.require(userId, householdId, 'trips', 'EDIT', tx);
+    const tripMember = await tx.tripMember.findFirst({ where: { tripId, membershipId: membership.id, status: { in: visibleMemberStatuses }, trip: { householdId } }, include: { trip: true } });
+    if (!tripMember || tripMember.tripRole !== TripMemberRole.OWNER || !tripMember.canEdit) {
+      throw new ForbiddenException('只有有效行程负责人可以管理访问权限');
+    }
+    const trip = tripMember.trip;
+    if ((trip.status === TripStatus.COMPLETED && tripMember.status !== TripMemberStatus.HISTORY) ||
+      (trip.status !== TripStatus.COMPLETED && trip.status !== TripStatus.CANCELLED && tripMember.status !== TripMemberStatus.ACTIVE)) {
+      throw new ForbiddenException('当前行程成员状态不允许管理访问权限');
+    }
+    return { membership, tripMember, trip };
   }
 
   private async requireTripAccess(userId: string, householdId: string, tripId: string, edit: boolean, tx: Prisma.TransactionClient | PrismaService = this.prisma) {

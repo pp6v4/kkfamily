@@ -21,6 +21,7 @@ function evaluate(source, dependencies, uni) {
   return module.exports;
 }
 function loadPage(relative, dependencies, uni, props = {}, emitted = []) {
+  if(relative==='src/pages/tasks/index.vue')dependencies={'../../services/trip-form':tripForm,...dependencies};
   if(relative==='src/pages/join/index.vue')dependencies={...dependencies,'../../services/transport':{ApiError},'../../services/session':{getSessionEpoch:()=>0,...dependencies['../../services/session']}};
   const filename=path.join(ROOT,relative), {descriptor}=parse(fs.readFileSync(filename,'utf8'),{filename});
   const script=compileScript(descriptor,{id:'component-test',inlineTemplate:false});
@@ -125,6 +126,89 @@ test('Trip owner changes photo grant independently using member version; stale a
   assert.equal(writes.length,1);assert.equal(writes[0].version,3);assert.equal(writes[0].input.photoAdd,true);assert.equal(writes[0].input.canEdit,undefined);
   await page.toggleMemberPermission(member,'photoAdd');assert.equal(writes.length,1);
   lifecycle.hide();await page.toggleMemberPermission(member,'photoAdd');assert.equal(writes.length,1);
+});
+
+test('Completed history owner can close photo permission without enabling completed-trip editing or new photo grants',async()=>{
+  const member={...sampleTrip.members[0],membershipId:'friend',tripRole:'MEMBER',status:'HISTORY',canEdit:false,photoAdd:true,version:3};
+  const trip={...sampleTrip,status:'COMPLETED',members:[{...sampleTrip.members[0],status:'HISTORY'},member]};
+  const writes=[];const{page}=campingForm({updateTripMember:async(id,row,input)=>{writes.push({id,version:row.version,input:{...input}});return{...trip,members:[trip.members[0],{...member,photoAdd:false,version:4}]};}});
+  selectCamping(page,trip);
+  assert.equal(page.canEditTrip.value,false);assert.equal(page.isTripOwner.value,false);assert.equal(page.canManageTripAccess.value,true);
+  await page.toggleMemberPermission(member,'canEdit');assert.equal(writes.length,0);
+  await page.toggleMemberPermission(member,'photoAdd');
+  assert.deepEqual(writes,[{id:'trip-a',version:3,input:{photoAdd:false}}]);
+  await page.toggleMemberPermission(page.selectedTrip.value.members[1],'photoAdd');assert.equal(writes.length,1);
+  assert.equal(page.canEditTrip.value,false);assert.equal(page.selectedTrip.value.members[1].status,'HISTORY');
+});
+
+test('Completed history revocation preserves past responsibility and protects its confirmation target/version',async()=>{
+  const member={...sampleTrip.members[0],membershipId:'friend',tripRole:'MEMBER',status:'HISTORY',canEdit:false,version:3};
+  const trip={...sampleTrip,status:'COMPLETED',members:[{...sampleTrip.members[0],status:'HISTORY'},member]};
+  for(const stale of [false,true]){
+    let dialog;const writes=[];const{page,uni}=campingForm({updateTripMember:async(id,row,input)=>{writes.push({id,version:row.version,input:{...input}});return{...trip,members:[trip.members[0]]};}});
+    uni.showModal=input=>dialog=input;selectCamping(page,trip);page.revokeMember(member);
+    assert.ok(dialog);assert.match(dialog.content,/历史.*分工.*保留/);
+    if(stale)page.trips.value=[{...trip,members:[trip.members[0],{...member,version:4}]}];
+    await dialog.success({confirm:true});
+    if(stale)assert.equal(writes.length,0);
+    else assert.deepEqual(writes,[{id:'trip-a',version:3,input:{status:'REVOKED'}}]);
+  }
+});
+
+test('History access controls reject nonowners, module VIEW, hidden pages and replaced identities',async()=>{
+  for(const mode of ['nonowner','view','stored-view','hidden','identity','revoked']){
+    let dialogs=0,writes=0;
+    const member={...sampleTrip.members[0],membershipId:'friend',tripRole:'MEMBER',status:'HISTORY',version:3};
+    const trip={...sampleTrip,status:'COMPLETED',members:[{...sampleTrip.members[0],status:'HISTORY'},member]};
+    const{page,uni,lifecycle,setStored}=campingForm({updateTripMember:async()=>writes++});uni.showModal=()=>dialogs++;
+    selectCamping(page,trip);
+    if(mode==='nonowner')page.trips.value=[{...trip,members:[{...trip.members[0],tripRole:'MEMBER'},member]}];
+    if(mode==='view')page.session.value={...campingContext,effectivePermissions:{trips:'VIEW'}};
+    if(mode==='stored-view')setStored({...campingContext,version:2,effectivePermissions:{trips:'VIEW'}});
+    if(mode==='hidden')lifecycle.hide();
+    if(mode==='identity')setStored({...campingContext,membershipId:'other'});
+    if(mode==='revoked')page.trips.value=[{...trip,members:[member]}];
+    page.revokeMember(member);await page.toggleMemberPermission(member,'photoAdd');
+    assert.equal(dialogs,0,mode);assert.equal(writes,0,mode);
+  }
+});
+
+test('Historical revoke confirmation cannot cross changed trip status, lost owner access or page hide',async()=>{
+  for(const mode of ['status','role','actor-version','permission-version','hide']){
+    let dialog,writes=0;
+    const member={...sampleTrip.members[0],membershipId:'friend',tripRole:'MEMBER',status:'HISTORY',version:3};
+    const trip={...sampleTrip,status:'COMPLETED',members:[{...sampleTrip.members[0],status:'HISTORY'},member]};
+    const{page,uni,lifecycle}=campingForm({updateTripMember:async()=>writes++});uni.showModal=input=>dialog=input;
+    selectCamping(page,trip);page.revokeMember(member);assert.ok(dialog);
+    if(mode==='status')page.trips.value=[{...trip,status:'CANCELLED'}];
+    if(mode==='role')page.trips.value=[{...trip,members:[{...trip.members[0],tripRole:'MEMBER'},member]}];
+    if(mode==='actor-version')page.trips.value=[{...trip,members:[{...trip.members[0],version:2},member]}];
+    if(mode==='permission-version')page.session.value={...campingContext,version:2};
+    if(mode==='hide')lifecycle.hide();
+    await dialog.success({confirm:true});assert.equal(writes,0,mode);
+  }
+});
+
+test('Cancelled-trip owner can only close photo grants or revoke access, without exposing new grants or content writes',async()=>{
+  for(const status of ['ACTIVE','HISTORY']){
+    const member={...sampleTrip.members[0],membershipId:'friend',tripRole:'MEMBER',status,canEdit:true,photoAdd:true,version:3};
+    let trip={...sampleTrip,status:'CANCELLED',members:[{...sampleTrip.members[0],status},member]};
+    const writes=[];let dialog,contentWrites=0;
+    const{page,uni}=campingForm({
+      updateTripMember:async(id,row,input)=>{writes.push({id,version:row.version,input:{...input}});trip={...trip,members:trip.members.map(entry=>entry.membershipId===row.membershipId?{...entry,...input,version:entry.version+1}:entry).filter(entry=>entry.status!=='REVOKED')};return trip;},
+      addTripMember:async()=>contentWrites++,createTripPreparationGroup:async()=>contentWrites++,updateTripPackingItem:async()=>contentWrites++,
+    });
+    uni.showModal=input=>dialog=input;selectCamping(page,trip);
+    assert.equal(page.canEditTrip.value,false);assert.equal(page.isTripOwner.value,false);assert.equal(page.canManageTripAccess.value,true);
+    await page.toggleMemberPermission(member,'canEdit');assert.equal(writes.length,0);
+    page.candidates.value=[{id:'new'}];await page.addMemberByIndex({detail:{value:'0'}});
+    page.groupName.value='不能新建';await page.saveGroup();await page.togglePacked({id:'item-a',status:'PENDING'});assert.equal(contentWrites,0);
+    await page.toggleMemberPermission(member,'photoAdd');assert.equal(writes.length,1);assert.deepEqual(writes[0].input,{photoAdd:false});
+    const latest=page.selectedTrip.value.members[1];await page.toggleMemberPermission(latest,'photoAdd');assert.equal(writes.length,1);
+    assert.equal(page.tripAccessMembers.value.some(row=>row.membershipId==='friend'),false);
+    page.revokeMember(latest);assert.ok(dialog);assert.match(dialog.content,/历史.*分工.*保留/);await dialog.success({confirm:true});
+    assert.deepEqual(writes[1],{id:'trip-a',version:4,input:{status:'REVOKED'}});
+  }
 });
 
 test('Travel dates use Shanghai cross-day boundaries and preserve unchanged timestamp precision',()=>{
@@ -305,8 +389,9 @@ test('Camping suppresses duplicate writes and uses the original trip id for a su
 test('Camping delete, revoke and status confirmation dialogs expire on trip change',async()=>{
   for(const operation of ['removeItem','revokeMember','advanceStatus']){
     let dialog,writes=0;const{page,uni}=campingForm({removeTripPackingItem:async()=>writes++,updateTripMember:async()=>writes++,updateTripStatus:async()=>writes++});
-    uni.showModal=input=>dialog=input;selectCamping(page);
-    const arg=operation==='revokeMember'?{membership:{user:{nickname:'同行成员'}}}:{id:'item-a',name:'桌子'};
+    const member={...sampleTrip.members[0],membershipId:'friend',tripRole:'MEMBER'};
+    uni.showModal=input=>dialog=input;selectCamping(page,{...sampleTrip,members:[sampleTrip.members[0],member]});
+    const arg=operation==='revokeMember'?member:{id:'item-a',name:'桌子'};
     await page[operation](arg);assert.ok(dialog,operation);page.closeTrip();selectCamping(page,sampleTripB);await dialog.success({confirm:true});assert.equal(writes,0,operation);
   }
 });
@@ -1106,8 +1191,58 @@ function privatePage(name,api,access){
   const page=loadPage(`src/pages/${name}/index.vue`,{
     '@dcloudio/uni-app':{onShow:fn=>lifecycle.show=fn,onHide:fn=>lifecycle.hide=fn,onUnload:fn=>lifecycle.unload=fn,onLoad:fn=>lifecycle.load=fn},
     '../../services/session':{canAccess:allowed,refreshAccess:access},'../../services/family-api':api,
+    '../../services/calendar-dates':loadTs('src/services/calendar-dates.ts',{'./trip-form':tripForm},{}),
+    '../../services/trip-form':tripForm,
   },uni);return{page,lifecycle,uni};
 }
+test('Task editing clears descriptions without silently reassigning missing or unassigned people',async()=>{
+  for(const assigneeMembershipId of [null,'inactive-person']){
+    const updates=[],context={...family,effectivePermissions:{tasks:'MANAGE'}};
+    const task={id:'task-a',version:6,type:'TODO',title:'清洗空调',description:'旧说明',assigneeMembershipId,assignee:null,createdBy:{id:'member-a',user:{nickname:'小扣'}},priority:'NORMAL',status:'PENDING',dueAt:'2026-10-25T07:30:00.000Z',reminderAt:'2026-10-24T04:15:00.000Z',history:[]};
+    const {page}=privatePage('tasks',{updateTask:async(row,input)=>{updates.push(JSON.parse(JSON.stringify(input)));return{...row,...input,description:input.description===''?null:row.description,version:7};}},async()=>context);
+    page.session.value=context;page.assignees.value=[{id:'member-a',user:{nickname:'小扣'}}];page.selected.value=task;page.editTask();
+    page.form.value.title='清洗客厅空调';page.form.value.description='   ';await page.save();
+    assert.equal(updates.length,1);assert.equal(updates[0].description,'');assert.equal(Object.hasOwn(updates[0],'assigneeMembershipId'),false);
+    assert.equal(updates[0].dueAt,task.dueAt);assert.equal(updates[0].reminderAt,task.reminderAt);
+    assert.equal(page.selected.value.description,null);assert.equal(page.selected.value.assigneeMembershipId,assigneeMembershipId);
+  }
+});
+test('Task editing changes an assignee only when a valid different person is selected',async()=>{
+  const updates=[],context={...family,effectivePermissions:{tasks:'MANAGE'}};
+  const task={id:'task-a',version:6,type:'TODO',title:'清洗空调',description:null,assigneeMembershipId:'inactive-person',assignee:null,createdBy:{id:'member-a'},priority:'NORMAL',status:'PENDING',dueAt:null,reminderAt:null};
+  const {page}=privatePage('tasks',{updateTask:async(row,input)=>{updates.push(input);return{...row,...input,version:7};}},async()=>context);
+  page.session.value=context;page.assignees.value=[{id:'member-a',user:{nickname:'小扣'}},{id:'friend',user:{nickname:'朋友'}}];page.selected.value=task;page.editTask();
+  page.form.value.assigneeIndex=1;await page.save();assert.equal(updates.length,1);assert.equal(updates[0].assigneeMembershipId,'friend');
+});
+test('Task text limits are checked on submit and preserve the invalid draft without writes',async()=>{
+  const writes=[],context={...family,effectivePermissions:{tasks:'EDIT'}};
+  const {page,uni}=privatePage('tasks',{createTask:async input=>{writes.push(input);return{id:'task-a',...input};}},async()=>context);
+  const toasts=[];uni.showToast=input=>toasts.push(input.title);page.session.value=context;page.newTask();
+  page.form.value.title='题'.repeat(121);await page.save();assert.equal(writes.length,0);assert.equal(page.form.value.title.length,121);assert.match(toasts.at(-1),/120/);
+  page.form.value.title='清洗空调';page.form.value.description='说'.repeat(2001);await page.save();assert.equal(writes.length,0);assert.equal(page.form.value.description.length,2001);assert.match(toasts.at(-1),/2000/);
+  page.form.value.description='说'.repeat(2000);await page.save();assert.equal(writes.length,1);assert.equal(writes[0].description.length,2000);
+});
+test('Task assignee picker keeps an explicit unchanged choice and can select the first real member',async()=>{
+  const updates=[],context={...family,effectivePermissions:{tasks:'MANAGE'}};
+  const task={id:'task-a',version:6,type:'TODO',title:'清洗空调',description:null,assigneeMembershipId:null,assignee:null,createdBy:{id:'member-a'},priority:'NORMAL',status:'PENDING',dueAt:null,reminderAt:null};
+  const {page}=privatePage('tasks',{updateTask:async(row,input)=>{updates.push(input);return{...row,...input,version:7};}},async()=>context);
+  page.session.value=context;page.assignees.value=[{id:'member-a',user:{nickname:'小扣'}}];page.selected.value=task;page.editTask();
+  assert.equal(page.assigneePickerIndex.value,0);assert.deepEqual(Array.from(page.assigneePickerLabels.value),['保持原负责人：未分配','小扣']);
+  page.chooseAssignee({detail:{value:'1'}});assert.equal(page.assigneePickerIndex.value,1);assert.equal(page.assigneeLabel.value,'小扣');
+  page.chooseAssignee({detail:{value:'0'}});assert.equal(page.form.value.assigneeIndex,-1);
+  page.chooseAssignee({detail:{value:'99'}});assert.equal(page.form.value.assigneeIndex,-1);
+  page.busy.value=true;page.chooseAssignee({detail:{value:'1'}});assert.equal(page.form.value.assigneeIndex,-1);page.busy.value=false;
+  page.chooseAssignee({detail:{value:'1'}});await page.save();assert.equal(updates.length,1);assert.equal(updates[0].assigneeMembershipId,'member-a');
+});
+test('Task dates and reminder display use Shanghai boundaries and text edits preserve exact cross-day instants',async()=>{
+  const updates=[],context={...family,effectivePermissions:{tasks:'MANAGE'}};
+  const task={id:'task-a',version:6,type:'TODO',title:'清洗空调',description:null,assigneeMembershipId:null,assignee:null,createdBy:{id:'member-a'},priority:'NORMAL',status:'PENDING',dueAt:'2026-10-24T20:30:17.123Z',reminderAt:'2026-10-24T17:15:12.987Z'};
+  const {page}=privatePage('tasks',{updateTask:async(row,input)=>{updates.push(input);return{...row,...input,version:7};}},async()=>context);
+  page.session.value=context;page.selected.value=task;page.editTask();
+  assert.equal(page.form.value.dueDate,'2026-10-25');assert.equal(page.form.value.reminderDate,'2026-10-25');
+  assert.equal(page.clockTime(task.reminderAt),'01:15');assert.equal(page.statusTime(task.reminderAt),'10月25日 01:15');
+  await page.save();assert.equal(updates[0].dueAt,task.dueAt);assert.equal(updates[0].reminderAt,task.reminderAt);
+});
 test('Deferred WeChat subscriptions never fetch templates, request consent or record receipts; inbox still loads',async()=>{
   let templateReads=0,requests=0,receipts=0;
   const context={...family,effectivePermissions:{notifications:'VIEW'}};

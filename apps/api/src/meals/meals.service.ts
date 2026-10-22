@@ -81,6 +81,25 @@ export class MealsService {
     });
   }
 
+  async removeDish(userId: string, householdId: string, mealId: string, recipeId: string, dto: MealVersionDto) {
+    return serializable(this.prisma, async tx => {
+      const member = await this.access.require(userId, householdId, 'meals', 'MANAGE', tx);
+      const meal = await loadMeal(tx, householdId, mealId); expectedMealVersion(meal, dto.expectedVersion);
+      if (meal.status !== 'DRAFT') throw new ConflictException('请先重新打开餐单，再移除本餐菜品');
+      const selections = meal.items.filter(item => item.recipeId === recipeId);
+      if (!selections.length) throw new BadRequestException('菜品不在本餐单中');
+      await tx.mealItem.deleteMany({ where: { mealId, recipeId } });
+      await tx.mealDish.deleteMany({ where: { mealId, recipeId } });
+      await tx.meal.update({ where: { id: mealId }, data: { version: { increment: 1 } } });
+      await tx.auditLog.create({ data: { householdId, actorMembershipId: member.id, action: 'MEAL_DISH_REMOVE', targetId: mealId, details: {
+        fromVersion: meal.version, toVersion: meal.version + 1, snapshotVersion: meal.snapshotVersion, recipeId,
+        recipeName: selections[0].recipe.name, cookMultiplier: meal.dishes.find(dish => dish.recipeId === recipeId)?.cookMultiplier.toString() ?? '1',
+        removedSelections: selections.map(item => ({ id: item.id, addedById: item.addedById, note: item.note })),
+      } } });
+      return { data: await mealView(tx, await loadMeal(tx, householdId, mealId)) };
+    });
+  }
+
   async transition(userId: string, householdId: string, mealId: string, action: 'confirm' | 'reopen' | 'start' | 'cancel', dto: MealVersionDto | ReopenMealDto) {
     return serializable(this.prisma, async tx => {
       const member = await this.access.require(userId, householdId, 'meals', 'MANAGE', tx);

@@ -310,6 +310,34 @@ test('D07: normal completion converts active members to durable read-only histor
   assert.ok(trip.members.every(row=>row.status==='HISTORY'));assert.equal((await call(member,'GET',`/trips/${trip.id}`)).status,200);
   assert.equal((await call(member,'POST',`/trips/${trip.id}/packing-items`,{name:'结束后新增'})).status,403);
 });
+test('D07/R02: completed and cancelled trips retain read-only business snapshots but owners can reduce historical access', async () => {
+  for (const endStatus of ['COMPLETED','CANCELLED']) {
+    const who=await owner(),member=await join(who,['CAMPER']);
+    let trip=(await call(who,'POST','/trips',{title:`终态减权${endStatus}`,startsAt:'2026-10-20T08:00:00+08:00'})).body.data;
+    trip=(await call(who,'POST',`/trips/${trip.id}/members`,{membershipId:member.memberId,canEdit:false,photoAdd:true})).body.data;
+    const group=(await call(who,'POST',`/trips/${trip.id}/preparation-groups`,{name:'朋友家',membershipIds:[member.memberId]})).body.data;
+    const item=(await call(who,'POST',`/trips/${trip.id}/packing-items`,{name:'天幕',groupId:group.id,responsibleMembershipId:member.memberId})).body.data;
+    for (const status of endStatus==='COMPLETED'?['PENDING','DEPARTING','COMPLETED']:['CANCELLED']) {
+      const ended=await call(who,'PATCH',`/trips/${trip.id}/status`,{expectedVersion:trip.version,status});assert.equal(ended.status,200,JSON.stringify(ended.body));trip=ended.body.data;
+    }
+    const memberRow=trip.members.find(row=>row.membershipId===member.memberId),ownerRow=trip.members.find(row=>row.membershipId===who.memberId);
+    const originalItem=await db.tripPackingItem.findUniqueOrThrow({where:{id:item.id}});
+    const originalGroup=await db.tripPreparationGroupMember.findMany({where:{groupId:group.id}});
+    const closed=await call(who,'PATCH',`/trips/${trip.id}/members/${member.memberId}`,{expectedVersion:memberRow.version,photoAdd:false});assert.equal(closed.status,200,JSON.stringify(closed.body));
+    const closedMember=closed.body.data.members.find(row=>row.membershipId===member.memberId);
+    assert.equal(closedMember.photoAdd,false);assert.equal(closedMember.status,memberRow.status);assert.equal(closedMember.leftAt,memberRow.leftAt);assert.equal(closedMember.canEdit,false);
+    const grant=await call(who,'PATCH',`/trips/${trip.id}/members/${member.memberId}`,{expectedVersion:closedMember.version,photoAdd:true});assert.equal(grant.status,409);
+    assert.equal((await call(member,'POST','/media/upload-intents',{ownerType:'TRIP',ownerId:trip.id,expectedOwnerVersion:trip.version,mimeType:'image/png',byteSize:TEST_PNG.length})).status,404);
+    assert.equal((await call(who,'PATCH',`/trips/${trip.id}/members/${who.memberId}`,{expectedVersion:ownerRow.version,status:'REVOKED'})).status,409,'Last owner remains protected after terminal state');
+    const revoked=await call(who,'PATCH',`/trips/${trip.id}/members/${member.memberId}`,{expectedVersion:closedMember.version,status:'REVOKED'});assert.equal(revoked.status,200,JSON.stringify(revoked.body));
+    assert.equal((await call(member,'GET',`/trips/${trip.id}`)).status,403);assert.equal((await call(member,'GET',`/trips/${trip.id}/photos`)).status,404);
+    assert.deepEqual(await db.tripPackingItem.findUniqueOrThrow({where:{id:item.id}}),originalItem);
+    assert.deepEqual(await db.tripPreparationGroupMember.findMany({where:{groupId:group.id}}),originalGroup);
+    assert.equal((await call(who,'POST',`/trips/${trip.id}/members`,{membershipId:member.memberId})).status,endStatus==='COMPLETED'?403:409);
+    assert.equal((await call(who,'POST',`/trips/${trip.id}/packing-items`,{name:'不得新增'})).status,endStatus==='COMPLETED'?403:409);
+  }
+});
+
 test('A11/A12/A13/A15: two votes count one dish; distinct dishes aggregate 500g/3 eggs with 150g shortage', async () => {
   const who=await owner(), member=await join(who);
   async function recipe(name,tomato,eggs) {

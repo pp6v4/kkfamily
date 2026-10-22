@@ -3,6 +3,7 @@ import { computed, ref } from 'vue';
 import { onHide, onShow, onUnload } from '@dcloudio/uni-app';
 import { getDashboardSummary, type DashboardSummary } from '../../services/family-api';
 import { canAccess, refreshAccess, type HouseholdContext } from '../../services/session';
+import { todayInShanghai } from '../../services/calendar-dates';
 
 const session=ref<HouseholdContext>(),summary=ref<DashboardSummary>(),loading=ref(false),rangeIndex=ref(0);
 let viewEpoch=0;
@@ -10,7 +11,10 @@ function clearPage(){viewEpoch++;session.value=undefined;summary.value=undefined
 const ranges=[{label:'近30天',days:30},{label:'近90天',days:90},{label:'近一年',days:365}];
 const taskText=computed(()=>{const tasks=summary.value?.tasks;if(!tasks)return'';return tasks.total?`${tasks.completed} / ${tasks.total} · ${Math.round((tasks.completionRate||0)*100)}%`:'暂无任务';});
 function message(error:unknown){return error instanceof Error?error.message:'读取看板失败';}
-function dateRange(){const to=new Date();to.setHours(0,0,0,0);to.setDate(to.getDate()+1);const from=new Date(to);from.setDate(from.getDate()-ranges[rangeIndex.value].days);return{from:from.toISOString(),to:to.toISOString()};}
+function dateRange(){
+  const day=86_400_000,to=Date.parse(`${todayInShanghai()}T00:00:00+08:00`)+day;
+  return{from:new Date(to-ranges[rangeIndex.value].days*day).toISOString(),to:new Date(to).toISOString()};
+}
 async function load(){clearPage();const epoch=viewEpoch,range=dateRange();loading.value=true;try{const context=await refreshAccess();if(epoch!==viewEpoch||!canAccess(context,'dashboard'))return;const result=await getDashboardSummary(range.from,range.to);if(epoch!==viewEpoch)return;session.value=context;summary.value=result;}catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});}finally{if(epoch===viewEpoch)loading.value=false;}}
 function changeRange(event:{detail:{value:string|number}}){rangeIndex.value=Number(event.detail.value);load();}
 function open(source:'recipes'|'meals'|'shopping'|'trips'|'tasks'){if(!canAccess(session.value,source))return;if(source==='meals'||source==='recipes')uni.switchTab({url:'/pages/meal/index'});else if(source==='shopping')uni.switchTab({url:'/pages/shopping/index'});else if(source==='trips')uni.switchTab({url:'/pages/camping/index'});else uni.navigateTo({url:'/pages/tasks/index'});}

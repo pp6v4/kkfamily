@@ -47,6 +47,10 @@ export class MealsController {
   dish(@CurrentUser() user: RequestUser, @Headers('x-household-id') house: string, @Param('id') id: string, @Param('recipeId') recipeId: string, @Body() dto: UpdateDishDto) {
     return this.mealsService.updateDish(user.userId, house, id, recipeId, dto);
   }
+  @Post(':id/dishes/:recipeId/remove')
+  removeDish(@CurrentUser() user: RequestUser, @Headers('x-household-id') house: string, @Param('id') id: string, @Param('recipeId') recipeId: string, @Body() dto: MealVersionDto) {
+    return this.mealsService.removeDish(user.userId, house, id, recipeId, dto);
+  }
   @Get(':id/snapshots')
   snapshots(@CurrentUser() user: RequestUser, @Headers('x-household-id') house: string, @Param('id') id: string) {
     return this.mealsService.snapshots(user.userId, house, id);

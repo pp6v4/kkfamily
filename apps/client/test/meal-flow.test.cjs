@@ -5,7 +5,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
 const vue = require('vue');
-const { parse, compileScript } = require('vue/compiler-sfc');
+const { parse, compileScript, compileTemplate } = require('vue/compiler-sfc');
+const { renderToString } = require('vue/server-renderer');
 const ROOT = path.resolve(__dirname, '..');
 class ApiError extends Error { constructor(message, statusCode) { super(message); this.statusCode = statusCode; } }
 const context = { householdId: 'house-a', membershipId: 'member-a', effectivePermissions: { recipes: 'MANAGE', meals: 'MANAGE', inventory: 'VIEW', shopping: 'EDIT' } };
@@ -36,6 +37,15 @@ function form(api = {}, access) {
   const page = evaluate(compileScript(descriptor, { id: 'meal-test', inlineTemplate: false }).content, deps, uni).default.setup({}, { expose() {} });
   page.date.value = '2026-09-01';
   return { page, life, toasts, modals, routes, setStored: value => stored = value, setTarget: value => calendarTarget = value };
+}
+async function renderPage(page) {
+  const filename = path.join(ROOT, 'src/pages/meal/index.vue'), { descriptor } = parse(fs.readFileSync(filename, 'utf8'), { filename });
+  const script = compileScript(descriptor, { id: 'meal-render', inlineTemplate: false });
+  const compiled = compileTemplate({ source: descriptor.template.content, filename, id: 'meal-render', compilerOptions: { bindingMetadata: script.bindings, isCustomElement: tag => ['view', 'text', 'image', 'input', 'button', 'picker', 'scroll-view'].includes(tag) } });
+  assert.deepEqual(compiled.errors, []);
+  const { render } = evaluate(compiled.code, { vue }, {});
+  const app = vue.createSSRApp({ setup: () => () => render({}, [], {}, vue.proxyRefs(page)) });
+  return renderToString(app);
 }
 
 test('Meal page clears all private data and drafts on hide/unload and ignores pending reads', async () => {
@@ -223,4 +233,87 @@ test('Latest history response wins and reopening uses the reason captured when c
   await life.show(); const pending = page.showHistory(); await page.showHistory(); old.resolve([{ version: 1 }]); await pending; assert.equal(page.history.value[0].version, 2);
   page.reopenReason.value = '  家人想换道菜  '; page.confirmAction('reopen'); page.reopenReason.value = '后来输入'; await modals[0].success({ confirm: true });
   assert.equal(sent.value.version, 4); assert.equal(sent.action, 'reopen'); assert.equal(sent.reason, '家人想换道菜');
+});
+
+test('R01 manager explicitly removes an archived dish chosen by others only after confirmation and reloads the actual menu', async () => {
+  const selected = { ...meal.menu[0], recipe: { ...recipe, status: 'ARCHIVED' }, wantedBy: [{ membershipId: 'member-b', nickname: '家人' }, { membershipId: 'member-c', nickname: '朋友' }] };
+  let storedMeal = { ...meal, status: 'DRAFT', menu: [selected] }; const writes = [];
+  const { page, life, modals } = form({ listRecipes: async () => [], listMeals: async () => [storedMeal], removeMealDish: async (target, recipeId) => { writes.push({ mealId: target.id, version: target.version, recipeId }); storedMeal = { ...storedMeal, version: 5, items: [], menu: [] }; return storedMeal; } });
+  await life.show(); page.switchView('menu'); page.confirmRemoveDish(recipe.id);
+  assert.equal(writes.length, 0); assert.match(modals[0].content, /所有人/); assert.match(modals[0].content, /炒蛋/);
+  await modals[0].success({ confirm: true });
+  assert.deepEqual(writes, [{ mealId: 'meal-a', version: 4, recipeId: 'recipe-a' }]); assert.equal(page.meal.value.version, 5); assert.equal(page.mealItems.value.length, 0);
+});
+
+test('R01 removal rejects ordinary editors and locked meals and rechecks permission, lifecycle and meal version after the dialog', async () => {
+  for (const status of ['CONFIRMED', 'COOKING', 'COMPLETED', 'CANCELLED']) {
+    const { page, life, modals } = form({ listMeals: async () => [{ ...meal, status }] }); await life.show(); page.confirmRemoveDish(recipe.id); assert.equal(modals.length, 0);
+  }
+  for (const change of ['ordinary', 'revoke', 'version', 'hide', 'cancel']) {
+    let writes = 0; const { page, life, modals } = form({ listMeals: async () => [{ ...meal, status: 'DRAFT' }], removeMealDish: async () => writes++ });
+    await life.show();
+    if (change === 'ordinary') { page.session.value = { ...context, effectivePermissions: { ...context.effectivePermissions, meals: 'EDIT' } }; page.confirmRemoveDish(recipe.id); assert.equal(modals.length, 0); continue; }
+    page.confirmRemoveDish(recipe.id);
+    if (change === 'revoke') page.session.value = { ...context, effectivePermissions: { ...context.effectivePermissions, meals: 'EDIT' } };
+    if (change === 'version') page.meal.value = { ...page.meal.value, version: 5 };
+    if (change === 'hide') life.hide();
+    await modals[0].success({ confirm: change !== 'cancel' }); assert.equal(writes, 0);
+  }
+});
+
+test('R01 removal conflict preserves the current menu and releases the write lock for retry', async () => {
+  const { page, life, modals } = form({ listMeals: async () => [{ ...meal, status: 'DRAFT' }], removeMealDish: async () => { throw new ApiError('餐单已被家人更新', 409); } });
+  await life.show(); page.confirmRemoveDish(recipe.id); await modals[0].success({ confirm: true });
+  assert.equal(page.meal.value.version, 4); assert.equal(page.mealItems.value[0].recipeId, recipe.id); assert.equal(page.writing.value, false); assert.equal(page.errorText.value, '餐单已被家人更新');
+});
+
+test('R01 meal API sends the captured meal version to the explicit dish-removal route', async () => {
+  const calls = [], session = { ...context, accessToken: 'fictional-test-token' };
+  const api = evaluate(fs.readFileSync(path.join(ROOT, 'src/services/family-api.ts'), 'utf8'), {
+    './session': { getSessionEpoch: () => 0, assertSessionEpoch() {}, ensureSession: async () => session },
+    './transport': { ApiError, rawRequest: async (...args) => { calls.push(JSON.parse(JSON.stringify(args))); return { ...meal, version: 5 }; } },
+    './config': { API_BASE_URL: 'https://example.invalid' },
+  }, {});
+  const result = await api.removeMealDish(meal, recipe.id);
+  assert.equal(result.version, 5); assert.equal(meal.version, 4);
+  assert.deepEqual(calls, [['/meals/meal-a/dishes/recipe-a/remove', 'POST', { expectedVersion: 4 }, { Authorization: 'Bearer fictional-test-token', 'X-Household-Id': 'house-a' }]]);
+});
+
+test('P06 a dining viewer opens complete read-only recipe details with every step in order and no editor navigation', async () => {
+  const viewer = { ...context, effectivePermissions: { recipes: 'VIEW', meals: 'EDIT' } };
+  const current = { ...recipe, ingredients: [{ ingredientId: 'egg', ingredient: { name: '鸡蛋' }, quantity: '2.125', unit: '个' }], seasonings: [{ name: '生抽' }], steps: ['先打散鸡蛋', '再倒入生抽', '最后翻炒装盘'] };
+  const { page, life, routes } = form({ listRecipes: async () => [current], listMeals: async () => [] }, async () => viewer);
+  await life.show(); page.openRecipeDetail(recipe.id, 'CURRENT');
+  assert.equal(page.recipeDetail.value.recipe.id, recipe.id); assert.equal(page.recipeDetail.value.sourceLabel, '当前菜谱 · 第3版');
+  assert.deepEqual(Array.from(page.recipeDetail.value.recipe.steps), current.steps);
+  const html = await renderPage(page);
+  assert.match(html, /当前菜谱 · 第3版/); assert.match(html, /鸡蛋/); assert.match(html, /2\.125/); assert.match(html, /生抽/);
+  let previous = -1; for (const step of current.steps) { const index = html.indexOf(step); assert.ok(index > previous, step); previous = index; }
+  assert.doesNotMatch(html, /编辑菜谱/); page.editRecipe(recipe.id); assert.equal(routes.length, 0);
+});
+
+test('P06 confirmed meal details render frozen ordered steps instead of the current recipe version', async () => {
+  const historical = { ...meal, menu: [{ ...meal.menu[0], recipe: { ...recipe, name: '当时的炒蛋', steps: ['旧做法第一步', '旧做法第二步'] } }] };
+  const { page, life } = form({ listRecipes: async () => [{ ...recipe, name: '现在的炒蛋', steps: ['新版做法不应出现在历史详情'] }], listMeals: async () => [historical] });
+  await life.show(); page.switchView('menu'); page.openRecipeDetail(recipe.id, 'MEAL');
+  assert.equal(page.recipeDetail.value.sourceLabel, '已确认菜单快照 · 第2版'); assert.equal(page.recipeDetail.value.recipe.name, '当时的炒蛋');
+  const html = await renderPage(page); assert.match(html, /已确认菜单快照 · 第2版/); assert.ok(html.indexOf('旧做法第一步') < html.indexOf('旧做法第二步')); assert.doesNotMatch(html, /新版做法不应出现在历史详情/);
+});
+
+test('P06 closing, leaving, switching identity or losing view permission cannot retain an open recipe detail', async () => {
+  for (const change of ['close', 'hide', 'identity', 'permission']) {
+    const { page, life, setStored } = form(); await life.show(); page.openRecipeDetail(recipe.id, 'CURRENT'); assert.ok(page.recipeDetail.value);
+    if (change === 'close') page.closeRecipeDetail();
+    if (change === 'hide') { life.hide(); page.openRecipeDetail(recipe.id, 'CURRENT'); }
+    if (change === 'identity') { setStored({ ...context, membershipId: 'other-member' }); page.openRecipeDetail(recipe.id, 'CURRENT'); }
+    if (change === 'permission') { page.session.value = { ...context, effectivePermissions: { meals: 'EDIT' } }; page.openRecipeDetail(recipe.id, 'CURRENT'); }
+    assert.equal(page.recipeDetail.value, undefined); assert.equal(page.detailTarget.value, undefined);
+    const html = await renderPage(page); assert.doesNotMatch(html, /当前菜谱 · 第3版/);
+  }
+});
+
+test('P06 recipe editors retain an independent edit action alongside the read-only details', async () => {
+  const { page, life, routes } = form(); await life.show(); page.switchView('recipes'); page.openRecipeDetail(recipe.id, 'CURRENT');
+  assert.ok(page.recipeDetail.value); assert.match(await renderPage(page), /编辑菜谱/);
+  page.closeRecipeDetail(); page.editRecipe(recipe.id); assert.deepEqual(routes, ['/pages/recipe-editor/index?id=recipe-a']);
 });

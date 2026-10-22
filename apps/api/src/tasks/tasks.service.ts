@@ -33,7 +33,10 @@ export class TasksService {
     if(task.version!==dto.expectedVersion)throw new ConflictException('待办已更新，请刷新后重试');const manage=permits(member.effectivePermissions,'tasks','MANAGE');
     if(!manage&&task.assigneeMembershipId!==member.id&&!(task.createdById===member.id&&task.status===TaskStatus.PENDING))throw new ForbiddenException('只有负责人、未开始待办的创建者或管理员可以修改');
     const assigneeId=dto.assigneeMembershipId===undefined?task.assigneeMembershipId:dto.assigneeMembershipId?.trim()||null;
-    if(assigneeId!==task.assigneeMembershipId&&!manage)throw new ForbiddenException('只有待办管理员可以重新分配负责人');if(assigneeId)await this.requireAssignee(tx,householdId,assigneeId);
+    if(assigneeId!==task.assigneeMembershipId){
+      if(!manage)throw new ForbiddenException('只有待办管理员可以重新分配负责人');
+      if(assigneeId)await this.requireAssignee(tx,householdId,assigneeId);
+    }
     const dates=this.dates(dto.dueAt===undefined?task.dueAt?.toISOString():dto.dueAt??undefined,dto.reminderAt===undefined?task.reminderAt?.toISOString():dto.reminderAt??undefined);
     const changed=await tx.task.updateMany({where:{id:taskId,householdId,archivedAt:null,version:dto.expectedVersion},data:{type:dto.type,title:dto.title?.trim(),description:dto.description===undefined?undefined:dto.description.trim()||null,assigneeMembershipId:assigneeId,dueAt:dates.dueAt,priority:dto.priority,reminderAt:dates.reminderAt,version:{increment:1}}});if(!changed.count)throw new ConflictException('待办已更新，请刷新后重试');
     await tx.taskHistory.create({data:{taskId,actorMembershipId:member.id,comment:'更新待办内容'}});const updated=await this.taskOrThrow(tx,householdId,taskId);await this.notifications.syncTask(tx,updated);await this.audit(tx,householdId,member.id,'TASK_UPDATE',taskId,{fromVersion:task.version,toVersion:task.version+1});return this.taskOrThrow(tx,householdId,taskId,true);
