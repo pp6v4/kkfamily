@@ -7,4 +7,11 @@ coverage/
 .DS_Store
 *.log
 .codex-tmp/
+# Local credentials and Windows reserved-name artifacts are never deliverables.
+*.pem
+*.key
+id_rsa*
+id_ed25519*
+.ssh/
+NUL
 

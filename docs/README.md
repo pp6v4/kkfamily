@@ -1,0 +1,63 @@
+# 文档导航
+
+接手阅读入口，整理于2026-10-22，包含2026-10-21源码批次。这里按“当前交接 → 需求和决定 → 设计 → 源码和验证 → 部署与历史证据”安排顺序；原设计、决定和历史记录继续保留。文件中的“当前”“最新”“已部署”等词只属于该文件标明的日期，不能跨时点理解。
+
+## 先读这三份
+
+| 顺序 | 文档 | 用途 |
+| --- | --- | --- |
+| 1 | [2026-10-21交接记录](handoff-20261021.md) | 当前工作区完成了什么、验证到哪里、哪些内容尚未部署，以及下一步交接边界 |
+| 2 | [开发指南](development-guide.md) | 本地准备、启动、检查、隔离验证及交付方式 |
+| 3 | [架构与数据](architecture-and-data.md) | 模块、权限、主要数据关系、客户端/API/部署边界；不代替真实schema |
+
+本轮新增源码已通过310项客户端测试、47项API单元测试及隔离目录微信编译；R01/P06等新增源码尚未部署，隔离编译没有覆盖原 `outputs/mp-weixin` 测试目录。此前0.1.1上传结果与本轮后续源码需分别看待；手机验收、平台审核和正式发布不能由测试通过推导。
+
+## 需求到验收的阅读链
+
+| 顺序 | 文档 | 阅读重点 |
+| --- | --- | --- |
+| 4 | [需求与实现追踪](requirements-traceability.md) | U01～U14、R01～R06、工程建议、延期、源码和证据的对应关系 |
+| 5 | [实施设计契约](design/contract-details.md) | D01～D15；明确区分U用户要求、E工程方案、V源码事实；后续决定覆盖旧方案 |
+| 6 | [交互设计](design/interaction-design.md) | 页面P编号、入口、状态和跨模块操作；P06只读做法和R01改单本轮补齐情况回看交接记录 |
+| 7 | [目标数据设计](design/target-data.md) | 原设计中的实体、关系和约束；当前真实字段以 `apps/api/prisma/schema.prisma` 及迁移为准 |
+| 8 | [验收设计](design/acceptance.md) | A01～A46的输入与预期，结合U14调整自动库存旧预期；用例存在不等于已执行 |
+| 9 | [2026-09-22验收证据索引](design/acceptance-evidence-20260922.md) | 历史自动断言覆盖与待验边界；本轮新增验证见交接记录，不复用9月数字冒充当前结果 |
+
+[设计目录原入口](design/README.md)保留早期设计资料组织方式。[设计基线](design-baseline.md)和[原型验证](design/prototype-verification.md)用于追溯当时的方案，不作为当前生产架构、部署状态或真实账号验收的唯一依据。
+
+## 决定记录：先看范围，再看实现细化
+
+| 类别 | 文档 |
+| --- | --- |
+| 明确用户确认 | [R01～R03确认与有限授权](design/decisions-20260831.md)、[U14不自动增减库存](design/decisions-20260901.md)、[R05微信订阅延期与R06批次交付](design/decisions-20260910.md) |
+| 账号和餐饮媒体实现 | [登录会话](design/decisions-20260903-auth-sessions.md)、[同域图片代理](design/decisions-20260901-media-proxy.md)、[挂载存储](design/decisions-20260918-mounted-media.md)、[图片隐私处理](design/decisions-20260921-image-privacy.md) |
+| 行程与模板实现 | [行程协作](design/decisions-20260902-trip-collaboration.md)、[地图路线住宿](design/decisions-20260902-trip-itinerary.md)、[模板历史](design/decisions-20260903-packing-template-history.md)、[照片独立权限](design/decisions-20260921-trip-photo-permission.md) |
+| 家庭功能实现 | [待办与请求](design/decisions-20260902-tasks.md)、[站内通知](design/decisions-20260903-notifications.md)、[公历纪念日](design/decisions-20260903-anniversaries.md)、[收藏](design/decisions-20260903-favorites.md)、[档案](design/decisions-20260903-archive.md)、[看板](design/decisions-20260903-dashboard.md) |
+
+“实现决定”记录具体工程落地，不自动表示用户已逐项批准所有技术细节。自动库存、微信订阅发送、道路导航等范围，以[需求追踪](requirements-traceability.md)及明确决定为准。
+
+## 本轮与历史工程证据
+
+| 文档 | 时点与用途 |
+| --- | --- |
+| [表单可用性修复与0.1.1上传](form-usability-fixes-20261021.md) | 2026-10-21按阶段记录276、288项回归、原生有限输入检查、编译产物事件验证与0.1.1上传回执；这些历史分批数字保留，本轮后续源码总检查见交接记录 |
+| [发布进展](release-progress-20261008.md) | 2026-10-08～09的0.1.0上传、体验版、合法域名及当时备案/提审状态；不把旧二维码、旧备案页或旧体验版标记当作当前有效结果 |
+| [代码与设计差异复核](implementation-gap-audit.md) | 最新原记录时点为2026-09-22；包含更早的开发过程和数据库验证索引，本轮发现及补齐以交接记录为准 |
+| [客户端检查建立过程](client-quality-checks.md) | 2026-09-10及后续批次的lint、类型检查、依赖和测试演进，不是当前重新安装或全部兼容性验证 |
+| [PATCH兼容处理](patch-compatibility-20260910.md) | 微信请求方式兼容的历史接口、源码和验证依据 |
+| [目的地优先流程](destination-first-20260917.md)、[露营总览](camping-overview-20260917.md) | 2026-09-17客户端流程与地图表现的实现记录；手机表现仍需实际验收 |
+| [正式资料正文归档](archive/20260831/README.md) | 2026-08-31时点8份Word的完整正文和表格转存，含来源校验值；原DOCX未重复提交。旧版v2.2是资料版本，不能当当前源码版本。后续decisions覆盖其已调整的范围 |
+
+## 部署、发布与历史运行证据
+
+实际操作先读[部署手册](../infra/deploy/README.md)和[隔离验证说明](../infra/verification/README.md)，再看[本轮交接](handoff-20261021.md)确认是否有新部署授权及配套源码。部署说明中的配置名称不代表配置值已设置，也不替代实时检查。
+
+| 历史材料 | 证明范围 |
+| --- | --- |
+| [2026-09-22部署](deployment-20260922.md) | 当日业务提交、迁移、备份、API/worker和部署验证；不是本轮R01/P06等源码已上线的证据 |
+| [2026-09-21隐私修复部署](deployment-20260921-privacy.md)、[当日部署](deployment-20260921.md) | 当日图片处理与媒体链路的发布证据 |
+| [2026-09-18部署](deployment-20260918.md)、[2026-09-10部署](deployment-20260910.md)、[2026-09-09部署](deployment-20260909.md) | 对应历史版本的变更和结果，按日期追溯，不覆盖后续记录 |
+| [2026-09-22发布就绪核对](release-readiness-20260922.md)、[9月14日首版检查](first-production-release-20260914.md) | 当时的门槛和待验项；真机与平台上传的先后顺序已在10月决定中调整，不能用旧顺序阻止后续明确授权 |
+| [网络恢复状态](network-recovery-status.md)、[升级验证](upgrade-verification.md)、[早期验证](verification-20260901.md) | 特定执行时点的网络、升级和隔离验证；不等于当前全部功能或生产服务健康 |
+
+未在此逐个列出的旧文件仍保留在 `docs/`。接手时以需求、决定、当前源码和有日期的实际输出交叉核对；新事实新增记录，既不覆盖历史，也不把旧状态改写成今日结论。

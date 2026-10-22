@@ -1,0 +1,79 @@
+{
+  "source_snapshot": "2026-08-31",
+  "format": "body-and-tables-markdown",
+  "layout_revalidated": false,
+  "documents": [
+    {
+      "source": "家庭生活协作微信小程序-初版部署方案-v1.3.docx",
+      "source_sha256": "fda1ebda4dea27d243968fe2c1bd965eddd8179d48b0ffb73be86eef14a1d4cf",
+      "markdown": "家庭生活协作微信小程序-初版部署方案-v1.3.md",
+      "markdown_sha256": "1471113f603510c6a11abbbc6b54e64d214b53862d4c112e16dea7c2a1d24110",
+      "paragraphs": 43,
+      "table_rows": 62,
+      "text_runs": 223
+    },
+    {
+      "source": "家庭生活协作微信小程序-技术选型与部署建议-v1.3.docx",
+      "source_sha256": "49f6311b5eb78ef29febbeec4d9840e3bcdae6852533a42cb57847a44031aef9",
+      "markdown": "家庭生活协作微信小程序-技术选型与部署建议-v1.3.md",
+      "markdown_sha256": "273599e423006f82c9dcc09e19136402955c6b248b0d085b0306478750a21cb9",
+      "paragraphs": 44,
+      "table_rows": 45,
+      "text_runs": 186
+    },
+    {
+      "source": "家庭生活协作微信小程序-数据库设计说明书-v2.2.docx",
+      "source_sha256": "c99fc388bf7f46c613cd393c42258c36e2fa13a6586cd9933617a40ada122b28",
+      "markdown": "家庭生活协作微信小程序-数据库设计说明书-v2.2.md",
+      "markdown_sha256": "1e8011c005be2c8bd7b41a9b56355babb3fa1ed43ee51b112ccd253f496f25f1",
+      "paragraphs": 54,
+      "table_rows": 127,
+      "text_runs": 425
+    },
+    {
+      "source": "家庭生活协作微信小程序-详细设计说明书-v2.2.docx",
+      "source_sha256": "d577f996b366baf7d9b505752962c1a3def3d9c2c783dda4bc63d55ea326376b",
+      "markdown": "家庭生活协作微信小程序-详细设计说明书-v2.2.md",
+      "markdown_sha256": "95063083e01382825dccb1ac237d39e4e9da5c31690b338eccefdf59f827f5f4",
+      "paragraphs": 116,
+      "table_rows": 161,
+      "text_runs": 607
+    },
+    {
+      "source": "家庭生活协作微信小程序-需求调研记录-v1.5.docx",
+      "source_sha256": "1296c98c91b9a82522a6a402faf2b5fbf00554a789adf2a0ec19550c529a36d1",
+      "markdown": "家庭生活协作微信小程序-需求调研记录-v1.5.md",
+      "markdown_sha256": "dddbe1bba68cbeefb923229fda8cbd969d8b597003abe504e6c4fc43286abf16",
+      "paragraphs": 36,
+      "table_rows": 45,
+      "text_runs": 172
+    },
+    {
+      "source": "家庭生活协作微信小程序-需求规格说明书-v2.2.docx",
+      "source_sha256": "55e395f20492b3d6a292398857b1f7ce922141583345aa9abe0e84f840276ac5",
+      "markdown": "家庭生活协作微信小程序-需求规格说明书-v2.2.md",
+      "markdown_sha256": "b56624410b2882c8c40dae903c35177dbbdcdf8d00da58ce5f261b7637402da9",
+      "paragraphs": 61,
+      "table_rows": 104,
+      "text_runs": 375
+    },
+    {
+      "source": "家庭生活协作微信小程序-需求追踪矩阵-v1.2.docx",
+      "source_sha256": "a112780cf893d2da2bec2fefcbe81e1fd4ef983f93422ba12eb24d1b9e9a907e",
+      "markdown": "家庭生活协作微信小程序-需求追踪矩阵-v1.2.md",
+      "markdown_sha256": "aac0fc313ba8087cb1834af2cf050264cb55700f18ed47bcc468e6c5be1516dd",
+      "paragraphs": 31,
+      "table_rows": 97,
+      "text_runs": 423
+    },
+    {
+      "source": "家庭生活协作微信小程序-总体设计说明书-v2.2.docx",
+      "source_sha256": "e19abd4dfafd1c9c932edb17770e2944b50ce82bd74c4598bf136909e0b94236",
+      "markdown": "家庭生活协作微信小程序-总体设计说明书-v2.2.md",
+      "markdown_sha256": "cbc8cf89110b7ea15d17ab65ccf0e931df501b4e0191610b448bdeecb2e26bd7",
+      "paragraphs": 45,
+      "table_rows": 81,
+      "text_runs": 303
+    }
+  ]
+}

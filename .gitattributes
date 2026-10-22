@@ -1,0 +1,2 @@
+# Preserve byte-level archive checksums on Windows and Linux clones.
+docs/archive/** text eol=lf

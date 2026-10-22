@@ -1,5 +1,7 @@
 # 扣扣的家设计基线
 
+2026-10-22协作提示：本文保留早期方案和覆盖表，不是当前部署报告。实际通知机制为PostgreSQL任务与独立worker，并非下方旧方案中的BullMQ；最新代码、范围、验证与发布状态先看[当前交接](handoff-20261021.md)、[实际架构](architecture-and-data.md)和[需求追踪](requirements-traceability.md)。
+
 设计基线日期：2026-08-31；2026-09-03已按当前源码刷新覆盖表。本文仍不代表真实微信账号或生产环境验收，实时差异以[code audit](implementation-gap-audit.md)为准。
 
 ## 用户要求与当前工程方案
