@@ -29,11 +29,11 @@ function fail(error:unknown){
   if(error instanceof ApiError&&[401,403].includes(error.statusCode)){++epoch;clearPrivate();loading.value=false;}
   errorText.value=error instanceof Error?error.message:'操作失败';uni.showToast({title:errorText.value,icon:'none'});
 }
-function quantityText(value:string|number|null,unit:string|null){return value===null?'数量待确认':Number(value)+(unit?' '+unit:'');}
+function quantityText(value:string|number|null,unit:string|null){return value===null?'数量待确认'+(unit?' · '+unit:''):Number(value)+(unit?' '+unit:'');}
 function stockText(item:InventoryItem){
   const label={PRESENT:'有',ABSENT:'无',UNKNOWN:'待确认'}[item.availability];
   if(item.ingredient.kind==='SEASONING')return label;
-  return item.quantity===null?label+' · 数量待确认':quantityText(item.quantity,item.unit);
+  return item.quantity===null?label+' · '+quantityText(item.quantity,item.unit):quantityText(item.quantity,item.unit);
 }
 async function readLists(token:number,owner:string,access:HouseholdContext){
   const [shopping,stock]=await Promise.all([canAccess(access,'shopping')?listShoppingLists():Promise.resolve([]),canAccess(access,'inventory')?listInventory():Promise.resolve([])]);

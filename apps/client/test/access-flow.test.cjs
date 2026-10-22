@@ -604,11 +604,66 @@ test('Camping successful creation opens the new trip with fresh packing data and
 
 test('Camping normal owner member and group writes refresh their corresponding visible data',async()=>{
   const calls=[];const updated={...sampleTrip,version:5,preparationGroups:[{id:'group-a',name:'我们家',members:[{membershipId:'member-a'}]}]};
-  const{page}=campingForm({addTripMember:async(trip,id)=>{calls.push(['member',trip,id]);return updated;},listTripCandidates:async()=>[{id:'next-candidate'}],createTripPreparationGroup:async(trip,name,ids)=>{calls.push(['group',trip,name,Array.from(ids)]);return{};},getTrip:async()=>updated});
+  const{page}=campingForm({addTripMember:async(trip,id)=>{calls.push(['member',trip,id]);return updated;},listTripCandidates:async()=>[{id:'next-candidate'}],createTripPreparationGroup:async(trip,name,ids)=>{calls.push(['group',trip,name,Array.from(ids)]);return{};},getTrip:async()=>updated,listTripPackingItems:async()=>[]});
   selectCamping(page);page.candidates.value=[{id:'friend-a'}];await page.addMemberByIndex({detail:{value:'0'}});
   assert.equal(page.selectedTrip.value.version,5);assert.equal(page.candidates.value[0].id,'next-candidate');
   page.groupName.value=' 我们家 ';page.groupMemberIds.value=['member-a'];await page.saveGroup();
   assert.deepEqual(calls,[['member','trip-a','friend-a'],['group','trip-a','我们家',['member-a']]]);assert.equal(page.groupName.value,'');assert.equal(page.tripBusy.value,false);
+});
+
+test('Camping preparation-group edits reread packing names and preserve filter IDs, item versions and assignments',async()=>{
+  const friend={...sampleTrip.members[0],membershipId:'friend-a',tripRole:'MEMBER'};
+  const group={id:'group-a',name:'我们家',version:2,members:[{membershipId:'member-a'}]};
+  const trip={...sampleTrip,members:[sampleTrip.members[0],friend],preparationGroups:[group]};
+  const item={id:'item-a',version:7,name:'帐篷',groupId:group.id,group:{id:group.id,name:group.name},responsibleMembershipId:'member-a',status:'PENDING'};
+  const savedGroup={...group,name:'朋友家',version:3,members:[{membershipId:'member-a'},{membershipId:'friend-a'}]};
+  const savedTrip={...trip,preparationGroups:[savedGroup]},savedItem={...item,group:{id:group.id,name:savedGroup.name}};
+  const calls=[];const{page}=campingForm({
+    updateTripPreparationGroup:async(id,row,name,ids)=>{calls.push(['write',id,row.id,row.version,name,Array.from(ids)]);return savedGroup;},
+    getTrip:async id=>{calls.push(['trip-read',id]);return savedTrip;},
+    listTripPackingItems:async id=>{calls.push(['packing-read',id]);return[savedItem];},
+  });
+  selectCamping(page,trip);page.packingItems.value=[item];page.packingGroupFilter.value=group.id;page.packingPersonFilter.value='member-a';page.packingStateFilter.value='PENDING';
+  page.editGroup(group);page.groupName.value=' 朋友家 ';page.groupMemberIds.value=['member-a','friend-a'];await page.saveGroup();
+  assert.deepEqual(calls,[['write','trip-a','group-a',2,'朋友家',['member-a','friend-a']],['trip-read','trip-a'],['packing-read','trip-a']]);
+  assert.equal(page.selectedTrip.value.preparationGroups[0].name,'朋友家');assert.equal(page.packingItems.value[0].group.name,'朋友家');
+  assert.deepEqual(Array.from(page.selectedTrip.value.preparationGroups[0].members,row=>row.membershipId),['member-a','friend-a']);
+  assert.equal(page.packingGroupFilter.value,'group-a');assert.equal(page.packingGroupOptions.value.find(row=>row.id==='group-a').name,'朋友家');
+  assert.equal(page.visiblePackingItems.value[0].id,'item-a');assert.equal(page.packingItems.value[0].version,7);assert.equal(page.packingItems.value[0].groupId,'group-a');assert.equal(page.packingItems.value[0].responsibleMembershipId,'member-a');
+  assert.equal(item.group.name,'我们家');assert.equal(group.name,'我们家');assert.equal(page.tripBusy.value,false);
+});
+
+test('Camping saved preparation group reports a reread failure without claiming a failed write or resubmitting it',async()=>{
+  const group={id:'group-a',name:'我们家',version:2,members:[{membershipId:'member-a'}]};
+  const trip={...sampleTrip,preparationGroups:[group]},item={id:'item-a',version:7,groupId:group.id,group:{id:group.id,name:group.name},status:'PENDING'};
+  let writes=0;const{page,errors}=campingForm({updateTripPreparationGroup:async()=>{writes++;return{...group,name:'朋友家',version:3};},getTrip:async()=>({...trip,preparationGroups:[{...group,name:'朋友家',version:3}]}),listTripPackingItems:async()=>{throw Error('网络读取失败');}});
+  selectCamping(page,trip);page.packingItems.value=[item];page.editGroup(group);page.groupName.value='朋友家';await page.saveGroup();
+  assert.equal(writes,1);assert.match(errors.at(-1),/小组已保存.*刷新失败.*网络读取失败/);assert.equal(page.tripBusy.value,false);
+  assert.equal(page.packingItems.value[0].group.name,'我们家');assert.equal(page.editingGroupId.value,'');
+});
+
+for(const interruption of ['hide','different-trip']){
+  test(`Camping preparation-group rereads cannot refill the old trip after ${interruption}`,async()=>{
+    const group={id:'group-a',name:'我们家',version:2,members:[{membershipId:'member-a'}]},trip={...sampleTrip,preparationGroups:[group]};
+    const tripRead=pendingValue(),packingRead=pendingValue(),calls=[];
+    const other={...sampleTrip,id:'trip-b',title:'另一趟行程',preparationGroups:[]};
+    const{page,lifecycle}=campingForm({updateTripPreparationGroup:async()=>{calls.push('write');return{...group,name:'朋友家'};},getTrip:id=>{calls.push(`trip:${id}`);return id==='trip-a'?tripRead.promise:Promise.resolve(other);},listTripPackingItems:id=>{calls.push(`packing:${id}`);return id==='trip-a'?packingRead.promise:Promise.resolve([{id:'other-item',version:4}]);},listTripCandidates:async()=>[]});
+    selectCamping(page,trip);page.editGroup(group);page.groupName.value='朋友家';const saving=page.saveGroup();await new Promise(setImmediate);
+    if(interruption==='hide')lifecycle.hide();else await page.openTrip('trip-b');
+    tripRead.resolve({...trip,preparationGroups:[{...group,name:'朋友家'}]});packingRead.resolve([{id:'stale-item',group:{name:'朋友家'}}]);await saving;
+    assert.equal(calls.filter(row=>row==='write').length,1);assert.ok(calls.includes('packing:trip-a'));
+    if(interruption==='hide'){assert.equal(page.selectedTrip.value,undefined);assert.equal(page.packingItems.value.length,0);}else{assert.equal(page.selectedTrip.value.id,'trip-b');assert.equal(page.packingItems.value[0].id,'other-item');}
+    assert.equal(page.tripBusy.value,false);
+  });
+}
+
+test('Camping preparation-group reread access loss clears private data and rejects a later packing response',async()=>{
+  const group={id:'group-a',name:'我们家',version:2,members:[{membershipId:'member-a'}]},trip={...sampleTrip,preparationGroups:[group]};
+  const packingRead=pendingValue();let writes=0;
+  const{page,errors}=campingForm({updateTripPreparationGroup:async()=>{writes++;return{...group,name:'朋友家'};},getTrip:async()=>{throw new ApiError('访问已撤销',403);},listTripPackingItems:()=>packingRead.promise});
+  selectCamping(page,trip);page.packingItems.value=[{id:'old-item'}];page.editGroup(group);page.groupName.value='朋友家';await page.saveGroup();
+  packingRead.resolve([{id:'late-item'}]);await new Promise(setImmediate);
+  assert.equal(writes,1);assert.equal(page.selectedTrip.value,undefined);assert.equal(page.packingItems.value.length,0);assert.match(errors.at(-1),/访问状态已变化/);
 });
 
 test('Camping completing a trip retains photo eligibility while disabling itinerary and packing changes',async()=>{
