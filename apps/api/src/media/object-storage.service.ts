@@ -34,21 +34,22 @@ export class ObjectStorageService {
     }
   }
 
-  private unavailable(): never { throw new ServiceUnavailableException('图片存储尚未配置'); }
+  private unconfigured(): never { throw new ServiceUnavailableException('图片存储尚未配置'); }
+  private unavailable(upload = false): never { throw new ServiceUnavailableException(upload ? '图片上传失败，请稍后重试' : '图片存储暂时不可用，请稍后重试'); }
   assertAvailable(){
-    if(this.driver==='disabled')this.unavailable();
-    if(this.mounted) { try { this.mounted.assertAvailable(); } catch { this.unavailable(); } }
+    if(this.driver==='disabled')this.unconfigured();
+    if(this.mounted) { try { this.mounted.assertAvailable(); } catch(error) { this.logger.error(`Mounted availability failed: ${this.errorCode(error)}`); this.unavailable(); } }
   }
 
   async put(key: string, body: Buffer, mimeType: string, checksumSha256: string) {
     if (this.mounted) {
       try { await this.mounted.put(key, body, mimeType, checksumSha256); return; }
-      catch (error) { this.logger.error(`Mounted put failed: ${this.errorCode(error)}`); this.unavailable(); }
+      catch (error) { this.logger.error(`Mounted put failed: ${this.errorCode(error)}`); this.unavailable(true); }
     }
     if (this.driver === 'memory') { this.memory.set(key, { body: Buffer.from(body), bytes: body.length, mimeType, checksumSha256 }); return; }
-    if (!this.cos || !this.bucket || !this.region) this.unavailable();
+    if (!this.cos || !this.bucket || !this.region) this.unconfigured();
     try { await this.cos.putObject({ Bucket: this.bucket, Region: this.region, Key: key, Body: body, ContentLength: body.length, ContentType: mimeType, ACL: 'private', 'x-cos-meta-sha256': checksumSha256 }); }
-    catch (error) { this.logger.error(`COS putObject failed: ${this.errorCode(error)}`); this.unavailable(); }
+    catch (error) { this.logger.error(`COS putObject failed: ${this.errorCode(error)}`); this.unavailable(true); }
   }
 
   async head(key: string, expectedChecksum?: string): Promise<StoredObjectHead> {
@@ -57,7 +58,7 @@ export class ObjectStorageService {
       catch (error) { this.logger.error(`Mounted head failed: ${this.errorCode(error)}`); this.unavailable(); }
     }
     if (this.driver === 'memory') { const item=this.memory.get(key); if(!item)this.unavailable(); return { bytes:item.bytes,mimeType:item.mimeType,checksumSha256:item.checksumSha256 }; }
-    if (!this.cos || !this.bucket || !this.region) this.unavailable();
+    if (!this.cos || !this.bucket || !this.region) this.unconfigured();
     try {
       const result=await this.cos.headObject({ Bucket:this.bucket,Region:this.region,Key:key }); const headers=result.headers ?? {};
       return { bytes:Number(headers['content-length']),mimeType:String(headers['content-type']??''),checksumSha256:String(headers['x-cos-meta-sha256']??'') };
@@ -70,10 +71,13 @@ export class ObjectStorageService {
       catch (error) { this.logger.error(`Mounted get failed: ${this.errorCode(error)}`); this.unavailable(); }
     }
     if (this.driver === 'memory') { const item=this.memory.get(key); if(!item)this.unavailable(); return {body:Buffer.from(item.body),mimeType:item.mimeType}; }
-    if (!this.cos || !this.bucket || !this.region) this.unavailable();
+    if (!this.cos || !this.bucket || !this.region) this.unconfigured();
     try { const result=await this.cos.getObject({Bucket:this.bucket,Region:this.region,Key:key});return {body:result.Body,mimeType:String(result.headers?.['content-type']??'application/octet-stream')}; }
     catch(error){this.logger.error(`COS getObject failed: ${this.errorCode(error)}`);this.unavailable();}
   }
 
-  private errorCode(error: unknown) { return typeof error === 'object' && error && 'code' in error ? String(error.code) : 'unknown'; }
+  private errorCode(error: unknown) {
+    const code = typeof error === 'object' && error && 'code' in error ? error.code : undefined;
+    return typeof code === 'string' && /^[a-zA-Z0-9_]{1,64}$/.test(code) ? code : 'unknown';
+  }
 }

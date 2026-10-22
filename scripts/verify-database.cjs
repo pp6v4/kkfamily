@@ -20,6 +20,11 @@ function docker(args, env, logFile) {
 }
 
 async function run(execDocker = docker) {
+  const networkSubnet = process.env.VERIFY_NETWORK_SUBNET;
+  if (networkSubnet !== undefined) {
+    const match = /^10\.254\.(0|[1-9]\d{0,2})\.0\/24$/.exec(networkSubnet);
+    if (!match || match[0] !== networkSubnet || Number(match[1]) > 255) throw new Error('VERIFY_NETWORK_SUBNET must be exactly 10.254.N.0/24 with N from 0 to 255');
+  }
   const id = randomBytes(8).toString('hex');
   const project = `kk-verify-${id}`;
   const output = path.join(root, '.codex-tmp', 'db-verification', id);
@@ -28,12 +33,14 @@ async function run(execDocker = docker) {
   const base = ['compose', '--env-file', path.join(root, 'infra/verification/empty.env'), '-p', project,
     '-f', path.join(root, 'infra/verification/compose.yml')];
   if (process.env.VERIFY_MOUNTED_MEDIA === 'yes') base.push('-f', path.join(root, 'infra/verification/compose.mounted-media.yml'));
+  if (networkSubnet !== undefined) base.push('-f', path.join(root, 'infra/verification/compose.subnet.yml'));
   const revision = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: root, encoding: 'utf8', windowsHide: true });
   const changes = spawnSync('git', ['status', '--porcelain'], { cwd: root, encoding: 'utf8', windowsHide: true });
   const report = { project, mode: execDocker === docker ? 'docker' : 'simulated',
     sourceRevision: revision.status === 0 ? revision.stdout.trim() : null,
     worktreeStatus: changes.status === 0 ? changes.stdout.trim() : null,
     mountedMedia: process.env.VERIFY_MOUNTED_MEDIA === 'yes',
+    networkSubnet: networkSubnet ?? null,
     startedAt: new Date().toISOString(), finishedAt: null, status: 'running', phases: [] };
   const reportFile = path.join(output, 'result.json');
   const record = () => writeFileSync(reportFile, JSON.stringify(report, null, 2) + '\n');

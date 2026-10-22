@@ -36,8 +36,17 @@ function allowRow(total: number, limit: number, label: string) {
   uni.showToast({ title: `${label}最多添加${limit}项`, icon: 'none' }); return false;
 }
 function addIngredient() { if (ready() && allowRow(ingredients.value.length, 100, '食材')) ingredients.value.push({ name: '', quantity: '', unit: 'g' }); }
-function removeIngredient(index: number) { if (ready() && ingredients.value.length > 1) ingredients.value.splice(index, 1); }
+function removeIngredient(index: number) {
+  if (!ready() || !Number.isInteger(index) || index < 0 || index >= ingredients.value.length) return;
+  if (ingredients.value.length > 1) ingredients.value.splice(index, 1);
+  else ingredients.value[0] = { name: '', quantity: '', unit: 'g' };
+}
 function addSeasoning() { if (ready() && allowRow(seasonings.value.length, 40, '调料')) seasonings.value.push(''); }
+function removeSeasoning(index: number) {
+  if (!ready() || !Number.isInteger(index) || index < 0 || index >= seasonings.value.length) return;
+  if (seasonings.value.length > 1) seasonings.value.splice(index, 1);
+  else seasonings.value[0] = '';
+}
 function addStep() { if (ready() && allowRow(steps.value.length, 50, '做法步骤')) steps.value.push(''); }
 function removeStep(index: number) { if (ready() && steps.value.length > 1) steps.value.splice(index, 1); }
 function pickCategory(event: { detail: { value: string } }) { if (ready()) categoryIndex.value = Number(event.detail.value); }
@@ -349,12 +358,12 @@ onUnload(() => { disposed = true; cancelNative(); hide(); });
       <view class="section">
         <text class="title">食材 · 至少一种</text><text class="cover-note">填写这道菜要用什么。数量不确定可以留空，单位可以用“个、克、把”。</text>
         <view v-for="(item,index) in ingredients" :key="index" class="ingredient-card">
-          <view class="row"><text class="field-label">食材 {{ index + 1 }}</text><text v-if="ingredients.length>1" class="remove" @tap="removeIngredient(index)">移除</text></view>
+          <view class="row"><text class="field-label">食材 {{ index + 1 }}</text><button class="remove" :disabled="locked" @tap="removeIngredient(index)">{{ingredients.length>1?'移除':'清空'}}</button></view>
           <input v-model="item.name" :disabled="locked" maxlength="60" class="input" placeholder="食材名称，例如：鸡蛋" placeholder-class="input-placeholder" />
           <view class="row amounts"><view><text class="field-label">数量 · 可不填</text><input v-model="item.quantity" :disabled="locked" type="digit" class="input" placeholder="例如：2" placeholder-class="input-placeholder" /></view><view><text class="field-label">单位 · 必填</text><input v-model="item.unit" :disabled="locked" maxlength="12" class="input" placeholder="例如：个、克、把" placeholder-class="input-placeholder" /></view></view>
         </view><text class="add" @tap="addIngredient">＋ 再加一种食材</text>
       </view>
-      <view class="section"><text class="title">调料 · 可不填</text><text class="cover-note">只记名称，不需要用量，例如：盐、生抽、食用油。</text><view v-for="(_,index) in seasonings" :key="index"><text class="field-label">调料 {{ index + 1 }}</text><input v-model="seasonings[index]" :disabled="locked" maxlength="60" class="input" placeholder="例如：生抽" placeholder-class="input-placeholder" /></view><text class="add" @tap="addSeasoning">＋ 再加一种调料</text></view>
+      <view class="section"><text class="title">调料 · 可不填</text><text class="cover-note">只记名称，不需要用量，例如：盐、生抽、食用油。</text><view v-for="(_,index) in seasonings" :key="index"><view class="row"><text class="field-label">调料 {{ index + 1 }}</text><button class="remove" :disabled="locked" @tap="removeSeasoning(index)">{{seasonings.length>1?'移除':'清空'}}</button></view><input v-model="seasonings[index]" :disabled="locked" maxlength="60" class="input" placeholder="例如：生抽" placeholder-class="input-placeholder" /></view><text class="add" @tap="addSeasoning">＋ 再加一种调料</text></view>
       <view class="section"><text class="title">做法 · 至少一步</text><view v-for="(_,index) in steps" :key="index" class="step"><view class="row"><text class="field-label">第 {{ index + 1 }} 步</text><text v-if="steps.length>1" class="remove" @tap="removeStep(index)">移除</text></view><textarea v-model="steps[index]" :disabled="locked" maxlength="4000" class="textarea" :placeholder="index===0?'例如：番茄切块，鸡蛋打散备用。':'写下接着怎么做，例如：倒入鸡蛋翻炒至凝固。'" placeholder-class="input-placeholder" /></view><text class="add" @tap="addStep">＋ 再加一个步骤</text></view>
       <view class="section"><text class="title">成品图片</text><image v-if="coverPreview" class="cover" :src="coverPreview" mode="aspectFill" @error="coverPreview='';coverError='封面预览暂不可用，点击重新加载'" /><view v-else class="cover-empty">🍲<text>{{ coverAssetId ? '已有封面，预览暂不可用' : '选一张让家人想吃的成品图' }}</text></view><text v-if="coverError" class="cover-note" @tap="reloadCover">{{ coverError }}</text><view class="cover-action" :class="{disabled:locked}" @tap="chooseCover">{{coverUploading?'正在处理封面…':coverAssetId||pendingCover?'更换封面':'选择封面'}}</view><text class="cover-note">{{pendingCover?'已选择图片，保存菜谱时上传。':'草稿可以暂不放图，发布到点餐菜单前需要成品图。新菜选图不会提前保存或校验内容。'}}</text></view>
       <view class="save" :class="{ disabled: locked }" @tap="save">{{ saving ? '保存中…' : recipeId ? '保存修改' : '保存草稿' }}</view>
@@ -363,7 +372,7 @@ onUnload(() => { disposed = true; cancelNative(); hide(); });
 </template>
 
 <style scoped>
-.page{min-height:100vh;padding:26rpx 28rpx 48rpx;background:#f8f4ec}.section{margin-bottom:20rpx;padding:24rpx;border-radius:24rpx;background:#fffdf8}.title{display:block;margin-bottom:16rpx;font-size:29rpx;font-weight:600;color:#5a4e40}.input,.textarea{box-sizing:border-box;width:100%;margin-top:12rpx;border:2rpx solid #eee4d7;border-radius:15rpx;background:#fff;font-size:28rpx;color:#493f35}.input{height:88rpx;min-height:88rpx;padding:0 20rpx;line-height:44rpx;min-width:0}.picker{display:flex;align-items:center;justify-content:space-between;color:#555}.picker text{font-size:23rpx;color:#a78a60}.row{display:flex;align-items:center;justify-content:space-between;gap:16rpx}.amounts>view{flex:1;min-width:0}.remove{padding:8rpx;color:#ad715a;font-size:23rpx}.step{margin-top:20rpx}.textarea{height:190rpx;padding:20rpx;line-height:42rpx}.add{display:inline-block;margin-top:24rpx;padding:10rpx 0;color:#a56b25;font-size:26rpx}.save{margin-top:32rpx;padding:25rpx;border-radius:24rpx;background:#d99c48;color:#fff;text-align:center;font-size:29rpx}.disabled{opacity:.55}
+.page{min-height:100vh;padding:26rpx 28rpx 48rpx;background:#f8f4ec}.section{margin-bottom:20rpx;padding:24rpx;border-radius:24rpx;background:#fffdf8}.title{display:block;margin-bottom:16rpx;font-size:29rpx;font-weight:600;color:#5a4e40}.input,.textarea{box-sizing:border-box;width:100%;margin-top:12rpx;border:2rpx solid #eee4d7;border-radius:15rpx;background:#fff;font-size:28rpx;color:#493f35}.input{height:88rpx;min-height:88rpx;padding:0 20rpx;line-height:44rpx;min-width:0}.picker{display:flex;align-items:center;justify-content:space-between;color:#555}.picker text{font-size:23rpx;color:#a78a60}.row{display:flex;align-items:center;justify-content:space-between;gap:16rpx}.amounts>view{flex:1;min-width:0}.remove{box-sizing:border-box;display:inline-flex;align-items:center;justify-content:center;min-height:88rpx;min-width:88rpx;margin:0;padding:0 16rpx;border:0;border-radius:14rpx;background:#f8e9df;color:#ad715a;font-size:26rpx;line-height:38rpx}.step{margin-top:20rpx}.textarea{height:190rpx;padding:20rpx;line-height:42rpx}.add{display:inline-block;margin-top:24rpx;padding:10rpx 0;color:#a56b25;font-size:26rpx}.save{margin-top:32rpx;padding:25rpx;border-radius:24rpx;background:#d99c48;color:#fff;text-align:center;font-size:29rpx}.disabled{opacity:.55}
 .intro{margin-bottom:24rpx;padding:10rpx 4rpx;color:#8b795f;font-size:24rpx;line-height:1.8}.intro-title{display:block;margin-bottom:8rpx;font-size:36rpx;font-weight:600;color:#584b38}.field-label{display:block;margin-top:20rpx;color:#6c5d4b;font-size:25rpx}.ingredient-card{margin-top:18rpx;padding:0 18rpx 20rpx;border-radius:18rpx;background:#f8f3e9}.input-placeholder{color:#a59b8c}
 .cover{width:100%;height:330rpx;border-radius:20rpx}.cover-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:260rpx;border-radius:20rpx;background:#f8ead4;color:#8c6c43;font-size:68rpx}.cover-empty text{margin-top:12rpx;font-size:24rpx}.cover-action{margin-top:16rpx;padding:19rpx;border-radius:16rpx;background:#e8b86f;color:#fff;text-align:center;font-size:26rpx}.cover-note{display:block;margin-top:14rpx;color:#988b7b;font-size:22rpx;line-height:1.6}
 </style>

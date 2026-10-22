@@ -39,3 +39,58 @@ test('Verification uses one unique isolated project, preserves test failure and 
   assert.equal(readFileSync(path.join(result.output, 'result.json'), 'utf8').includes(password), false);
   assert.equal(calls.some(args => args.includes('down') || args.includes('--volumes')), false);
 });
+
+async function withNetworkSubnet(value, action) {
+  const previous = process.env.VERIFY_NETWORK_SUBNET;
+  if (value === undefined) delete process.env.VERIFY_NETWORK_SUBNET;
+  else process.env.VERIFY_NETWORK_SUBNET = value;
+  try { return await action(); }
+  finally {
+    if (previous === undefined) delete process.env.VERIFY_NETWORK_SUBNET;
+    else process.env.VERIFY_NETWORK_SUBNET = previous;
+  }
+}
+
+test('An invalid explicit verification subnet fails before every Docker invocation', async () => {
+  for (const subnet of ['', ' ', '10.254.256.0/24', '10.254.-1.0/24', '10.254.01.0/24', '10.254.240.1/24', '10.254.240.0/23', '10.253.240.0/24', '172.18.0.0/24', '0.0.0.0/0', '10.254.240.0/24 ', '10.254.240.0/24\n']) {
+    await withNetworkSubnet(subnet, async () => {
+      let calls = 0;
+      await assert.rejects(run(async () => { calls++; return 0; }), /VERIFY_NETWORK_SUBNET/);
+      assert.equal(calls, 0, JSON.stringify(subnet));
+    });
+  }
+});
+
+test('Explicit verification subnet reaches all three Compose operations and the nonsecret report without cleanup', async () => {
+  for (const subnet of ['10.254.0.0/24', '10.254.240.0/24', '10.254.255.0/24']) {
+    await withNetworkSubnet(subnet, async () => {
+      const calls = [];
+      const result = await run(async (args, env) => { calls.push({ args, subnet: env.VERIFY_NETWORK_SUBNET }); return args.includes('up') ? 1 : 0; });
+      assert.equal(result.code, 1); assert.equal(result.report.status, 'failed');
+      assert.equal(result.report.networkSubnet, subnet);
+      const recorded = JSON.parse(readFileSync(path.join(result.output, 'result.json'), 'utf8'));
+      assert.equal(recorded.networkSubnet, subnet);
+      const composeCalls = calls.filter(({ args }) => args.includes('-f'));
+      assert.equal(composeCalls.length, 3);
+      for (const call of composeCalls) {
+        const files = call.args.flatMap((argument, index) => argument === '-f' ? [call.args[index + 1]] : []);
+        assert.equal(files.filter(file => /verification[\\/]compose\.subnet\.yml$/.test(file)).length, 1);
+        assert.match(files[0], /verification[\\/]compose\.yml$/);
+        assert.equal(call.subnet, subnet); assert.equal(call.args[call.args.indexOf('-p') + 1], result.report.project);
+      }
+      assert.equal(calls.some(({ args }) => args.some(argument => ['prune', 'down', 'rm', '--volumes'].includes(argument))), false);
+    });
+  }
+});
+
+test('Unset verification subnet preserves Docker default IPAM without adding an override', async () => {
+  await withNetworkSubnet(undefined, async () => {
+    const calls = [];
+    const result = await run(async (args, env) => { calls.push({ args, subnet: env.VERIFY_NETWORK_SUBNET }); return 0; });
+    assert.equal(result.code, 0); assert.equal(result.report.status, 'passed'); assert.equal(result.report.networkSubnet, null);
+    assert.equal(calls.filter(({ args }) => args.includes('-f')).length, 3);
+    assert.ok(calls.every(call => call.subnet === undefined && !call.args.some(argument => argument.includes('compose.subnet.yml'))));
+    const recorded = JSON.parse(readFileSync(path.join(result.output, 'result.json'), 'utf8'));
+    assert.equal(recorded.networkSubnet, null);
+  });
+});

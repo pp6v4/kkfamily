@@ -25,3 +25,9 @@ INSERT INTO "TripMember" ("tripId","membershipId","canEdit","joinedAt") VALUES
 INSERT INTO "CalendarEvent" ("id","householdId","type","title","startsAt","createdById","updatedAt") VALUES
 ('legacy-event-night','legacy-house','ANNIVERSARY','虚构跨日纪念日','2026-09-01 23:30:00','legacy-user-a','2026-09-01'),
 ('legacy-event-leap','legacy-house','ANNIVERSARY','虚构闰日纪念日','2024-02-28 16:00:00','legacy-user-a','2026-09-01');
+
+-- Rows without a resolvable creator must remain legacy data, not disappear.
+INSERT INTO "CalendarEvent" ("id","householdId","type","title","startsAt","createdById","updatedAt") VALUES
+('legacy-event-orphan','legacy-house','ANNIVERSARY','虚构未知创建者纪念日','2026-09-08 16:00:00','unknown-legacy-user','2026-09-01');
+INSERT INTO "CalendarEvent" ("id","householdId","type","title","startsAt","sourceType","sourceId","createdById","updatedAt") VALUES
+('legacy-meal-projection','legacy-house','MEAL','虚构餐点投影','2026-09-01 23:30:00','MEAL','legacy-meal','legacy-user-a','2026-09-01');

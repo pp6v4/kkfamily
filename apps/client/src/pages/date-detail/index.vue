@@ -8,6 +8,7 @@ import { todayInShanghai } from '../../services/calendar-dates';
 import { ApiError } from '../../services/transport';
 import {
   archiveAnniversary,
+  archiveLegacyAnniversary,
   createAnniversary,
   listCalendarEvents,
   updateAnniversary,
@@ -23,6 +24,7 @@ const loadError = ref('');
 const pageVisible = ref(false);
 let epoch = 0;
 let editorEpoch = 0;
+let deleteDialogEpoch = 0;
 let disposed = false;
 const adding = ref(false);
 const saving = ref(false);
@@ -50,7 +52,7 @@ function sameIdentity(a?: HouseholdContext, b?: HouseholdContext) {
 function alive(token: number) { return !disposed && pageVisible.value && token === epoch; }
 function clearPrivate() { events.value = []; session.value = undefined; resetEditor(); }
 function resetEditor() {
-  editorEpoch++; adding.value = false; editing.value = null; title.value = ''; note.value = ''; anniversaryDate.value = '';
+  editorEpoch++; deleteDialogEpoch++; adding.value = false; editing.value = null; title.value = ''; note.value = ''; anniversaryDate.value = '';
   recurrence.value = 'YEARLY'; leapPolicy.value = 'FEB_28';
 }
 function leave() { pageVisible.value = false; epoch++; clearPrivate(); loading.value = false; loadError.value = ''; }
@@ -61,11 +63,16 @@ function ready() {
   }
   return true;
 }
-function capture() { return { token: epoch, editor: editorEpoch, date: date.value, identity: session.value }; }
+function writeReady() { return ready() && canEdit.value && canAccess(getStoredSession(), 'calendar', 'EDIT'); }
+function canRemoveAnniversary(event: CalendarEvent) {
+  return event.type === 'ANNIVERSARY' && event.canArchive !== false && (event.legacy === true ? event.sourceId === null && event.sourceType === null : Boolean(event.sourceId)) && Number.isInteger(event.version) && Number(event.version) >= 1;
+}
+function capture() { return { token: epoch, editor: editorEpoch, date: date.value, identity: session.value ? { ...session.value } : undefined, permissionVersion: session.value?.version }; }
 function matches(scope: ReturnType<typeof capture>) {
   if (!alive(scope.token)) return false;
   if (!sameIdentity(scope.identity, getStoredSession())) { clearPrivate(); loadError.value = '账号或家庭已变化，请重新加载'; return false; }
-  return scope.date === date.value && scope.editor === editorEpoch && sameIdentity(scope.identity, session.value);
+  return scope.date === date.value && scope.editor === editorEpoch && sameIdentity(scope.identity, session.value)
+    && scope.permissionVersion === session.value?.version && scope.permissionVersion === getStoredSession()?.version;
 }
 function failure(error: unknown) {
   if (error instanceof ApiError && (error.statusCode === 401 || error.statusCode === 403)) { clearPrivate(); loadError.value = message(error); }
@@ -111,7 +118,8 @@ function beginCreate() {
 function beginEdit(event: CalendarEvent) {
   if (!ready() || saving.value || !events.value.some(item => item.id === event.id && item.version === event.version)) return;
   if (!event.sourceId || event.version === undefined || !event.localDate || !event.recurrence || !event.leapPolicy) {
-    uni.showModal({ title: '纪念日', content: event.title, showCancel: false });
+    const guidance = canEdit.value && canRemoveAnniversary(event) ? '这是一条旧版纪念日，可使用列表中的“删除纪念日”归档。它不会自动变成每年重复的系列。' : event.legacy || !event.sourceId ? '这是一条旧版纪念日。当前账号无权归档或服务器尚未提供归档信息，请管理员核对权限与版本。' : '纪念日维护信息不完整，请重新加载后重试。';
+    uni.showModal({ title: '纪念日', content: `${event.title}\n\n${guidance}`, showCancel: false });
     return;
   }
   if (!canEdit.value) {
@@ -187,16 +195,28 @@ async function saveEvent() {
   finally { saving.value = false; }
 }
 
-function removeEvent() {
-  if (!ready() || !canEdit.value || !editing.value || !adding.value || saving.value) return;
-  const target = { ...editing.value }, scope = capture();
+function removeEvent(event?: CalendarEvent) {
+  if (!writeReady() || saving.value || (event && adding.value)) return;
+  const source = event || (adding.value && editing.value ? events.value.find(item => item.sourceId === editing.value!.id && item.version === editing.value!.version) : undefined);
+  if (!source || !canRemoveAnniversary(source) || !events.value.some(item => item.id === source.id && item.sourceId === source.sourceId && item.version === source.version)) return;
+  const target = { id: source.legacy ? source.id : source.sourceId!, version: source.version! }, scope = capture(), dialog = ++deleteDialogEpoch;
+  const eventId = source.id, sourceId = source.sourceId, legacy = source.legacy === true;
+  const editingTarget = editing.value ? { ...editing.value } : null;
+  const impact = source.recurrence === 'YEARLY' ? '这是每年重复的纪念日，删除后所有年份的系列记录都不再显示，不是只删当天。' : '删除后这条纪念日将不再显示。';
   uni.showModal({
-    title: '删除纪念日', content: `确认删除“${title.value}”吗？`, confirmColor: '#b65f62',
+    title: source.recurrence === 'YEARLY' ? '删除整个纪念日系列' : '删除纪念日', content: `确认删除“${source.title}”吗？${impact}历史数据会保留归档。`, confirmColor: '#b65f62',
     async success(result) {
-      if (!result.confirm || !matches(scope) || !ready() || !canEdit.value || saving.value) return;
+      if (dialog !== deleteDialogEpoch) return;
+      deleteDialogEpoch++;
+      if (!result.confirm || !matches(scope) || !writeReady() || saving.value) return;
+      if (editingTarget && (editing.value?.id !== editingTarget.id || editing.value.version !== editingTarget.version)) return;
+      if (!events.value.some(item => item.id === eventId && item.sourceId === sourceId && (item.legacy === true) === legacy && item.version === target.version && canRemoveAnniversary(item))) {
+        uni.showToast({ title: '纪念日已更新，请重新加载后再删除', icon: 'none' }); return;
+      }
       saving.value = true;
       try {
-        await archiveAnniversary(target);
+        if (legacy) await archiveLegacyAnniversary(target);
+        else await archiveAnniversary(target);
         if (!matches(scope)) return;
         resetEditor(); uni.showToast({ title: '已删除', icon: 'success' }); await loadEvents();
       }
@@ -223,7 +243,7 @@ onUnload(() => { disposed = true; leave(); });
       <view v-for="event in events" :key="event.id" class="event" @tap="openEvent(event)">
         <text class="stamp" :class="typeClass[event.type]">{{ eventStamps[event.type] }}</text>
         <view><text class="kind">{{ eventLabels[event.type] }}<template v-if="event.type === 'ANNIVERSARY' && event.recurrence"> · {{ event.recurrence === 'YEARLY' ? '每年' : '一次' }}</template></text><text class="event-title">{{ event.title }}</text></view>
-        <text class="chevron">›</text>
+        <view class="event-actions"><text class="chevron">›</text><text v-if="!adding && canEdit && canRemoveAnniversary(event)" class="delete-event" @tap.stop="removeEvent(event)">删除纪念日</text></view>
       </view>
     </view>
     <view v-else-if="session" class="empty"><text class="empty-icon">☁</text><text>这一天还没有安排</text></view>
@@ -235,7 +255,7 @@ onUnload(() => { disposed = true; leave(); });
       <view class="type-row"><text class="type" :class="{ chosen: recurrence === 'YEARLY' }" @tap="pickRecurrence('YEARLY')">每年显示</text><text class="type" :class="{ chosen: recurrence === 'ONCE' }" @tap="pickRecurrence('ONCE')">仅此一次</text></view>
       <view v-if="isLeapDay && recurrence === 'YEARLY'" class="leap"><text class="hint">非闰年的2月29日怎么显示？</text><view class="type-row"><text class="type" :class="{ chosen: leapPolicy === 'FEB_28' }" @tap="pickLeapPolicy('FEB_28')">2月28日</text><text class="type" :class="{ chosen: leapPolicy === 'MAR_1' }" @tap="pickLeapPolicy('MAR_1')">3月1日</text><text class="type" :class="{ chosen: leapPolicy === 'SKIP' }" @tap="pickLeapPolicy('SKIP')">当年跳过</text></view></view>
       <textarea v-model="note" :disabled="saving" class="textarea" maxlength="500" placeholder="备注（可不填）" />
-      <view class="actions"><view v-if="editing" class="danger" @tap="removeEvent">删除</view><view class="save" :class="{ disabled: saving }" @tap="saveEvent">{{ saving ? '保存中…' : '保存' }}</view></view>
+      <view class="actions"><view v-if="editing" class="danger" @tap="removeEvent()">删除</view><view class="save" :class="{ disabled: saving }" @tap="saveEvent">{{ saving ? '保存中…' : '保存' }}</view></view>
     </view>
     <view v-else-if="!loading && !loadError && canEdit" class="add primary" @tap="beginCreate">+ 添加纪念日</view>
     <view v-else-if="!loading && !loadError && session" class="permission-tip">当前账号可查看日历，但没有编辑权限</view>
@@ -244,5 +264,6 @@ onUnload(() => { disposed = true; leave(); });
 </template>
 
 <style scoped>
+.event-actions{margin-left:auto;display:flex;flex-direction:column;align-items:flex-end;flex-shrink:0}.event-actions .chevron{margin-left:0}.delete-event{display:flex;align-items:center;justify-content:center;min-height:88rpx;padding:0 14rpx;border-radius:14rpx;color:#a85155;font-size:22rpx;background:#fff0ef}
 .page{min-height:100vh;padding:40rpx 30rpx 70rpx;background:linear-gradient(180deg,#e9f4df 0,#f7f3e8 28%)}.heading .label,.heading .page-title,.heading .subtitle,.kind,.event-title,.hint{display:block}.label{font-size:23rpx;letter-spacing:3rpx;color:#78917a}.page-title{margin-top:12rpx;font-size:44rpx;font-weight:700;color:#3b5141}.subtitle{margin-top:10rpx;color:#928a7f;font-size:25rpx}.event-list{margin-top:38rpx}.event{display:flex;align-items:center;gap:20rpx;margin-bottom:18rpx;padding:25rpx;border:3rpx solid #fff;border-radius:25rpx;background:#fffdf7;box-shadow:0 8rpx 18rpx rgba(70,90,66,.06)}.stamp{display:flex;align-items:center;justify-content:center;width:64rpx;height:64rpx;border-radius:50%;font-size:32rpx}.anniversary{background:#ffdbe4}.meal{background:#ffe9bd}.camping{background:#d9eee0}.task{background:#ddeaff}.kind{font-size:20rpx;color:#9b9287}.event-title{margin-top:6rpx;font-size:29rpx;color:#4b544b}.chevron{margin-left:auto;font-size:44rpx;color:#baaf9d}.empty{display:flex;flex-direction:column;align-items:center;gap:12rpx;margin-top:70rpx;color:#877f73}.empty-icon{font-size:78rpx}.editor{margin-top:35rpx;padding:28rpx;border:3rpx solid #fff;border-radius:28rpx;background:#fffdf7;box-shadow:0 10rpx 24rpx rgba(73,91,67,.08)}.editor-head{display:flex;align-items:center;justify-content:space-between}.editor-title{font-size:31rpx;font-weight:700;color:#465a49}.close{padding:0 10rpx;font-size:43rpx;color:#a69e91}.input,.textarea{box-sizing:border-box;width:100%;margin-top:20rpx;padding:20rpx;border:2rpx solid #e4e8df;border-radius:16rpx;background:#fff;font-size:27rpx}.textarea{height:150rpx}.picker-row{display:flex;justify-content:space-between;margin-top:18rpx;padding:22rpx;border-radius:16rpx;background:#f3f4ec;color:#607061;font-size:26rpx}.type-row{display:flex;flex-wrap:wrap;gap:12rpx;margin-top:18rpx}.type{padding:15rpx 20rpx;border-radius:99rpx;background:#eef1e9;color:#718072;font-size:23rpx}.type.chosen{background:#d6ead4;color:#3f754a}.leap{margin-top:22rpx;padding:20rpx;border-radius:18rpx;background:#fff4d8}.hint{color:#7b6b4e;font-size:23rpx}.actions{display:flex;gap:16rpx;margin-top:22rpx}.save,.danger,.add{padding:24rpx;border-radius:22rpx;text-align:center;font-size:27rpx}.save{flex:1;background:#75aa78;color:#fff}.danger{width:140rpx;background:#ffe7e6;color:#a85155}.disabled{opacity:.55}.add{margin-top:22rpx;background:#fffdf7;color:#5b705e}.primary{margin-top:35rpx;background:#75aa78;color:#fff}.quick-grid{display:grid;grid-template-columns:1fr 1fr;gap:16rpx}.quick-grid .add{border:2rpx solid #edf0e6}.quick-grid .wide{grid-column:1 / 3}.permission-tip{margin-top:30rpx;padding:22rpx;text-align:center;color:#8e887d;font-size:23rpx}.event-list+.editor{margin-top:24rpx}
 </style>

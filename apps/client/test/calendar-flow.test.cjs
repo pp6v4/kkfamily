@@ -5,7 +5,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
 const vue = require('vue');
-const { parse, compileScript } = require('vue/compiler-sfc');
+const { parse, compileScript, compileTemplate } = require('vue/compiler-sfc');
+const { renderToString } = require('vue/server-renderer');
 const ROOT = path.resolve(__dirname, '..');
 class ApiError extends Error { constructor(message, statusCode) { super(message); this.statusCode = statusCode; } }
 function evaluate(source, deps, uni) {
@@ -43,12 +44,143 @@ function form(kind = 'date-detail', api = {}, access) {
     '../../services/calendar-dates': fs.existsSync(path.join(ROOT, 'src/services/calendar-dates.ts')) ? dates() : {},
     '../../services/transport': { ApiError },
     '../../services/calendar-navigation': { setCalendarTarget() {} },
-    '../../services/family-api': { listCalendarEvents: async () => [record], ...api },
+    '../../services/family-api': { listCalendarEvents: async () => [{...record}], ...api },
   };
   const page = evaluate(compiled.content, deps, uni).default.setup({}, { expose() {} });
   lifecycle.load?.({ date: '2026-09-09' });
   return { page, lifecycle, toasts, routes, modals, setStored: value => { stored = value; } };
 }
+
+function dayRender(page) {
+  const filename=path.join(ROOT,'src/pages/date-detail/index.vue');
+  const {descriptor}=parse(fs.readFileSync(filename,'utf8'),{filename});
+  const script=compileScript(descriptor,{id:'calendar-render',inlineTemplate:false});
+  const compiled=compileTemplate({source:descriptor.template.content,filename,id:'calendar-render',compilerOptions:{bindingMetadata:script.bindings,isCustomElement:tag=>['view','text','input','textarea','picker','button'].includes(tag)}});
+  assert.equal(compiled.errors.length,0);
+  const {render}=evaluate(compiled.code,{vue},{});
+  return () => render({},[],{},vue.proxyRefs(page));
+}
+async function renderDay(page) { return renderToString(vue.createSSRApp({setup:()=>dayRender(page)})); }
+async function dayVNode(page) {
+  let vnode;const render=dayRender(page);
+  await renderToString(vue.createSSRApp({setup:()=>()=>{vnode=render();return vnode;}}));return vnode;
+}
+function vnodeText(node) { if(typeof node==='string')return node;if(!node||typeof node!=='object')return'';return Array.isArray(node.children)?node.children.map(vnodeText).join(''):typeof node.children==='string'?node.children:''; }
+function findTap(node,label) {
+  if(!node||typeof node!=='object')return undefined;
+  if(typeof node.props?.onTap==='function'&&vnodeText(node)===label)return node.props.onTap;
+  for(const child of Array.isArray(node.children)?node.children:[]){const result=findTap(child,label);if(result)return result;}
+}
+
+test('Rendered anniversary delete bindings pass the source record explicitly and do not consume a native tap as an event record',async()=>{
+  const{page,lifecycle,modals}=form();await lifecycle.show();page.beginEdit(page.events.value[0]);
+  const editorTap=findTap(await dayVNode(page),'删除');assert.equal(typeof editorTap,'function');
+  editorTap({type:'tap'});assert.equal(modals.length,1);
+  page.closeEditor();let stopped=0;const listTap=findTap(await dayVNode(page),'删除纪念日');assert.equal(typeof listTap,'function');
+  listTap({type:'tap',stopPropagation(){stopped++;}});assert.equal(stopped,1);assert.equal(modals.length,2);assert.match(modals[1].content,/纪念日/);
+});
+
+test('Anniversary list exposes a direct delete action without entering an editor; read-only calendars do not',async()=>{
+  for(const editable of [true,false]){
+    const {page,lifecycle}=form('date-detail',{},async()=>editable?context:{...context,effectivePermissions:{calendar:'VIEW'}});
+    await lifecycle.show();assert.equal(page.adding.value,false);
+    const html=await renderDay(page);
+    if(editable)assert.match(html,/删除纪念日/);else assert.doesNotMatch(html,/删除纪念日/);
+  }
+});
+
+test('Deleting a yearly anniversary explains whole-series impact using the saved recurrence, not the unsaved editor draft',async()=>{
+  const {page,lifecycle,modals}=form();await lifecycle.show();page.beginEdit(page.events.value[0]);
+  page.title.value='未保存的新名称';page.recurrence.value='ONCE';page.removeEvent();
+  assert.match(modals[0].content,/纪念日/);assert.match(modals[0].content,/每年|系列/);assert.match(modals[0].content,/所有|全部/);
+  assert.doesNotMatch(modals[0].content,/未保存的新名称/);
+});
+
+test('Direct anniversary deletion uses the source/version and removes occurrences after confirmation only',async()=>{
+  let rows=[record];const writes=[];
+  const {page,lifecycle,modals,toasts}=form('date-detail',{
+    listCalendarEvents:async()=>rows,
+    archiveAnniversary:async target=>{writes.push({...target});rows=[];return{id:target.id,archived:true};},
+  });
+  await lifecycle.show();page.removeEvent(page.events.value[0]);assert.equal(modals.length,1);assert.equal(writes.length,0);
+  await modals[0].success({confirm:false});assert.equal(page.events.value.length,1);
+  page.removeEvent(page.events.value[0]);await modals[1].success({confirm:true});
+  assert.deepEqual(writes,[{id:'a',version:3}]);assert.equal(page.events.value.length,0);assert.equal(page.saving.value,false);assert.equal(toasts.at(-1),'已删除');
+});
+
+test('Anniversary deletion rechecks stored edit rights, permission version and the latest event version',async()=>{
+  for(const mode of ['stored-view','permission-version','event-version','target-change','source-change','server-denial']){
+    let writes=0;const {page,lifecycle,modals,setStored}=form('date-detail',{archiveAnniversary:async()=>writes++});
+    await lifecycle.show();page.beginEdit(page.events.value[0]);page.removeEvent();assert.equal(modals.length,1);
+    if(mode==='stored-view')setStored({...context,effectivePermissions:{calendar:'VIEW'}});
+    if(mode==='permission-version')setStored({...context,version:2});
+    if(mode==='event-version')page.events.value=[{...record,version:4}];
+    if(mode==='target-change')page.editing.value={id:'other',version:3};
+    if(mode==='source-change')page.events.value[0].sourceId='another-source';
+    if(mode==='server-denial')page.events.value[0].canArchive=false;
+    await modals[0].success({confirm:true});assert.equal(writes,0,mode);
+  }
+});
+
+test('Anniversary archive conflict preserves the original draft and cancellation never submits a write',async()=>{
+  const {page,lifecycle,modals,toasts}=form('date-detail',{archiveAnniversary:async()=>{throw new ApiError('纪念日已更新，请刷新后重试',409);}});
+  await lifecycle.show();page.beginEdit(page.events.value[0]);page.title.value='待保留草稿';page.removeEvent();
+  await modals[0].success({confirm:true});assert.equal(page.title.value,'待保留草稿');assert.equal(page.editing.value.version,3);assert.equal(page.adding.value,true);assert.equal(page.saving.value,false);assert.match(toasts.at(-1),/已更新/);
+});
+
+test('Legacy anniversary can be deleted from the visible list without pretending to be an editable yearly series',async()=>{
+  const legacy={id:'old-event',type:'ANNIVERSARY',title:'旧版纪念日',startsAt:record.startsAt,sourceId:null,sourceType:null,version:1,legacy:true,canArchive:true};
+  let rows=[legacy];const writes=[];
+  const{page,lifecycle,modals,toasts}=form('date-detail',{listCalendarEvents:async()=>rows,archiveLegacyAnniversary:async target=>{writes.push({...target});rows=[];return{id:target.id,archived:true};}});
+  await lifecycle.show();assert.match(await renderDay(page),/删除纪念日/);
+  page.openEvent(page.events.value[0]);assert.equal(page.adding.value,false);assert.match(modals[0].content,/旧版纪念日.*列表.*删除纪念日/s);
+  page.removeEvent(page.events.value[0]);assert.equal(modals[1].title,'删除纪念日');assert.doesNotMatch(modals[1].content,/所有年份/);assert.equal(writes.length,0);
+  await modals[1].success({confirm:true});assert.deepEqual(writes,[{id:'old-event',version:1}]);assert.equal(page.events.value.length,0);assert.equal(toasts.at(-1),'已删除');
+});
+
+test('Legacy archive control respects explicit server denial and safely explains old responses missing archive metadata',async()=>{
+  for(const metadata of [{legacy:true,version:1,canArchive:false},{}, {legacy:true,version:undefined,canArchive:true}]){
+    const row={id:'old-event',type:'ANNIVERSARY',title:'旧日程',startsAt:record.startsAt,sourceId:null,sourceType:null,...metadata};
+    const{page,lifecycle,modals}=form('date-detail',{listCalendarEvents:async()=>[row]});await lifecycle.show();
+    assert.doesNotMatch(await renderDay(page),/删除纪念日/);page.removeEvent(row);assert.equal(modals.length,0);
+    page.openEvent(row);assert.match(modals[0].content,/旧版纪念日.*权限|归档信息|版本/s);assert.equal(page.adding.value,false);
+  }
+});
+
+test('Legacy archive callbacks cannot cross family changes, later modal targets, hide/unload or changing event versions',async()=>{
+  for(const mode of ['family','hide','unload','version','other-modal']){
+    const row={id:'old-event',type:'ANNIVERSARY',title:'旧日程',startsAt:record.startsAt,sourceId:null,sourceType:null,legacy:true,version:1,canArchive:true};
+    let writes=0;const{page,lifecycle,modals,setStored}=form('date-detail',{listCalendarEvents:async()=>[row,record],archiveLegacyAnniversary:async()=>writes++,archiveAnniversary:async()=>writes++});
+    await lifecycle.show();page.removeEvent(page.events.value[0]);assert.equal(modals.length,1);
+    if(mode==='family')setStored({...context,householdId:'other-house'});
+    if(mode==='hide')lifecycle.hide();if(mode==='unload')lifecycle.unload();
+    if(mode==='version')page.events.value=[{...row,version:2},record];
+    if(mode==='other-modal')page.removeEvent(page.events.value[1]);
+    await modals[0].success({confirm:true});assert.equal(writes,0,mode);
+  }
+});
+
+test('Delayed archive success does not restore a hidden calendar or overwrite a changed household',async()=>{
+  for(const mode of ['hide','family']){
+    const pending=deferred();let reads=0;
+    const{page,lifecycle,modals,setStored,toasts}=form('date-detail',{listCalendarEvents:async()=>{reads++;return[record];},archiveAnniversary:()=>pending.promise});
+    await lifecycle.show();page.removeEvent(page.events.value[0]);const deleting=modals[0].success({confirm:true});
+    if(mode==='hide')lifecycle.hide();else setStored({...context,householdId:'other-house',membershipId:'other-member'});
+    pending.resolve({id:'a',archived:true});await deleting;
+    assert.equal(reads,1);assert.equal(toasts.includes('已删除'),false);assert.equal(page.events.value.length,0);assert.equal(page.saving.value,false);
+  }
+});
+
+test('Legacy archive API serializes only its source ID and expected version through the shared authenticated transport',async()=>{
+  const calls=[];
+  const api=evaluate(fs.readFileSync(path.join(ROOT,'src/services/family-api.ts'),'utf8'),{
+    './session':{getSessionEpoch:()=>1,assertSessionEpoch:epoch=>assert.equal(epoch,1),ensureSession:async()=>context},
+    './transport':{ApiError,rawRequest:async(path,method,input,headers)=>{calls.push({path,method,input:{...input},headers:{...headers}});return{id:'old/event',archived:true};}},
+    './config':{API_BASE_URL:'https://example.invalid/api/v1'},
+  },{});
+  await api.archiveLegacyAnniversary({id:'old/event',version:4});
+  assert.deepEqual(calls,[{path:'/calendar/events/old%2Fevent/archive',method:'POST',input:{expectedVersion:4},headers:{Authorization:'Bearer test-token','X-Household-Id':'house-a'}}]);
+});
 
 test('Calendar late month response cannot replace the latest selected month', async () => {
   const old = deferred(); let calls = 0;

@@ -40,4 +40,9 @@ export class CalendarController {
   archiveAnniversary(@CurrentUser() user: RequestUser, @Headers('x-household-id') householdId: string, @Param('anniversaryId') anniversaryId: string, @Body() dto: ArchiveAnniversaryDto) {
     return this.calendarService.archiveAnniversary(user.userId, householdId, anniversaryId, dto);
   }
+
+  @Post('events/:eventId/archive')
+  archiveLegacyAnniversary(@CurrentUser() user: RequestUser, @Headers('x-household-id') householdId: string, @Param('eventId') eventId: string, @Body() dto: ArchiveAnniversaryDto) {
+    return this.calendarService.archiveLegacyAnniversary(user.userId, householdId, eventId, dto);
+  }
 }

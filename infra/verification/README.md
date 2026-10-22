@@ -10,6 +10,22 @@ node scripts/verify-database.cjs
 
 运行器生成随机项目 `kk-verify-<16位十六进制>` 和一次性测试库密码，不读取生产 `.env`。PostgreSQL 17 的数据位于测试容器 tmpfs，停止后消失，不绑定生产卷、宿主目录或公网端口。API 测试与数据库只加入该项目的内部网络，媒体使用内存驱动，不访问微信/COS。
 
+## 可选的显式隔离网段
+
+默认不设置 `VERIFY_NETWORK_SUBNET`，保持 Docker 自动分配网段。若主机报告默认 address pools 耗尽，可以在重新核对主机路由和全部 Docker 网络 IPAM、确认没有重叠后，为这一次隔离验证显式传入网段；不通过删除现有资源解决。
+
+只允许规范的 `10.254.N.0/24`，其中 `N` 为 0～255 的无前导零十进制整数。空字符串、空白、尾随换行、其它地址范围、主机地址及其它前缀长度均在任何 Docker 调用前拒绝。该校验只限制格式和范围，不代替主机侧的占用/重叠检查；并发验证也不能共用已占用的网段。
+
+以下仅为经过主机侧核验后的传参示例，不是默认可用网段：
+
+```sh
+VERIFY_NETWORK_SUBNET=10.254.240.0/24 node scripts/verify-database.cjs
+```
+
+有值时，运行器把 `compose.subnet.yml` 合并到三次 Compose 操作（config、build、up），覆盖的只有当前随机项目中 `verification` 网络的 IPAM；基础文件的 `internal: true`、服务网络和数据库隔离规则保留。不会修改 Docker daemon 的地址池、生产 Compose 或生产网络，也不会自动 prune、删除网络/容器或在失败后换用其它网段。
+
+非秘密网段写入 `result.json` 的 `networkSubnet` 字段；未设置时为 `null`。配置无效直接失败，合法配置下 Docker 或测试失败仍保留阶段错误和日志供排查。
+
 执行顺序：Docker/Compose 可用性 → Compose 配置校验 → API build阶段镜像 → 全部迁移deploy → 迁移status → 数据库与Prisma模型的结构差异检查 → 独立verify_legacy数据库旧数据升级回归 → 通知worker单元测试 → HTTP集成测试。启动迁移前核对数据库用户名、地址、端口、库名和schema，任何一项不符即退出。构建失败不会启动测试容器；结构不一致或测试失败会通过退出码返回。
 
 旧数据回归先在同一隔离PostgreSQL中的第二个数据库执行最初3批迁移和虚构数据，再升级全部迁移；覆盖纪念日日期、餐次/票数、食材库存、行程负责人、账号购物保留及重入幂等。它不会改动生产库，也不替代主verify数据库的空库迁移及HTTP回归。PostgreSQL健康检查使用TCP localhost，不依赖初始化临时进程的Unix socket。

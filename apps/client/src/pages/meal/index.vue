@@ -42,7 +42,13 @@ const recipeDetail=computed(()=>{
   return{recipe,sourceLabel:meal.value?.status==='DRAFT'?'当前待做菜单 · 随菜谱动态更新':`已确认菜单快照 · 第${meal.value?.snapshotVersion}版`,coverUrl:undefined};
 });
 const categories = computed(() => ['全部', ...recipeCategories.value.map(item => item.name)]);
-const visibleRecipes = computed(() => recipes.value.filter(r => r.status === 'PUBLISHED' && (category.value === '全部' || r.category?.name === category.value)));
+const publishedRecipes = computed(() => recipes.value.filter(r => r.status === 'PUBLISHED'));
+const visibleRecipes = computed(() => publishedRecipes.value.filter(r => category.value === '全部' || r.category?.name === category.value));
+const canOrder = computed(() => canAccess(session.value,'meals','EDIT') && canAccess(session.value,'recipes'));
+const orderPermissionHint = computed(() => {
+  if(!canAccess(session.value,'meals','EDIT'))return canAccess(session.value,'meals')?'当前仅可查看餐点；点菜和撤回需要餐点编辑权限，请联系管理员授权。':'尚未获得点餐权限，请联系管理员授权餐点编辑权限。';
+  return canAccess(session.value,'recipes')?'':'尚未获得菜谱查看权限，请联系管理员授权后点菜。';
+});
 const mealItems = computed(() => meal.value?.menu ?? []);
 const selectedRecipeIds = computed(() => new Set(mealItems.value.map(i => i.recipeId)));
 const ownRecipeIds = computed(() => new Set((meal.value?.items ?? []).filter(i => i.addedById === session.value?.membershipId).map(i => i.recipeId)));
@@ -151,10 +157,22 @@ async function changeSelection(day: string, type: string) {
 function changeDate(event:{detail:{value:string}}) { return changeSelection(event.detail.value,mealType.value); }
 function chooseMealType(type:string) { return changeSelection(date.value,type); }
 function switchView(view: ViewName) { if (writing.value || active.value === view) return; closeRecipeDetail(); interactionEpoch++; historyEpoch++; history.value = []; reopenReason.value = ''; cancelCategoryEdit(); active.value = view; }
+async function beginOrdering() {
+  if(errorText.value||!ready('meals','EDIT'))return;
+  if(!canAccess(session.value,'recipes')){fail(new Error('尚未获得菜谱查看权限，请联系管理员授权后点菜。'));return;}
+  if(meal.value&&meal.value.status!=='DRAFT'){switchView('menu');return;}
+  if(!isCalendarDate(date.value)){fail(new Error('请选择有效日期'));return;}
+  switchView('order');category.value='全部';
+  if(meal.value)return;
+  const hour=({早餐:'08',午餐:'12',晚餐:'18',加餐:'21'} as Record<string,string>)[mealType.value];
+  await runWrite(capture(),()=>createMeal({scheduledAt:`${date.value}T${hour}:00:00+08:00`,mealType:mealTypeCodes[mealType.value],slotKey:slotKey.value||undefined}),()=>loadMealFromDatabase());
+}
 async function toggleRecipe(recipeId:string) {
-  if (!ready('meals', 'EDIT') || !canAccess(session.value, 'recipes') || !recipes.value.some(row => row.id === recipeId && row.status === 'PUBLISHED')) return;
+  if (!ready('meals', 'EDIT')) return;
+  const withdraw = ownRecipeIds.value.has(recipeId);
+  if(!withdraw&&(!canAccess(session.value,'recipes')||!recipes.value.some(row=>row.id===recipeId&&row.status==='PUBLISHED')))return;
   if (!isCalendarDate(date.value)) { fail(new Error('请选择有效日期')); return; }
-  const scope = capture(), selected = meal.value, withdraw = ownRecipeIds.value.has(recipeId);
+  const scope = capture(), selected = meal.value;
   const hour = ({ 早餐: '08', 午餐: '12', 晚餐: '18', 加餐: '21' } as Record<string, string>)[mealType.value];
   const input = { scheduledAt: `${date.value}T${hour}:00:00+08:00`, mealType: mealTypeCodes[mealType.value], slotKey: slotKey.value || undefined };
   await runWrite(scope, async () => {
@@ -258,14 +276,24 @@ onUnload(()=>{disposed=true;hide();resume=undefined;});
     <view v-if="active!=='recipes'" class="picker-row"><picker mode="date" :disabled="writing" :value="date" @change="changeDate"><text class="field-value">{{date}} ›</text></picker><view class="meal-types"><text v-for="item in mealTypes" :key="item" class="meal-type" :class="{chosen:mealType===item}" @tap="chooseMealType(item)">{{item}}</text></view></view>
     <view v-if="active!=='recipes' && mealType==='加餐'" class="form-box"><input v-model="slotInput" :disabled="busy" class="entry" placeholder="加餐名称，可留空；如下午茶" /><button :disabled="writing" @tap="changeSelection(date,mealType)">查看这顿加餐</button><text v-if="slotInput.trim()!==slotKey" class="material">名称尚未应用，请先查看这顿加餐。</text></view>
     <view v-if="active==='order'">
-      <view v-if="!loading && !canAccess(session,'recipes')" class="empty">尚未获得菜谱访问权限</view>
-      <scroll-view class="categories" scroll-x><text v-for="item in categories" :key="item" class="category" :class="{chosen:category===item}" @tap="category=item">{{item}}</text></scroll-view>
-      <view v-if="meal && meal.status!=='DRAFT'" class="hint">{{statusLabels[meal.status]}}，普通点菜已停止。</view>
-      <view v-if="!loading && canAccess(session,'recipes') && !visibleRecipes.length" class="empty">还没有已发布菜谱</view>
-      <view v-for="recipe in visibleRecipes" :key="recipe.id" class="recipe-card"><image v-if="coverUrls[recipe.id]" class="recipe-cover" :src="coverUrls[recipe.id]" mode="aspectFill" /><view v-else class="recipe-icon">🍽️</view><view class="recipe-info" @tap="openRecipeDetail(recipe.id,'CURRENT')"><text class="recipe-name">{{recipe.name}}</text><text v-for="i in recipe.ingredients" :key="i.ingredientId" class="material">{{i.ingredient.name}} {{formatQuantity(i.quantity)}} {{i.unit}}</text><text class="material">调料：{{recipe.seasonings.map(s=>s.name).join('、')||'无'}}</text><text class="detail-link">查看用料与做法 ›</text></view><text v-if="canAccess(session,'meals','EDIT') && (!meal || meal.status==='DRAFT')" class="add" :class="{added:selectedRecipeIds.has(recipe.id)}" @tap="toggleRecipe(recipe.id)">{{ownRecipeIds.has(recipe.id)?'撤回我的选择':selectedRecipeIds.has(recipe.id)?'我也想吃':'点这道菜'}}</text></view>
-      <view class="primary" @tap="switchView('menu')">查看待做菜单（{{mealItems.length}}道）</view>
+      <view v-if="!loading && !errorText" class="ordering-guide">
+        <text class="block-title plain-title">为 {{date}} {{mealType}} {{slotKey}} 点菜</text>
+        <text v-if="orderPermissionHint" class="material">{{orderPermissionHint}}</text>
+        <template v-else-if="meal && meal.status!=='DRAFT'"><text class="material">{{statusLabels[meal.status]}}，普通点菜已停止；请查看本餐菜单。</text><button class="order-start" :disabled="busy" @tap="switchView('menu')">查看这顿餐点</button></template>
+        <template v-else><text class="material">{{meal?'点击“点这道菜”加入本餐；选错后可撤回自己的选择。':'先创建这顿餐点，再选择下面想吃的菜，家人的选择会汇总到同一张菜单。'}}</text><button v-if="!meal" class="order-start" :disabled="busy" @tap="beginOrdering">创建这顿餐点，开始点菜</button><text v-else class="material">大家点菜中 · 本餐已选 {{mealItems.length}} 道</text></template>
+      </view>
+      <scroll-view v-if="publishedRecipes.length" class="categories" scroll-x><text v-for="item in categories" :key="item" class="category" :class="{chosen:category===item}" @tap="category=item">{{item}}</text></scroll-view>
+      <view v-if="!loading && !errorText && canAccess(session,'recipes') && !publishedRecipes.length" class="ordering-guide">
+        <text class="block-title plain-title">还没有可点的已发布菜谱</text>
+        <template v-if="canAccess(session,'recipes','EDIT')"><text class="material">草稿不会出现在点菜列表。请先补齐食材、做法和成品图并发布，再回来点击“点这道菜”加入本餐。图片上传或发布失败时，请按错误提示处理后重试。</text><button class="order-start secondary-order" :disabled="busy" @tap="switchView('recipes')">去准备并发布菜谱</button></template>
+        <text v-else class="material">请联系厨师添加并发布菜谱；发布后可在这里为所选餐次点菜。</text>
+      </view>
+      <view v-else-if="!loading && !errorText && publishedRecipes.length && !visibleRecipes.length" class="ordering-guide"><text class="material">这个分类还没有可点的菜。</text><button class="order-start secondary-order" :disabled="busy" @tap="category='全部'">查看全部菜谱</button></view>
+      <view v-for="recipe in visibleRecipes" :key="recipe.id" class="recipe-card"><image v-if="coverUrls[recipe.id]" class="recipe-cover" :src="coverUrls[recipe.id]" mode="aspectFill" /><view v-else class="recipe-icon">🍽️</view><view class="recipe-info" @tap="openRecipeDetail(recipe.id,'CURRENT')"><text class="recipe-name">{{recipe.name}}</text><text v-for="i in recipe.ingredients" :key="i.ingredientId" class="material">{{i.ingredient.name}} {{formatQuantity(i.quantity)}} {{i.unit}}</text><text class="material">调料：{{recipe.seasonings.map(s=>s.name).join('、')||'无'}}</text><text class="detail-link">查看用料与做法 ›</text></view><button v-if="canOrder && (!meal || meal.status==='DRAFT')" :disabled="busy" class="add" :class="{added:selectedRecipeIds.has(recipe.id)}" @tap.stop="toggleRecipe(recipe.id)">{{ownRecipeIds.has(recipe.id)?'撤回我的选择':selectedRecipeIds.has(recipe.id)?'我也想吃':'点这道菜'}}</button></view>
+      <view v-if="canAccess(session,'meals')" class="primary" @tap="switchView('menu')">查看待做菜单（{{mealItems.length}}道）</view>
     </view>
     <view v-else-if="active==='recipes'">
+      <view v-if="canOrder" class="ordering-guide"><text class="material">当前选中 {{date}} {{mealType}} {{slotKey}}；发布菜谱后，回到点菜页将菜加入本餐。</text><button class="order-start" :disabled="busy" @tap="beginOrdering">{{meal && meal.status!=='DRAFT'?'查看所选餐次菜单':'为所选餐次点菜'}}</button></view>
       <view v-if="canAccess(session,'recipes','EDIT')" class="primary" @tap="addRecipe">＋ 添加菜谱</view>
       <view v-if="canAccess(session,'recipes','MANAGE')" class="form-box">
         <text class="block-title plain-title">菜谱分类</text>
@@ -281,7 +309,10 @@ onUnload(()=>{disposed=true;hide();resume=undefined;});
       <view class="meal-summary"><text>{{date}} {{mealType}} {{slotKey}}</text><text>{{meal?statusLabels[meal.status]:'尚未点菜'}}</text></view>
       <view v-if="meal?.legacyWithoutSnapshot" class="hint">这是旧版餐单，没有历史快照；不将当前菜谱当作当时用料。</view>
       <view v-if="!mealItems.length && !meal?.legacyWithoutSnapshot" class="empty">还没有选择菜品</view>
+      <button v-if="!loading && !errorText && canOrder && (!meal || meal.status==='DRAFT')" class="order-start" :disabled="busy" @tap="beginOrdering">{{meal?'继续为这顿饭点菜':'创建这顿餐点，开始点菜'}}</button>
+      <text v-if="!loading && orderPermissionHint && (!meal || meal.status==='DRAFT')" class="material">{{orderPermissionHint}}</text>
       <view v-for="item in mealItems" :key="item.recipeId" class="menu-item"><view class="menu-line"><text @tap="openRecipeDetail(item.recipeId,'MEAL')">{{item.recipe.name}} · 查看做法 ›</text><text class="person">做{{Number(item.cookMultiplier)}}份</text></view><text class="material">想吃的人：{{item.wantedBy.map(w=>w.nickname||'家人').join('、')}}（{{item.wantedBy.length}}人）</text><text class="material">{{item.recipe.ingredients.map(i=>i.ingredient.name+' '+formatQuantity(i.quantity)+' '+i.unit).join('、')}}</text>
+        <button v-if="meal?.status==='DRAFT' && canAccess(session,'meals','EDIT') && ownRecipeIds.has(item.recipeId)" class="order-start secondary-order" :disabled="busy" @tap="toggleRecipe(item.recipeId)">撤回我的选择</button>
         <view v-if="meal?.status==='DRAFT' && canAccess(session,'meals','MANAGE')" class="menu-line"><input v-model="servings[item.recipeId]" :disabled="busy" type="digit" class="entry servings" placeholder="实际份数" /><text class="small-action" @tap="saveServings(item.recipeId)">保存份数</text><text class="archive-link" @tap="confirmRemoveDish(item.recipeId)">移除本餐这道菜</text></view>
       </view>
       <view v-if="mealItems.length && !canAccess(session,'inventory')" class="hint">用料可见，家庭库存只向获授权成员展示。</view>
@@ -316,4 +347,5 @@ onUnload(()=>{disposed=true;hide();resume=undefined;});
 .form-box{margin-top:24rpx;padding:24rpx;border-radius:22rpx;background:#fffdf7}.entry{min-height:88rpx;border:2rpx solid #e4d7bd;border-radius:16rpx;padding:0 16rpx;margin-top:12rpx;font-size:28rpx}.form-box button{margin-top:12rpx;font-size:28rpx}.menu-item{display:block}.menu-line{display:flex;justify-content:space-between;align-items:center;gap:16rpx}.servings{width:130rpx}.small-action{padding:20rpx;color:#8b5d23}.material{display:block;margin-top:10rpx;color:#7c756b;font-size:24rpx}.error{padding:24rpx;background:#fff0e9;color:#ab4f28;line-height:1.6}.history-row{padding:18rpx;border-bottom:1rpx solid #e4d7bd}.needs_check .stock-status{color:#ac5a24}.ingredient-row{align-items:flex-start}.hint{font-size:26rpx}.person{font-size:24rpx}.ingredient-row.absent{background:#fff1ec}.ingredient-row.present{background:#f1f8ee}.recipe-cover{width:100rpx;height:100rpx;flex:none;border-radius:20rpx;background:#fbe4b4}
 .category-manage-row{display:flex;align-items:center;justify-content:space-between;padding:18rpx 0;border-bottom:1rpx solid #eee5d6;color:#574d42;font-size:25rpx}.archive-link{padding:20rpx;color:#aa6245}.category-editor{margin-top:16rpx;padding-top:8rpx;border-top:2rpx dashed #e4d7bd}.order-entry{width:220rpx}
 .detail-link,.detail-source{display:block;margin-top:14rpx;color:#8b652f;font-size:25rpx}.recipe-detail-mask{position:fixed;inset:0;z-index:50;display:flex;align-items:center;padding:28rpx;box-sizing:border-box;background:rgba(45,38,27,.45)}.recipe-detail-panel{width:100%;padding:26rpx;box-sizing:border-box;border-radius:28rpx;background:#fffdf7}.recipe-detail-content{height:65vh;margin-top:20rpx}.detail-cover{width:100%;height:300rpx;border-radius:18rpx}.detail-step{display:block;padding:20rpx 4rpx;font-size:28rpx;line-height:1.7;color:#574d42;white-space:pre-wrap}.recipe-detail-panel .block-title{margin-top:20rpx}.detail-source{font-size:24rpx;color:#8b7b68}
+.ordering-guide{margin-top:22rpx;padding:24rpx;border-radius:22rpx;background:#fffdf7}.order-start{display:flex;align-items:center;justify-content:center;min-height:88rpx;margin:20rpx 0 0;padding:18rpx 24rpx;box-sizing:border-box;border-radius:20rpx;background:#d99c48;color:#fff;font-size:28rpx;line-height:1.5}.order-start::after,.add::after{border:0}.secondary-order{border:2rpx solid #d99c48;background:#fffdf7;color:#9b6525}.recipe-card button.add{display:flex;align-items:center;justify-content:center;min-height:88rpx;max-width:220rpx;box-sizing:border-box;white-space:normal;background:#fffdf8;font-size:26rpx;line-height:1.5}.recipe-card button.add.added{background:#e1f0df}.order-start[disabled],.recipe-card button.add[disabled]{opacity:.55}
 </style>

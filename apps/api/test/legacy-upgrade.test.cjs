@@ -33,7 +33,16 @@ test('Legacy three-migration data upgrades without losing dates, votes, quantiti
         ['legacy_legacy-event-leap','2024-02-29','legacy-member-a','ONCE'],
         ['legacy_legacy-event-night','2026-09-02','legacy-member-a','ONCE'],
       ]);
-      assert.equal(await db.calendarEvent.count(),0);
+      assert.equal(await db.calendarEvent.count({where:{id:{in:['legacy-event-night','legacy-event-leap']}}}),0);
+    });
+    await t.test('Calendar archive migration preserves unknown-creator legacy rows and linked projections with version one', async () => {
+      const rows=await db.calendarEvent.findMany({orderBy:{id:'asc'}});
+      assert.deepEqual(rows.map(row=>[row.id,row.type,row.version,row.archivedAt,row.sourceType,row.sourceId,row.createdById,row.startsAt.toISOString()]),[
+        ['legacy-event-orphan','ANNIVERSARY',1,null,null,null,'unknown-legacy-user','2026-09-08T16:00:00.000Z'],
+        ['legacy-meal-projection','MEAL',1,null,'MEAL','legacy-meal','legacy-user-a','2026-09-01T23:30:00.000Z'],
+      ]);
+      const applied=await db.$queryRawUnsafe('SELECT migration_name FROM "_prisma_migrations" WHERE migration_name = \'202610220001_calendar_event_archive\' AND finished_at IS NOT NULL');
+      assert.equal(applied.length,1);
     });
     await t.test('Meal date and type normalize while both votes produce one dish', async () => {
       const meal=await db.meal.findUniqueOrThrow({where:{id:'legacy-meal'}});

@@ -1,0 +1,7 @@
+# Explicit opt-in only. The host must check route and Docker IPAM overlap first.
+# Merge with compose.yml; its internal verification network remains internal.
+networks:
+  verification:
+    ipam:
+      config:
+        - subnet: "${VERIFY_NETWORK_SUBNET:?explicit verification subnet required}"

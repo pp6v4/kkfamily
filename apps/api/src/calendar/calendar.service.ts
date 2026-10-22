@@ -20,14 +20,14 @@ export class CalendarService {
     // Derive linked events from authorized source rows, never trust a stale projection.
     const [anniversaries, legacyAnniversaries, meals, trips, tasks] = await Promise.all([
       this.prisma.anniversary.findMany({ where: { householdId, archivedAt: null }, orderBy: [{ localDate: 'asc' }, { id: 'asc' }] }),
-      this.prisma.calendarEvent.findMany({ where: { householdId, type: 'ANNIVERSARY', sourceId: null, sourceType: null, startsAt: { lt: to }, OR: [{ endsAt: { gt: from } }, { startsAt: { gte: from } }] }, orderBy: { startsAt: 'asc' } }),
+      this.prisma.calendarEvent.findMany({ where: { householdId, type: 'ANNIVERSARY', sourceId: null, sourceType: null, archivedAt: null, startsAt: { lt: to }, OR: [{ endsAt: { gt: from } }, { startsAt: { gte: from } }] }, orderBy: { startsAt: 'asc' } }),
       permits(member.effectivePermissions, 'meals') ? this.prisma.meal.findMany({ where: { householdId, scheduledAt: { gte: from, lt: to }, status: { not: 'CANCELLED' } } }) : [],
       permits(member.effectivePermissions, 'trips') ? this.prisma.trip.findMany({ where: { householdId, status: { not: 'CANCELLED' }, members: { some: { membershipId: member.id, status: { in: ['ACTIVE', 'HISTORY'] } } }, startsAt: { lt: to }, OR: [{ endsAt: { gt: from } }, { startsAt: { gte: from } }] } }) : [],
       permits(member.effectivePermissions, 'tasks') ? this.prisma.task.findMany({ where: { householdId, archivedAt: null, status: { not: 'CANCELLED' }, dueAt: { gte: from, lt: to } } }) : [],
     ]);
     return { data: [
       ...anniversaries.flatMap(item => this.occurrences(item, from, to)),
-      ...legacyAnniversaries,
+      ...legacyAnniversaries.map(event => ({ ...event, legacy: true, canArchive: permits(member.effectivePermissions, 'calendar', 'EDIT') })),
       ...meals.map(meal => ({ id: `meal:${meal.id}`, type: 'MEAL', title: (({ BREAKFAST: '早餐', LUNCH: '午餐', DINNER: '晚餐', OTHER: '加餐' } as Record<string, string>)[meal.mealType] ?? meal.mealType) + (meal.slotKey ? ` · ${meal.slotKey}` : ''), startsAt: meal.scheduledAt, endsAt: null, sourceType: 'MEAL', sourceId: meal.id })),
       ...trips.map(trip => ({ id: `trip:${trip.id}`, type: 'TRIP', title: trip.title, startsAt: trip.startsAt, endsAt: trip.endsAt, sourceType: 'TRIP', sourceId: trip.id })),
       ...tasks.map(task => ({ id: `task:${task.id}`, type: 'TASK', title: task.title, startsAt: task.dueAt!, endsAt: null, sourceType: 'TASK', sourceId: task.id })),
@@ -86,6 +86,22 @@ export class CalendarService {
       if (!changed.count) throw new ConflictException('纪念日已更新，请刷新后重试');
       await this.audit(tx, householdId, actor.id, 'ANNIVERSARY_ARCHIVE', anniversaryId, { fromVersion: current.version });
       return { id: anniversaryId, archived: true };
+    }) };
+  }
+
+  /** Legacy source-less anniversaries are preserved, never treated as projections
+   * that may delete a linked meal, trip or current Anniversary series. */
+  async archiveLegacyAnniversary(userId: string, householdId: string, eventId: string, dto: ArchiveAnniversaryDto) {
+    return { data: await serializable(this.prisma, async tx => {
+      const actor = await this.access.require(userId, householdId, 'calendar', 'EDIT', tx);
+      const where = { id: eventId, householdId, type: 'ANNIVERSARY' as const, sourceType: null, sourceId: null, archivedAt: null };
+      const current = await tx.calendarEvent.findFirst({ where });
+      if (!current) throw new NotFoundException('旧版纪念日不存在');
+      if (current.version !== dto.expectedVersion) throw new ConflictException('纪念日已更新，请刷新后重试');
+      const changed = await tx.calendarEvent.updateMany({ where: { ...where, version: dto.expectedVersion }, data: { archivedAt: new Date(), version: { increment: 1 } } });
+      if (!changed.count) throw new ConflictException('纪念日已更新，请刷新后重试');
+      await this.audit(tx, householdId, actor.id, 'CALENDAR_LEGACY_ANNIVERSARY_ARCHIVE', eventId, { fromVersion: current.version, toVersion: current.version + 1, legacy: true });
+      return { id: eventId, archived: true };
     }) };
   }
 

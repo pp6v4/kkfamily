@@ -5,7 +5,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
 const vue = require('vue');
-const { parse, compileScript } = require('vue/compiler-sfc');
+const { parse, compileScript, compileTemplate } = require('vue/compiler-sfc');
+const { renderToString } = require('vue/server-renderer');
 class ApiError extends Error { constructor(message, statusCode) { super(message); this.statusCode = statusCode; } }
 const context = { householdId: 'house-a', membershipId: 'member-a', householdName: '测试家庭', accessToken: 'test-token', roles: [], effectivePermissions: { recipes: 'EDIT' } };
 const recipe = { id: 'recipe-a', version: 3, name: '番茄炒蛋', status: 'DRAFT', coverAssetId: null, category: null, ingredients: [{ ingredient: { id: 'i', name: '鸡蛋' }, quantity: '2', unit: '个' }], seasonings: [{ name: '盐' }], steps: ['炒熟'] };
@@ -38,6 +39,88 @@ function form(api = {}, access) {
   return { page, life, show, toasts, routes, pickers, uni, setStored: value => stored = value, setRecipe: value => liveRecipe = value };
 }
 function fill(page) { page.name.value = ' 新菜 '; page.ingredients.value = [{ name: ' 鸡蛋 ', quantity: '2.125', unit: ' 个 ' }]; page.seasonings.value = [' 盐 ', '']; page.steps.value = [' 炒熟 ']; }
+async function renderedEditor(page) {
+  const filename = path.resolve(__dirname, '../src/pages/recipe-editor/index.vue'), { descriptor } = parse(fs.readFileSync(filename, 'utf8'), { filename });
+  const script = compileScript(descriptor, { id: 'recipe-events', inlineTemplate: false });
+  const compiled = compileTemplate({ source: descriptor.template.content, filename, id: 'recipe-events', compilerOptions: { bindingMetadata: script.bindings, isCustomElement: tag => ['view', 'text', 'input', 'textarea', 'picker', 'image', 'button'].includes(tag) } });
+  assert.deepEqual(compiled.errors, []);
+  const module = { exports: {} }, output = ts.transpileModule(compiled.code, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  vm.runInNewContext(output, { module, exports: module.exports, require: id => { assert.equal(id, 'vue'); return vue; } });
+  let tree;
+  const app = vue.createSSRApp({ setup: () => () => { tree = module.exports.render({}, [], {}, vue.proxyRefs(page)); return tree; } });
+  await renderToString(app);
+  return tree;
+}
+function descendants(node, predicate) {
+  const result = [];
+  function visit(item) { if (!item || typeof item !== 'object') return; if (predicate(item)) result.push(item); if (Array.isArray(item.children)) item.children.forEach(visit); }
+  visit(node); return result;
+}
+function vnodeText(node) { return typeof node.children === 'string' ? node.children : Array.isArray(node.children) ? node.children.map(vnodeText).join('') : ''; }
+function hasClass(node, name) { return typeof node.props?.class === 'string' && node.props.class.split(/\s+/).includes(name); }
+function sectionAction(tree, title, className, index = 0) {
+  const section = descendants(tree, node => hasClass(node, 'section') && descendants(node, child => hasClass(child, 'title') && vnodeText(child).startsWith(title)).length)[0];
+  assert.ok(section, `Missing rendered section: ${title}`);
+  const action = descendants(section, node => hasClass(node, className))[index];
+  assert.ok(action && typeof action.props?.onTap === 'function', `Missing rendered ${title} ${className} action ${index + 1}`);
+  return action;
+}
+async function tapAction(page, title, className, index = 0) { const action = sectionAction(await renderedEditor(page), title, className, index); await action.props.onTap({}); return action; }
+
+test('Rendered ingredient and seasoning removal changes only the draft until explicit save, preserving other rows and exact update payload', async () => {
+  const stored = { ...recipe, ingredients: [{ ingredient: { name: '鸡蛋' }, quantity: '2.125', unit: '个' }, { ingredient: { name: '番茄' }, quantity: '1.500', unit: '个' }, { ingredient: { name: '葱' }, quantity: null, unit: '把' }], seasonings: [{ name: '盐' }, { name: '生抽' }, { name: '食用油' }] };
+  const before = JSON.stringify(stored), writes = [];
+  const { page, show } = form({ getRecipe: async () => stored, updateRecipe: async (id, input) => { writes.push([id, JSON.parse(JSON.stringify(input))]); return { ...stored, version: 4 }; } });
+  await show(); await tapAction(page, '食材', 'remove', 1); await tapAction(page, '调料', 'remove', 1);
+  assert.equal(writes.length, 0); assert.equal(JSON.stringify(stored), before);
+  assert.deepEqual(JSON.parse(JSON.stringify(page.ingredients.value)), [{ name: '鸡蛋', quantity: '2.125', unit: '个' }, { name: '葱', quantity: '', unit: '把' }]);
+  assert.deepEqual(Array.from(page.seasonings.value), ['盐', '食用油']); assert.equal(page.name.value, recipe.name); assert.deepEqual(Array.from(page.steps.value), recipe.steps);
+  assert.equal(await page.persist(false), true);
+  assert.deepEqual(writes, [[recipe.id, { name: recipe.name, ingredients: [{ name: '鸡蛋', quantity: 2.125, unit: '个' }, { name: '葱', unit: '把' }], seasonings: ['盐', '食用油'], steps: ['炒熟'], categoryId: null, expectedVersion: 3 }]]);
+});
+
+test('The last rendered seasoning can be cleared and explicitly saved as an empty optional list', async () => {
+  const writes = []; const { page, show } = form({ updateRecipe: async (id, input) => { writes.push([id, JSON.parse(JSON.stringify(input))]); return { ...recipe, seasonings: [], version: 4 }; } });
+  await show(); const action = await tapAction(page, '调料', 'remove'); assert.equal(vnodeText(action), '清空');
+  assert.deepEqual(Array.from(page.seasonings.value), ['']); assert.equal(writes.length, 0);
+  assert.equal(await page.persist(false), true); assert.deepEqual(writes[0][1].seasonings, []); assert.deepEqual(writes[0][1].ingredients, [{ name: '鸡蛋', quantity: 2, unit: '个' }]);
+  assert.deepEqual(Array.from(page.seasonings.value), ['']); assert.equal(page.recipeVersion.value, 4);
+});
+
+test('The last rendered ingredient can be cleared for replacement while save still requires one ingredient', async () => {
+  const writes = []; const { page, show, toasts } = form({ updateRecipe: async (id, input) => { writes.push([id, JSON.parse(JSON.stringify(input))]); return { ...recipe, version: 4 }; } });
+  await show(); const action = await tapAction(page, '食材', 'remove'); assert.equal(vnodeText(action), '清空');
+  assert.deepEqual(JSON.parse(JSON.stringify(page.ingredients.value)), [{ name: '', quantity: '', unit: 'g' }]); assert.equal(writes.length, 0);
+  assert.equal(await page.persist(false), false); assert.match(toasts.at(-1), /至少填写一种食材/); assert.equal(writes.length, 0);
+  assert.equal(page.name.value, recipe.name); assert.deepEqual(Array.from(page.seasonings.value), ['盐']); assert.deepEqual(Array.from(page.steps.value), recipe.steps);
+  Object.assign(page.ingredients.value[0], { name: '牛肉', quantity: '1.125', unit: '克' }); assert.equal(await page.persist(false), true);
+  assert.deepEqual(writes[0][1].ingredients, [{ name: '牛肉', quantity: 1.125, unit: '克' }]); assert.deepEqual(writes[0][1].seasonings, ['盐']); assert.equal(writes[0][1].expectedVersion, 3);
+});
+
+test('Rendered add/remove rows keep new recipe inputs and deletion failures retain the reduced draft', async () => {
+  let writes = 0; const { page, show, toasts } = form({ createRecipe: async () => { writes++; throw new ApiError('版本冲突', 409); } });
+  await show(''); fill(page); page.seasonings.value = ['盐'];
+  await tapAction(page, '食材', 'add'); await tapAction(page, '调料', 'add');
+  assert.equal(page.ingredients.value.length, 2); assert.equal(page.seasonings.value.length, 2);
+  await tapAction(page, '食材', 'remove', 1); await tapAction(page, '调料', 'remove', 1);
+  assert.equal(page.ingredients.value.length, 1); assert.deepEqual(Array.from(page.seasonings.value), ['盐']); assert.equal(page.name.value, ' 新菜 ');
+  const before = JSON.stringify(page.snapshot()); assert.equal(await page.persist(false), false);
+  assert.equal(writes, 1); assert.equal(toasts.at(-1), '版本冲突'); assert.equal(JSON.stringify(page.snapshot()), before);
+});
+
+test('Removal ignores invalid indices and stale rendered actions during save, after hiding or without edit access', async () => {
+  const pending = deferred(); const { page, show, life } = form({ updateRecipe: () => pending.promise }); await show();
+  page.addIngredient(); page.addSeasoning(); const tree = await renderedEditor(page), ingredient = sectionAction(tree, '食材', 'remove'), seasoning = sectionAction(tree, '调料', 'remove');
+  const before = JSON.stringify(page.snapshot());
+  for (const index of [-1, 0.5, 2, NaN]) { page.removeIngredient(index); page.removeSeasoning(index); }
+  assert.equal(JSON.stringify(page.snapshot()), before);
+  const saving = page.persist(false); await ingredient.props.onTap({}); await seasoning.props.onTap({}); assert.equal(JSON.stringify(page.snapshot()), before);
+  pending.resolve({ ...recipe, version: 4 }); await saving;
+  page.session.value = { ...context, effectivePermissions: { recipes: 'VIEW' } }; const withoutAccess = JSON.stringify(page.snapshot());
+  await ingredient.props.onTap({}); await seasoning.props.onTap({}); assert.equal(JSON.stringify(page.snapshot()), withoutAccess);
+  life.hide(); await ingredient.props.onTap({}); await seasoning.props.onTap({});
+  assert.deepEqual(Array.from(page.seasonings.value), ['']); assert.equal(page.ingredients.value[0].name, ''); assert.equal(page.session.value, undefined);
+});
 
 test('Recipe editor requests editing permission before reading recipes or categories', async () => {
   let reads = 0;

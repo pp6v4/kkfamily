@@ -267,6 +267,32 @@ test('D09: yearly anniversaries project leap-day policy and remain versioned, ed
   assert.equal((await call(who,'GET','/calendar/anniversaries')).body.data.some(item=>item.id===anniversary.id),false);
   assert.equal((await call(who,'GET','/calendar/events?from=2025-03-01T00%3A00%3A00%2B08%3A00&to=2025-03-02T00%3A00%3A00%2B08%3A00')).body.data.length,0);
 });
+test('Calendar legacy anniversary is versioned, safely archivable by shared editors, and never deletes linked projections', async () => {
+  const who=await owner(),other=await owner();
+  const editor=await join(who,['GUEST'],[{module:'calendar',level:'EDIT',effect:'ALLOW'}]);
+  const viewer=await join(who,['GUEST'],[{module:'calendar',level:'VIEW',effect:'ALLOW'}]);
+  const legacy=await db.calendarEvent.create({data:{householdId:who.householdId,type:'ANNIVERSARY',title:'虚构旧版纪念日',startsAt:new Date('2026-10-22T00:00:00+08:00'),createdById:'unknown-legacy-user'}});
+  const linked=await db.calendarEvent.create({data:{householdId:who.householdId,type:'MEAL',title:'不允许用纪念日接口删除的餐点投影',startsAt:legacy.startsAt,createdById:who.userId,sourceType:'MEAL',sourceId:'linked-source'}});
+  const path=`/calendar/events/${legacy.id}/archive`,query='/calendar/events?from=2026-10-22T00%3A00%3A00%2B08%3A00&to=2026-10-23T00%3A00%3A00%2B08%3A00';
+  const listed=await call(editor,'GET',query),row=listed.body.data.find(item=>item.id===legacy.id);
+  assert.equal(listed.status,200,JSON.stringify(listed.body));assert.equal(row.legacy,true);assert.equal(row.canArchive,true);assert.equal(row.version,1);assert.equal(row.sourceId,null);assert.equal(row.sourceType,null);
+  assert.equal((await call(viewer,'GET',query)).body.data.find(item=>item.id===legacy.id).canArchive,false);
+  assert.equal((await call(viewer,'POST',path,{expectedVersion:1})).status,403);
+  assert.equal((await call(other,'POST',path,{expectedVersion:1})).status,404);
+  assert.equal((await call(editor,'POST',path,{expectedVersion:0})).status,400);
+  assert.equal((await call(editor,'POST',path,{expectedVersion:2})).status,409);
+  assert.deepEqual(await db.calendarEvent.findUniqueOrThrow({where:{id:legacy.id}}),legacy);
+  assert.equal(await db.auditLog.count({where:{householdId:who.householdId,targetId:legacy.id}}),0);
+  assert.equal((await call(editor,'POST',`/calendar/events/${linked.id}/archive`,{expectedVersion:1})).status,404);
+  assert.deepEqual(await db.calendarEvent.findUniqueOrThrow({where:{id:linked.id}}),linked);
+  const archived=await call(editor,'POST',path,{expectedVersion:1});assert.equal(archived.status,201,JSON.stringify(archived.body));assert.equal(archived.body.data.archived,true);
+  const stored=await db.calendarEvent.findUniqueOrThrow({where:{id:legacy.id}});assert.equal(stored.version,2);assert.ok(stored.archivedAt);
+  for(const key of ['id','title','createdById','sourceType','sourceId'])assert.equal(stored[key],legacy[key],key);
+  assert.equal(stored.startsAt.toISOString(),legacy.startsAt.toISOString());assert.equal(stored.createdAt.toISOString(),legacy.createdAt.toISOString());
+  assert.equal((await call(editor,'GET',query)).body.data.some(item=>item.id===legacy.id),false);
+  const audits=await db.auditLog.findMany({where:{householdId:who.householdId,targetId:legacy.id}});assert.equal(audits.length,1);assert.equal(audits[0].actorMembershipId,editor.memberId);assert.deepEqual(audits[0].details,{fromVersion:1,toVersion:2,legacy:true});
+});
+
 test('D07: trip membership is explicit, revocation is immediate, and the final owner is protected', async () => {
   const who=await owner(),member=await join(who,['CAMPER']);
   const created=await call(who,'POST','/trips',{title:'成员边界验证',startsAt:'2026-09-10T08:00:00+08:00'});assert.equal(created.status,201);
@@ -633,6 +659,9 @@ test('A40/D12: dashboard hides unauthorized sources, filters trip membership and
   done=(await call(who,'PATCH',`/tasks/${done.id}/status`,{expectedVersion:done.version,status:'COMPLETED'})).body.data;
   let cancelled=(await call(who,'POST','/tasks',{type:'TODO',title:'已取消事项',priority:'NORMAL'})).body.data;
   await call(who,'PATCH',`/tasks/${cancelled.id}/status`,{expectedVersion:cancelled.version,status:'CANCELLED'});
+  // Dashboard tasks are scoped by createdAt; keep fixtures inside the fixed September window regardless of the execution date.
+  const fixtureDates=await db.task.updateMany({where:{householdId:who.householdId,id:{in:[done.id,cancelled.id]}},data:{createdAt:new Date('2026-09-12T08:00:00+08:00')}});
+  assert.equal(fixtureDates.count,2);
   result=await call(viewer,'GET',path);assert.deepEqual(result.body.data.tasks,{completed:1,total:1,completionRate:1});
   assert.equal((await call(viewer,'GET',`/dashboard/summary?from=${encodeURIComponent('2025-01-01T00:00:00Z')}&to=${encodeURIComponent('2026-09-02T00:00:00Z')}`)).status,400);
   const dashboardOnly=await join(who,['GUEST'],[{module:'dashboard',level:'VIEW',effect:'ALLOW'}]);
@@ -964,4 +993,111 @@ test('Shortage import rejects stale snapshots, guessed requirements and unconfir
   assert.equal((await call(f.who,'POST','/shopping-lists/next-trip/import-shortages',{...dto,snapshotVersion:99})).status,409);
   assert.equal((await call(f.who,'POST','/shopping-lists/next-trip/import-shortages',{...dto,selectedRequirementIds:['invented']})).status,400);
   assert.equal(await db.shoppingItem.count({where:{sourceId:f.meal.id}}),0);
+});
+
+test('R01 HTTP: explicit manager reopening and whole-dish removal preserve snapshots, other dishes and every removed vote audit', async () => {
+  const f=await mealFixture({seasonings:[]}),first=await join(f.who),second=await join(f.who);
+  assert.equal((await call(f.who,'DELETE',`/meals/${f.meal.id}/items/${f.recipe.id}`)).status,200);
+  for (const [person,note] of [[first,'少盐'],[second,'不放辣椒']]) {
+    const selected=await call(person,'POST',`/meals/${f.meal.id}/items`,{recipeId:f.recipe.id,note});assert.equal(selected.status,201,JSON.stringify(selected.body));
+  }
+  const created=await call(f.who,'POST','/recipes',{name:'保留的番茄汤',ingredients:[{name:'番茄',quantity:200,unit:'g'}],seasonings:[],steps:['煮熟']});
+  assert.equal(created.status,201,JSON.stringify(created.body));const remaining=await attachReadyCover(f.who,created.body.data);
+  assert.equal((await call(f.who,'PATCH',`/recipes/${remaining.id}/status`,{status:'PUBLISHED',expectedVersion:remaining.version})).status,200);
+  assert.equal((await call(first,'POST',`/meals/${f.meal.id}/items`,{recipeId:remaining.id})).status,201);
+  f.meal=await currentMeal(f.who,f.meal.id);
+  const servings=await call(f.who,'PATCH',`/meals/${f.meal.id}/dishes/${f.recipe.id}`,{expectedVersion:f.meal.version,cookMultiplier:2.125});
+  assert.equal(servings.status,200,JSON.stringify(servings.body));f.meal=servings.body.data;await confirmFixture(f);
+  const originalSnapshots=await db.mealSnapshot.findMany({where:{mealId:f.meal.id},orderBy:{version:'asc'}});
+  assert.equal(originalSnapshots.length,1);assert.equal(originalSnapshots[0].version,1);
+  const removalPath=`/meals/${f.meal.id}/dishes/${f.recipe.id}/remove`;
+  async function persistedMenu() {
+    return {
+      meal:await db.meal.findUniqueOrThrow({where:{id:f.meal.id}}),
+      items:await db.mealItem.findMany({where:{mealId:f.meal.id},orderBy:{id:'asc'}}),
+      dishes:await db.mealDish.findMany({where:{mealId:f.meal.id},orderBy:{recipeId:'asc'}}),
+      snapshots:await db.mealSnapshot.findMany({where:{mealId:f.meal.id},orderBy:{version:'asc'}}),
+      audits:await db.auditLog.findMany({where:{householdId:f.who.householdId,targetId:f.meal.id,action:'MEAL_DISH_REMOVE'},orderBy:{id:'asc'}}),
+    };
+  }
+  const locked=await persistedMenu();
+  assert.equal((await call(first,'POST',removalPath,{expectedVersion:f.meal.version})).status,403,'Ordinary meal editors cannot remove other members choices');
+  assert.equal((await call(f.who,'POST',removalPath,{expectedVersion:f.meal.version})).status,409,'The manager must explicitly reopen a confirmed menu');
+  assert.deepEqual(await persistedMenu(),locked);
+  const reason='移除已下架的菜，保留其余菜单和旧快照';
+  const reopened=await call(f.who,'POST',`/meals/${f.meal.id}/reopen`,{expectedVersion:f.meal.version,reason});
+  assert.equal(reopened.status,201,JSON.stringify(reopened.body));assert.equal(reopened.body.data.status,'DRAFT');
+  assert.equal(reopened.body.data.version,f.meal.version+1);assert.equal(reopened.body.data.snapshotVersion,1);f.meal=reopened.body.data;
+  const currentRecipe=await call(f.who,'GET',`/recipes/${f.recipe.id}`);assert.equal(currentRecipe.status,200);
+  const archived=await call(f.who,'PATCH',`/recipes/${f.recipe.id}/status`,{status:'ARCHIVED',expectedVersion:currentRecipe.body.data.version});assert.equal(archived.status,200,JSON.stringify(archived.body));
+  const beforeRemoval=await persistedMenu(),removedChoices=beforeRemoval.items.filter(item=>item.recipeId===f.recipe.id);
+  assert.equal(removedChoices.length,2);assert.deepEqual(removedChoices.map(item=>item.addedById).sort(),[first.memberId,second.memberId].sort());
+  assert.equal((await call(first,'POST',removalPath,{expectedVersion:f.meal.version})).status,403);
+  assert.equal((await call(f.who,'POST',removalPath,{expectedVersion:f.meal.version-1})).status,409);
+  assert.deepEqual(await persistedMenu(),beforeRemoval,'Rejected removal leaves votes, versions, snapshots and audit rows unchanged');
+  const removed=await call(f.who,'POST',removalPath,{expectedVersion:f.meal.version});assert.equal(removed.status,201,JSON.stringify(removed.body));
+  assert.equal(removed.body.data.version,f.meal.version+1);assert.equal(removed.body.data.snapshotVersion,1);
+  assert.deepEqual(removed.body.data.menu.map(dish=>dish.recipeId),[remaining.id]);
+  const afterRemoval=await persistedMenu();
+  assert.deepEqual(afterRemoval.items,beforeRemoval.items.filter(item=>item.recipeId!==f.recipe.id));
+  assert.deepEqual(afterRemoval.dishes,beforeRemoval.dishes.filter(dish=>dish.recipeId!==f.recipe.id));
+  assert.deepEqual(afterRemoval.snapshots,originalSnapshots);assert.equal(afterRemoval.audits.length,1);
+  const audit=afterRemoval.audits[0],{removedSelections,...details}=audit.details;
+  assert.equal(audit.actorMembershipId,f.who.memberId);
+  assert.deepEqual(details,{fromVersion:f.meal.version,toVersion:f.meal.version+1,snapshotVersion:1,recipeId:f.recipe.id,recipeName:f.recipe.name,cookMultiplier:'2.125'});
+  const byId=(a,b)=>a.id.localeCompare(b.id);
+  assert.deepEqual([...removedSelections].sort(byId),removedChoices.map(({id,addedById,note})=>({id,addedById,note})).sort(byId));
+  assert.equal((await call(f.who,'POST',removalPath,{expectedVersion:f.meal.version})).status,409);
+  assert.deepEqual(await persistedMenu(),afterRemoval,'A stale retry does not create a second removal audit');
+  const reopenAudit=await db.auditLog.findMany({where:{householdId:f.who.householdId,targetId:f.meal.id,action:'MEAL_REOPEN'}});
+  assert.equal(reopenAudit.length,1);assert.equal(reopenAudit[0].details.reason,reason);
+  f.meal=removed.body.data;await confirmFixture(f);assert.equal(f.meal.snapshotVersion,2);
+  const history=await call(f.who,'GET',`/meals/${f.meal.id}/snapshots`);assert.equal(history.status,200);
+  assert.deepEqual(history.body.data.map(snapshot=>snapshot.version),[2,1]);
+  assert.deepEqual(history.body.data[0].data.dishes.map(dish=>dish.recipeId),[remaining.id]);
+  assert.deepEqual(await db.mealSnapshot.findUniqueOrThrow({where:{id:originalSnapshots[0].id}}),originalSnapshots[0]);
+});
+
+test('Tasks HTTP: editing retains a disabled original assignee while real reassignment still requires MANAGE and ACTIVE', async () => {
+  const who=await owner(),creator=await join(who),original=await join(who),replacement=await join(who);
+  const dueAt='2026-10-25T07:30:00.123Z',reminderAt='2026-10-24T04:15:00.456Z';
+  const created=await call(creator,'POST','/tasks',{type:'TODO',title:'停用负责人后的内容编辑',description:'原说明',dueAt,reminderAt,priority:'NORMAL'});
+  assert.equal(created.status,201,JSON.stringify(created.body));let task=created.body.data;
+  assert.equal(task.createdById,creator.memberId);assert.equal(task.assigneeMembershipId,creator.memberId);
+  const assigned=await call(who,'PATCH',`/tasks/${task.id}`,{expectedVersion:task.version,assigneeMembershipId:original.memberId});
+  assert.equal(assigned.status,200,JSON.stringify(assigned.body));task=assigned.body.data;
+  const disabled=await call(who,'PATCH',`/members/${original.memberId}/status`,{version:original.member.version,status:'DISABLED'});
+  assert.equal(disabled.status,200,JSON.stringify(disabled.body));assert.equal(disabled.body.data.status,'DISABLED');
+  const originalTask=await db.task.findUniqueOrThrow({where:{id:task.id}});
+  const cleared=await call(creator,'PATCH',`/tasks/${task.id}`,{expectedVersion:task.version,description:''});
+  assert.equal(cleared.status,200,JSON.stringify(cleared.body));assert.equal(cleared.body.data.version,task.version+1);task=cleared.body.data;
+  assert.equal(task.description,null);assert.equal(task.assigneeMembershipId,original.memberId);assert.equal(task.dueAt,dueAt);assert.equal(task.reminderAt,reminderAt);
+  const saved=await db.task.findUniqueOrThrow({where:{id:task.id}});
+  assert.deepEqual(saved,{...originalTask,description:null,version:originalTask.version+1,updatedAt:saved.updatedAt});
+  const explicitSame=await call(creator,'PATCH',`/tasks/${task.id}`,{expectedVersion:task.version,description:'只修改说明，不改负责人',assigneeMembershipId:original.memberId});
+  assert.equal(explicitSame.status,200,JSON.stringify(explicitSame.body));assert.equal(explicitSame.body.data.version,task.version+1);task=explicitSame.body.data;
+  assert.equal(task.assigneeMembershipId,original.memberId);assert.equal(task.description,'只修改说明，不改负责人');assert.equal(task.dueAt,dueAt);assert.equal(task.reminderAt,reminderAt);
+  const reassigned=await call(who,'PATCH',`/tasks/${task.id}`,{expectedVersion:task.version,assigneeMembershipId:replacement.memberId});
+  assert.equal(reassigned.status,200,JSON.stringify(reassigned.body));assert.equal(reassigned.body.data.version,task.version+1);task=reassigned.body.data;
+  assert.equal(task.assigneeMembershipId,replacement.memberId);assert.equal(task.description,'只修改说明，不改负责人');
+  async function persistedTask() {
+    return {
+      task:await db.task.findUniqueOrThrow({where:{id:task.id}}),
+      history:await db.taskHistory.findMany({where:{taskId:task.id},orderBy:{id:'asc'}}),
+      audits:await db.auditLog.findMany({where:{householdId:who.householdId,targetId:task.id},orderBy:{id:'asc'}}),
+      outbox:await db.outboxEvent.findMany({where:{householdId:who.householdId,aggregateType:'TASK',aggregateId:task.id},orderBy:{id:'asc'}}),
+      jobs:await db.notificationJob.findMany({where:{sourceType:'TASK',sourceId:task.id},orderBy:{id:'asc'}}),
+    };
+  }
+  const beforeRejected=await persistedTask();
+  assert.equal((await call(who,'PATCH',`/tasks/${task.id}`,{expectedVersion:task.version,assigneeMembershipId:original.memberId})).status,400,'A real reassignment cannot target the disabled former assignee');
+  assert.deepEqual(await persistedTask(),beforeRejected);
+  for (const assigneeMembershipId of [who.memberId,null]) {
+    assert.equal((await call(creator,'PATCH',`/tasks/${task.id}`,{expectedVersion:task.version,assigneeMembershipId})).status,403,'A creator with EDIT may edit pending content but cannot reassign or clear its owner');
+    assert.deepEqual(await persistedTask(),beforeRejected);
+  }
+  assert.equal((await call(who,'PATCH',`/tasks/${task.id}`,{expectedVersion:task.version-1,description:'旧版本不得覆盖'})).status,409);
+  assert.deepEqual(await persistedTask(),beforeRejected,'Rejected writes do not change content, version, history, audits, outbox or scheduled jobs');
+  assert.equal(beforeRejected.audits.filter(audit=>audit.action==='TASK_UPDATE').length,4);
+  assert.equal(beforeRejected.history.length,5);assert.equal(beforeRejected.outbox.length,5);
 });

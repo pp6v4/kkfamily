@@ -2,6 +2,8 @@
 
 更新日期：2026-10-21。本文面向接手开发者和 LLM，命令以仓库根目录或明确注明的工作目录为准。业务规则先读 [设计契约](design/contract-details.md) 和 [后续决定索引](design/README.md)；平台联调状态以交接进度记录为准，不用旧文档中的测试数量推断当前状态。
 
+2026-10-22补充：最新修复/发布边界见[本轮用户问题记录](bugfix-20261022.md)。当前源码版本0.1.2，客户端336/336、API非数据库61/61及构建/lint/类型检查通过；独立outDir编译成功。源码迁移现为20，生成Prisma Client不等于已经向生产执行迁移。本文下方310/47和0.1.1的描述保留原批次时点；当前已上传包仍是0.1.1，0.1.2未上传，新业务未部署，隔离库最终结果待补。
+
 ## 1. 技术组件与边界
 
 | 位置 | 当前组件 | 说明 |
@@ -51,7 +53,7 @@ pnpm install --frozen-lockfile
 
 模板还保留 `JWT_ACCESS_TTL`、`JWT_REFRESH_TTL`，当前代码未用它们控制有效期：访问令牌在 `auth.module.ts` 固定为 15 分钟，刷新会话在 `auth.service.ts` 固定为 30 天。修改模板值不会自动改变行为。
 
-客户端业务地址目前写在 `apps/client/src/services/config.ts`，不是 `VITE_API_BASE_URL` 等环境变量。开始联调前必须检查该文件，因为仓库默认指向生产业务入口；要连本地或隔离 API，显式配置对应开发地址。微信应用配置入口是 `apps/client/src/manifest.json`，当前客户端版本标记为 `0.1.1`。不要把账号配置、令牌、签名 URL 或生产数据写进测试夹具与文档。
+客户端业务地址目前写在 `apps/client/src/services/config.ts`，不是 `VITE_API_BASE_URL` 等环境变量。开始联调前必须检查该文件，因为仓库默认指向生产业务入口；要连本地或隔离 API，显式配置对应开发地址。微信应用配置入口是 `apps/client/src/manifest.json`；10月21日版本标记为 `0.1.1`，10月22日候选源码已更新为 `0.1.2`（versionCode 102），上传状态另看本轮记录。不要把账号配置、令牌、签名 URL 或生产数据写进测试夹具与文档。
 
 ## 3. 已有依赖的工作区：直接运行本地工具
 
@@ -86,6 +88,8 @@ node --test --test-reporter=spec test/*.unit.test.cjs test/patch-compatibility.t
 ```
 
 API 构建写入 `apps/api/dist`。不少既有单元测试加载 `dist`，必须先构建本次源码，不能拿旧编译产物验证新实现；新增的 `meal-menu`、`tasks.update`、`trip-history-access` 等测试也有直接加载 TypeScript 服务源码的用例。上述测试集合不运行数据库集成，也不需要生产配置。
+
+10月22日新增`calendar-archive.unit.test.cjs`和`object-storage-errors.unit.test.cjs`等专项；日历schema改变后先重新生成Prisma Client，再构建与测试。第20迁移及旧库升级另在隔离PostgreSQL执行；不要因本地61项非数据库测试通过就跳过真实迁移/HTTP检查。日历归档保持共享calendar:EDIT及家庭/版本校验，新增旧版接口不允许删除关联餐点/行程投影。
 
 根目录 `pnpm test` 会调用各包的 `test` 脚本，而 API 当前 `test` 脚本是 `jest`。它不能替代这里的 Node CJS 测试集合；根目录 `pnpm build` 也不能代替带明确平台和新输出目录的小程序构建。请按目标执行具体命令。
 
@@ -158,6 +162,8 @@ if ($LASTEXITCODE -ne 0) { throw '编译产物探针失败' }
 此脚本只构建并检查新目录，不复制到旧导入目录、不上传微信、不部署服务。编译产物探针当前覆盖菜谱录入、模板创建/返回/显式套用、目的地回调/行程保存等 3 个场景，不是全部业务的真机验收。
 
 本次交接已成功编译的新目录为 `.codex-tmp/closure-build-20261021-0f924c8b`；不要复用它做下一轮构建。`.codex-tmp` 被 Git 忽略，新克隆没有这些本地证据与产物，应按上述命令重新生成。
+
+10月22日0.1.2的隔离编译目录为`.codex-tmp/bugfix-0.1.2-20261022-d6ab937c`，同样不要复用；编译成功不包含微信上传。存储运行参数修复和业务镜像升级也分开，详见本轮记录中的COS诊断证据及待部署状态。
 
 ## 7. 本次检查基线与接手顺序
 

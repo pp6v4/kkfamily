@@ -51,6 +51,13 @@ function compoundMatches(selector, element) {
 }
 
 function selectorMatches(selector, element) {
+  // A button border reset on ::after styles its generated box, not the input
+  // itself. Validate the originating selector, but never apply that geometry
+  // to real elements; other unsupported selector syntax still fails closed.
+  if (/::(?:before|after)$/.test(selector.trim())) {
+    selectorMatches(selector.trim().replace(/::(?:before|after)$/, ''), element);
+    return false;
+  }
   const tokens = selector.trim().split(/\s*(>)\s*|\s+/).filter(Boolean);
   function match(index, entry) {
     if (!entry || !compoundMatches(tokens[index], entry)) return false;
@@ -185,4 +192,13 @@ test('Cascade uses scoped class specificity and declaration order rather than ma
   assert.throws(() => audit(page, app.css, tooShort), /height\/min-height regressed: 12\/12/);
   const padded = appendCss(page.css, '.input { padding: 60rpx; padding-top: 0; padding-bottom: 0; }');
   assert.ok(audit(page, app.css, padded) > 0);
+});
+
+test('Generated pseudo-element geometry is not applied to native inputs; unsupported selectors remain rejected', () => {
+  const page = pages.find(entry => entry.filename === path.join(SRC, FORMS[0]));
+  const generated = appendCss(page.css, '.input::after { height: 1rpx; min-height: 1rpx; padding: 60rpx; border: 2rpx solid #fff; }');
+  assert.ok(audit(page, app.css, generated) > 0);
+  const real = appendCss(generated, '.input { height: 1rpx; min-height: 1rpx; }');
+  assert.throws(() => audit(page, app.css, real), /height\/min-height regressed/);
+  assert.throws(() => audit(page, app.css, appendCss(page.css, 'input:is(.input) { padding: 1rpx; }')), /Unsupported layout selector/);
 });

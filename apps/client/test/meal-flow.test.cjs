@@ -38,15 +38,148 @@ function form(api = {}, access) {
   page.date.value = '2026-09-01';
   return { page, life, toasts, modals, routes, setStored: value => stored = value, setTarget: value => calendarTarget = value };
 }
-async function renderPage(page) {
+async function renderPage(page, tapButton) {
   const filename = path.join(ROOT, 'src/pages/meal/index.vue'), { descriptor } = parse(fs.readFileSync(filename, 'utf8'), { filename });
   const script = compileScript(descriptor, { id: 'meal-render', inlineTemplate: false });
   const compiled = compileTemplate({ source: descriptor.template.content, filename, id: 'meal-render', compilerOptions: { bindingMetadata: script.bindings, isCustomElement: tag => ['view', 'text', 'image', 'input', 'button', 'picker', 'scroll-view'].includes(tag) } });
   assert.deepEqual(compiled.errors, []);
   const { render } = evaluate(compiled.code, { vue }, {});
-  const app = vue.createSSRApp({ setup: () => () => render({}, [], {}, vue.proxyRefs(page)) });
-  return renderToString(app);
+  let tree;
+  const app = vue.createSSRApp({ setup: () => () => { tree = render({}, [], {}, vue.proxyRefs(page)); return tree; } });
+  const html = await renderToString(app);
+  if (tapButton) {
+    const text = value => Array.isArray(value) ? value.map(text).join('') : value && typeof value === 'object' ? text(value.children) : typeof value === 'string' ? value : '';
+    const buttons = [];
+    const visit = value => { if (Array.isArray(value)) { value.forEach(visit); return; } if (!value || typeof value !== 'object') return; if (value.type === 'button' && text(value.children) === tapButton) buttons.push(value); visit(value.children); };
+    visit(tree); assert.equal(buttons.length, 1, 'Exactly one visible button: ' + tapButton);
+    assert.equal(Boolean(buttons[0].props?.disabled), false, 'Rendered button must be enabled');
+    assert.equal(typeof buttons[0].props?.onTap, 'function', 'Rendered button must have a tap handler');
+    await buttons[0].props.onTap({ stopPropagation() {} });
+  }
+  return html;
 }
+
+test('Ordering entry creates the selected date and meal, then adds and withdraws an actual choice', async () => {
+  let storedMeal;
+  const writes = [];
+  const { page, life } = form({
+    listMeals: async () => storedMeal ? [storedMeal] : [], recalculateMeal: async () => [],
+    createMeal: async input => {
+      writes.push(['create', { ...input }]);
+      storedMeal = { ...meal, id: 'selected-lunch', version: 1, localDate: '2026-10-23', scheduledAt: input.scheduledAt, mealType: input.mealType, status: 'DRAFT', snapshotVersion: 0, items: [], menu: [] };
+      return storedMeal;
+    },
+    addMealRecipe: async (id, recipeId) => {
+      writes.push(['add', id, recipeId]);
+      storedMeal = { ...storedMeal, version: 2, items: [{ recipeId, addedById: context.membershipId }], menu: [{ recipeId, recipe, cookMultiplier: '1', wantedBy: [{ membershipId: context.membershipId, nickname: '我' }] }] };
+    },
+    removeMealRecipe: async (id, recipeId) => { writes.push(['withdraw', id, recipeId]); storedMeal = { ...storedMeal, version: 3, items: [], menu: [] }; },
+  });
+  await life.show();
+  await page.changeDate({ detail: { value: '2026-10-23' } }); await page.chooseMealType('午餐');
+  let html = await renderPage(page);
+  assert.match(html, /创建这顿餐点，开始点菜/); assert.match(html, /2026-10-23/); assert.match(html, /午餐/);
+  assert.equal(writes.length, 0);
+  await renderPage(page, '创建这顿餐点，开始点菜');
+  assert.equal(page.meal.value.id, 'selected-lunch'); assert.equal(page.active.value, 'order');
+  assert.deepEqual(writes, [['create', { scheduledAt: '2026-10-23T12:00:00+08:00', mealType: 'LUNCH', slotKey: undefined }]]);
+  await renderPage(page, '点这道菜');
+  html = await renderPage(page); assert.match(html, /撤回我的选择/); assert.match(html, /查看待做菜单（1道）/);
+  assert.equal(page.mealItems.value.length, 1); assert.equal(page.mealItems.value[0].wantedBy[0].membershipId, context.membershipId);
+  await renderPage(page, '撤回我的选择');
+  assert.equal(page.mealItems.value.length, 0); assert.equal(page.ownRecipeIds.value.size, 0);
+  assert.deepEqual(writes.slice(1), [['add', 'selected-lunch', recipe.id], ['withdraw', 'selected-lunch', recipe.id]]);
+});
+
+test('Empty menu offers ordering, and entering an existing draft never creates a duplicate meal', async () => {
+  let creates = 0;
+  const draft = { ...meal, status: 'DRAFT', items: [], menu: [] };
+  const { page, life } = form({ listMeals: async () => [draft], recalculateMeal: async () => [], createMeal: async () => creates++ });
+  await life.show(); page.switchView('menu');
+  assert.match(await renderPage(page), /继续为这顿饭点菜/);
+  await renderPage(page, '继续为这顿饭点菜');
+  assert.equal(page.active.value, 'order'); assert.equal(page.meal.value.id, draft.id); assert.equal(creates, 0);
+});
+
+test('Draft-only recipes explain publishing and lead to recipe preparation without pretending a meal choice was made', async () => {
+  let writes = 0;
+  const { page, life, routes } = form({ listMeals: async () => [], listRecipes: async () => [{ ...recipe, status: 'DRAFT' }], addMealRecipe: async () => writes++ });
+  await life.show();
+  let html = await renderPage(page);
+  assert.match(html, /还没有可点的已发布菜谱/); assert.match(html, /草稿/); assert.match(html, /发布/); assert.match(html, /去准备并发布菜谱/);
+  assert.doesNotMatch(html, /class="add[" ]/);
+  await renderPage(page, '去准备并发布菜谱'); html = await renderPage(page);
+  assert.match(html, /为所选餐次点菜/);
+  page.addRecipe(); assert.deepEqual(routes, ['/pages/recipe-editor/index']); assert.equal(writes, 0);
+});
+
+test('Filtered categories, unavailable recipes and missing meal permissions have distinct actionable states', async () => {
+  const filtered = form({ listMeals: async () => [], listRecipes: async () => [recipe], listRecipeCategories: async () => [{ id: 'empty', name: '汤', version: 1 }] });
+  await filtered.life.show(); filtered.page.category.value = '汤';
+  let html = await renderPage(filtered.page); assert.match(html, /这个分类还没有可点的菜/); assert.match(html, /查看全部菜谱/); assert.doesNotMatch(html, /还没有可点的已发布菜谱/);
+  await renderPage(filtered.page, '查看全部菜谱'); assert.equal(filtered.page.visibleRecipes.value[0].id, recipe.id);
+  for (const effectivePermissions of [{ recipes: 'VIEW', meals: 'VIEW' }, { recipes: 'VIEW' }, { meals: 'EDIT' }]) {
+    let writes = 0;
+    const denied = form({ listMeals: async () => [], createMeal: async () => writes++, addMealRecipe: async () => writes++ }, async () => ({ ...context, effectivePermissions }));
+    await denied.life.show(); html = await renderPage(denied.page);
+    assert.match(html, /请.*管理员.*授权/); assert.doesNotMatch(html, /创建这顿餐点，开始点菜/); assert.doesNotMatch(html, /class="add[" ]/);
+    await denied.page.beginOrdering(); assert.equal(writes, 0);
+  }
+});
+
+test('Ordering creation is single-flight, and a hidden or replaced page cannot restore its created meal', async () => {
+  for (const stale of ['hide', 'identity']) {
+    const pending = deferred(); let creates = 0;
+    const { page, life, setStored } = form({ listMeals: async () => [], createMeal: () => { creates++; return pending.promise; } });
+    await life.show(); const first = page.beginOrdering(); const duplicate = page.beginOrdering();
+    assert.equal(creates, 1);
+    if (stale === 'hide') life.hide(); else setStored({ ...context, householdId: 'other-house' });
+    pending.resolve({ ...meal, status: 'DRAFT' }); await Promise.all([first, duplicate]);
+    assert.equal(page.meal.value, undefined); assert.equal(page.writing.value, false);
+  }
+});
+
+test('Ordering an extra meal requires applying its name and sends that exact date, type and slot', async () => {
+  let storedMeal;
+  const writes = [];
+  const { page, life } = form({ listMeals: async () => storedMeal ? [storedMeal] : [], recalculateMeal: async () => [], createMeal: async input => {
+    writes.push({ ...input }); storedMeal = { ...meal, id: 'afternoon-tea', mealType: 'OTHER', slotKey: '下午茶', status: 'DRAFT', menu: [], items: [] }; return storedMeal;
+  } });
+  await life.show(); await page.chooseMealType('加餐'); page.slotInput.value = '下午茶';
+  await page.beginOrdering(); assert.equal(writes.length, 0); assert.match(page.errorText.value, /查看这顿加餐/);
+  await page.changeSelection(page.date.value, '加餐'); await renderPage(page, '创建这顿餐点，开始点菜');
+  assert.deepEqual(writes, [{ scheduledAt: '2026-09-01T21:00:00+08:00', mealType: 'OTHER', slotKey: '下午茶' }]);
+  assert.equal(page.meal.value.id, 'afternoon-tea'); assert.equal(page.slotKey.value, '下午茶');
+});
+
+test('An existing locked meal is shown as locked instead of creating another meal or accepting a choice', async () => {
+  let creates = 0, additions = 0;
+  const { page, life } = form({ createMeal: async () => creates++, addMealRecipe: async () => additions++ });
+  await life.show(); let html = await renderPage(page);
+  assert.match(html, /普通点菜已停止/); assert.match(html, /查看这顿餐点/); assert.doesNotMatch(html, /创建这顿餐点，开始点菜/); assert.doesNotMatch(html, /class="add[" ]/);
+  await renderPage(page, '查看这顿餐点'); assert.equal(page.active.value, 'menu');
+  await page.beginOrdering(); await page.toggleRecipe(recipe.id);
+  assert.equal(creates, 0); assert.equal(additions, 0); assert.equal(page.meal.value.status, 'CONFIRMED');
+});
+
+test('A read failure offers retry rather than claiming no published recipes or creating an unseen meal', async () => {
+  let creates = 0;
+  const { page, life } = form({ listRecipes: async () => { throw new ApiError('菜谱读取失败，请稍后重试', 502); }, createMeal: async () => creates++ });
+  await life.show(); const html = await renderPage(page);
+  assert.match(html, /菜谱读取失败/); assert.match(html, /刷新/); assert.doesNotMatch(html, /还没有可点的已发布菜谱/); assert.doesNotMatch(html, /创建这顿餐点，开始点菜/);
+  await page.beginOrdering(); assert.equal(creates, 0); assert.equal(page.writing.value, false);
+});
+
+test('Withdrawing an own choice from the menu keeps others choices even when that recipe is no longer selectable', async () => {
+  const friend = { membershipId: 'friend', nickname: '家人' };
+  let storedMeal = { ...meal, status: 'DRAFT', items: [{ recipeId: recipe.id, addedById: context.membershipId }, { recipeId: recipe.id, addedById: friend.membershipId }], menu: [{ ...meal.menu[0], wantedBy: [{ membershipId: context.membershipId, nickname: '我' }, friend] }] };
+  const writes = [];
+  const { page, life } = form({ listMeals: async () => [storedMeal], removeMealRecipe: async (mealId, recipeId) => {
+    writes.push([mealId, recipeId]); storedMeal = { ...storedMeal, items: storedMeal.items.filter(item => item.addedById !== context.membershipId), menu: [{ ...storedMeal.menu[0], wantedBy: [friend] }] };
+  } }, async () => ({ ...context, effectivePermissions: { meals: 'EDIT' } }));
+  await life.show(); page.switchView('menu'); await renderPage(page, '撤回我的选择');
+  assert.deepEqual(writes, [[meal.id, recipe.id]]); assert.equal(page.ownRecipeIds.value.size, 0); assert.equal(page.mealItems.value.length, 1); assert.equal(page.mealItems.value[0].wantedBy.length, 1); assert.equal(page.mealItems.value[0].wantedBy[0].membershipId, friend.membershipId);
+});
 
 test('Meal page clears all private data and drafts on hide/unload and ignores pending reads', async () => {
   for (const end of ['hide', 'unload']) {

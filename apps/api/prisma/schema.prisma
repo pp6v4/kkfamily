@@ -293,6 +293,8 @@ model CalendarEvent {
   sourceType  String?
   sourceId    String?
   createdById String
+  version     Int               @default(1)
+  archivedAt  DateTime?
   createdAt   DateTime          @default(now())
   updatedAt   DateTime          @updatedAt
   household   Household         @relation(fields: [householdId], references: [id], onDelete: Cascade)
