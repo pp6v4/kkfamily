@@ -177,10 +177,18 @@ async function refreshPacking(scope:ViewStamp){const request=++packingRead;const
 async function refreshTrip(scope:ViewStamp){const request=++tripRead;const trip=await getTrip(scope.tripId);if(current(scope)&&request===tripRead)replaceTrip(trip);}
 async function refreshTripAndPacking(scope:ViewStamp){
   const tripRequest=++tripRead,packingRequest=++packingRead;
-  const [trip,items]=await Promise.all([getTrip(scope.tripId),listTripPackingItems(scope.tripId)]);
+  function readFailed(error:unknown,latest:boolean){
+    if(!latest||!current(scope))return;
+    if(error instanceof ApiError&&[401,403,404].includes(error.statusCode))scopedError(scope,error);
+    throw error;
+  }
+  const [trip,items]=await Promise.all([
+    getTrip(scope.tripId).catch(error=>readFailed(error,tripRequest===tripRead)),
+    listTripPackingItems(scope.tripId).catch(error=>readFailed(error,packingRequest===packingRead)),
+  ]);
   if(!current(scope))return;
-  if(tripRequest===tripRead)replaceTrip(trip);
-  if(packingRequest===packingRead)packingItems.value=items;
+  if(trip&&tripRequest===tripRead)replaceTrip(trip);
+  if(items&&packingRequest===packingRead)packingItems.value=items;
 }
 async function refreshCandidates(scope:ViewStamp){if(!current(scope))return;if(!isTripOwner.value){candidates.value=[];return;}const rows=await listTripCandidates(scope.tripId);if(current(scope)&&isTripOwner.value)candidates.value=rows;}
 async function mutateTrip<T>(write:(trip:Trip)=>Promise<T>,after:(result:T,scope:ViewStamp)=>Promise<void>|void,owner:boolean|'ACCESS'=false){

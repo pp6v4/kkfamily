@@ -22,7 +22,8 @@ const pages = ['README.md', 'AGENTS.md', 'CONTRIBUTING.md', 'docs/README.md',
   'docs/handoff-20261021.md', 'docs/development-guide.md', 'docs/architecture-and-data.md',
   'docs/requirements-traceability.md', 'docs/bugfix-20261022.md',
   'docs/deployment-20261022.md', 'docs/release-notes-0.1.2.md', 'docs/closure-followup-20261022.md',
-  'docs/design/decisions-20261022.md', `${archive}/README.md`,
+  'docs/release-notes-0.1.3.md', 'docs/code-review-20261023.md',
+  'docs/design/decisions-20261022.md', 'docs/design/decisions-20261023-review-first.md', `${archive}/README.md`,
   ...manifest.documents.map(entry => `${archive}/${entry.markdown}`)];
 let links = 0;
 for (const relative of pages) {

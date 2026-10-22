@@ -666,6 +666,74 @@ test('Camping preparation-group reread access loss clears private data and rejec
   assert.equal(writes,1);assert.equal(page.selectedTrip.value,undefined);assert.equal(page.packingItems.value.length,0);assert.match(errors.at(-1),/访问状态已变化/);
 });
 
+for(const accessRead of ['trip','packing'])for(const statusCode of [401,403,404])for(const order of ['ordinary-first','access-first']){
+  test(`Camping preparation-group ${accessRead} ${statusCode} clears private data with ${order} failures`,async()=>{
+    const group={id:'group-a',name:'我们家',version:2,members:[{membershipId:'member-a'}]},trip={...sampleTrip,preparationGroups:[group]};
+    const reads={trip:pendingValue(),packing:pendingValue()},ordinaryRead=accessRead==='trip'?'packing':'trip';let writes=0;
+    const{page,errors}=campingForm({updateTripPreparationGroup:async()=>{writes++;return{...group,name:'朋友家',version:3};},getTrip:()=>reads.trip.promise,listTripPackingItems:()=>reads.packing.promise});
+    selectCamping(page,trip);page.packingItems.value=[{id:'private-item',version:7}];page.candidates.value=[{id:'private-candidate'}];page.editGroup(group);page.groupName.value='朋友家';
+    const saving=page.saveGroup();await page.saveGroup();await new Promise(setImmediate);
+    assert.equal(writes,1);assert.equal(page.tripBusy.value,true);
+    if(order==='ordinary-first'){
+      reads[ordinaryRead].reject(Error('网络读取失败'));await saving;
+      assert.match(errors.at(-1),/小组已保存.*刷新失败.*网络读取失败/);
+      assert.equal(page.selectedTrip.value.id,trip.id);assert.equal(page.packingItems.value[0].id,'private-item');
+      assert.equal(page.tripBusy.value,false);assert.equal(page.editingGroupId.value,'');
+      reads[accessRead].reject(new ApiError('访问已变化',statusCode));await new Promise(setImmediate);
+    }else{
+      reads[accessRead].reject(new ApiError('访问已变化',statusCode));await saving;
+      // Access loss must clear the view while the other request is still pending.
+      assert.equal(page.session.value,undefined);assert.equal(page.packingItems.value.length,0);
+      reads[ordinaryRead].reject(Error('网络读取失败'));await new Promise(setImmediate);
+    }
+    assert.equal(page.session.value,undefined);assert.equal(page.selectedTrip.value,undefined);
+    assert.equal(page.trips.value.length,0);assert.equal(page.packingItems.value.length,0);assert.equal(page.candidates.value.length,0);
+    assert.equal(page.tripBusy.value,false);assert.equal(writes,1);
+    assert.equal(errors.filter(text=>/访问状态已变化/.test(text)).length,1);
+    assert.equal(errors.length,order==='ordinary-first'?2:1);
+  });
+}
+
+for(const accessRead of ['trip','packing'])for(const interruption of ['hide','different-trip','different-identity']){
+  test(`Camping preparation-group late ${accessRead} access loss cannot clear a ${interruption} view`,async()=>{
+    const group={id:'group-a',name:'我们家',version:2,members:[{membershipId:'member-a'}]},trip={...sampleTrip,preparationGroups:[group]};
+    const other={...sampleTrip,id:'trip-b',title:'另一趟行程'},reads={trip:pendingValue(),packing:pendingValue()},ordinaryRead=accessRead==='trip'?'packing':'trip';let writes=0;
+    const{page,errors,lifecycle,setStored}=campingForm({updateTripPreparationGroup:async()=>{writes++;return{...group,name:'朋友家',version:3};},getTrip:id=>id===trip.id?reads.trip.promise:Promise.resolve(other),listTripPackingItems:id=>id===trip.id?reads.packing.promise:Promise.resolve([{id:'other-item',version:8}]),listTripCandidates:async()=>[]});
+    selectCamping(page,trip);page.packingItems.value=[{id:'private-item',version:7}];page.editGroup(group);page.groupName.value='朋友家';
+    const saving=page.saveGroup();await new Promise(setImmediate);
+    reads[ordinaryRead].reject(Error('网络读取失败'));await saving;
+    assert.match(errors.at(-1),/小组已保存.*刷新失败/);
+    if(interruption==='hide')lifecycle.hide();
+    else if(interruption==='different-trip')await page.openTrip(other.id);
+    else{
+      const nextIdentity={...campingContext,membershipId:'member-b'};setStored(nextIdentity);page.session.value=nextIdentity;
+      page.trips.value=[{...trip,title:'新账号的行程视图'}];page.packingItems.value=[{id:'new-identity-item',version:9}];
+    }
+    reads[accessRead].reject(new ApiError('旧请求已无权',403));await new Promise(setImmediate);
+    assert.equal(errors.length,1);assert.equal(writes,1);assert.equal(page.tripBusy.value,false);
+    if(interruption==='hide'){assert.equal(page.session.value,undefined);assert.equal(page.packingItems.value.length,0);}
+    else if(interruption==='different-trip'){assert.equal(page.selectedTrip.value.id,other.id);assert.equal(page.packingItems.value[0].id,'other-item');}
+    else{assert.equal(page.session.value.membershipId,'member-b');assert.equal(page.selectedTrip.value.title,'新账号的行程视图');assert.equal(page.packingItems.value[0].id,'new-identity-item');}
+  });
+}
+
+test('Camping preparation-group old trip access loss cannot clear a newer itinerary-authorized read of the same trip',async()=>{
+  const group={id:'group-a',name:'我们家',version:2,members:[{membershipId:'member-a'}]},trip={...sampleTrip,preparationGroups:[group]};
+  const updated={...trip,version:5,title:'保存地点后的行程',preparationGroups:[{...group,name:'朋友家',version:3}]};
+  const oldTripRead=pendingValue(),packingRead=pendingValue();let writes=0,tripReads=0;
+  const{page,errors}=campingForm({updateTripPreparationGroup:async()=>{writes++;return updated.preparationGroups[0];},getTrip:()=>++tripReads===1?oldTripRead.promise:Promise.resolve(updated),listTripPackingItems:()=>packingRead.promise});
+  selectCamping(page,trip);page.packingItems.value=[{id:'private-item',version:7}];page.editGroup(group);page.groupName.value='朋友家';
+  const saving=page.saveGroup();await new Promise(setImmediate);
+  // TripItinerary remains editable during the group reread and emits this real parent event after a save.
+  await page.itineraryChanged(updated.version,trip.id);
+  assert.equal(page.selectedTrip.value.version,5);assert.equal(page.selectedTrip.value.title,updated.title);
+  oldTripRead.reject(new ApiError('旧读取已无权',403));await new Promise(setImmediate);
+  packingRead.resolve([{id:'private-item',version:7,group:{id:group.id,name:'朋友家'}}]);await saving;
+  assert.equal(page.selectedTrip.value.id,trip.id);assert.equal(page.selectedTrip.value.version,5);assert.equal(page.selectedTrip.value.title,updated.title);
+  assert.equal(page.packingItems.value[0].group.name,'朋友家');assert.equal(page.session.value.membershipId,campingContext.membershipId);
+  assert.equal(errors.length,0);assert.equal(tripReads,2);assert.equal(writes,1);assert.equal(page.tripBusy.value,false);
+});
+
 test('Camping completing a trip retains photo eligibility while disabling itinerary and packing changes',async()=>{
   let dialog;const complete={...sampleTrip,status:'COMPLETED',version:5,members:[{...sampleTrip.members[0],status:'HISTORY'}]};
   const{page,uni}=campingForm({updateTripStatus:async()=>complete});uni.showModal=input=>dialog=input;
