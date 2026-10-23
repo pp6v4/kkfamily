@@ -11,8 +11,9 @@ function wireRequest(path: string, method: ApiMethod) {
   return { url: `${API_BASE_URL}${pathname.replace(/\/$/, '')}/_patch${query}`, method: 'POST' as const };
 }
 
-function jsonBody(data: unknown): UniApp.RequestOptions['data'] {
-  if (data === undefined || typeof data === 'string') return data;
+function jsonBody(data: unknown, method: ApiMethod): UniApp.RequestOptions['data'] {
+  if (data === undefined) return ['POST', 'PUT', 'PATCH', 'DELETE'].includes(method) ? {} : undefined;
+  if (typeof data === 'string') return data;
   if (data !== null && typeof data === 'object') return data;
   return JSON.stringify(data);
 }
@@ -32,7 +33,7 @@ export function rawRequest<T>(path: string, method: ApiMethod = 'GET', data?: un
   return new Promise<T>((resolve, reject) => {
     uni.request({
       ...wireRequest(path, method),
-      data: jsonBody(data),
+      data: jsonBody(data, method),
       header: { 'content-type': 'application/json', ...headers },
       success(response) {
         if (response.statusCode >= 200 && response.statusCode < 300) {

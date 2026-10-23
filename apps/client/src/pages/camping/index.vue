@@ -175,6 +175,21 @@ function scopedError(scope:ViewStamp,error:unknown){
 }
 async function refreshPacking(scope:ViewStamp){const request=++packingRead;const rows=await listTripPackingItems(scope.tripId);if(current(scope)&&request===packingRead)packingItems.value=rows;}
 async function refreshTrip(scope:ViewStamp){const request=++tripRead;const trip=await getTrip(scope.tripId);if(current(scope)&&request===tripRead)replaceTrip(trip);}
+async function refreshTripAndPacking(scope:ViewStamp){
+  const tripRequest=++tripRead,packingRequest=++packingRead;
+  function readFailed(error:unknown,latest:boolean){
+    if(!latest||!current(scope))return;
+    if(error instanceof ApiError&&[401,403,404].includes(error.statusCode))scopedError(scope,error);
+    throw error;
+  }
+  const [trip,items]=await Promise.all([
+    getTrip(scope.tripId).catch(error=>readFailed(error,tripRequest===tripRead)),
+    listTripPackingItems(scope.tripId).catch(error=>readFailed(error,packingRequest===packingRead)),
+  ]);
+  if(!current(scope))return;
+  if(trip&&tripRequest===tripRead)replaceTrip(trip);
+  if(items&&packingRequest===packingRead)packingItems.value=items;
+}
 async function refreshCandidates(scope:ViewStamp){if(!current(scope))return;if(!isTripOwner.value){candidates.value=[];return;}const rows=await listTripCandidates(scope.tripId);if(current(scope)&&isTripOwner.value)candidates.value=rows;}
 async function mutateTrip<T>(write:(trip:Trip)=>Promise<T>,after:(result:T,scope:ViewStamp)=>Promise<void>|void,owner:boolean|'ACCESS'=false){
   const trip=selectedTrip.value,scope=stamp();
@@ -440,7 +455,14 @@ async function saveGroup(){
   const trip=selectedTrip.value;if(!trip||!groupName.value.trim()||!groupMemberIds.value.length){uni.showToast({title:'填写小组名并选择成员',icon:'none'});return;}
   try { assertTextLimit(groupName.value, '准备小组名称', 40); } catch (error) { uni.showToast({ title: message(error), icon: 'none' }); return; }
   const name=groupName.value.trim(),members=[...groupMemberIds.value],editingId=editingGroupId.value;
-  await mutateTrip(async currentTrip=>{const editing=currentTrip.preparationGroups.find(group=>group.id===editingId);if(editingId&&!editing)throw new Error('准备小组已变更，请刷新后重试');if(editing)return updateTripPreparationGroup(currentTrip.id,editing,name,members);return createTripPreparationGroup(currentTrip.id,name,members);},async(_,scope)=>{resetGroupForm();await refreshTrip(scope);},true);
+  await mutateTrip(async currentTrip=>{const editing=currentTrip.preparationGroups.find(group=>group.id===editingId);if(editingId&&!editing)throw new Error('准备小组已变更，请刷新后重试');if(editing)return updateTripPreparationGroup(currentTrip.id,editing,name,members);return createTripPreparationGroup(currentTrip.id,name,members);},async(_,scope)=>{
+    resetGroupForm();
+    try{await refreshTripAndPacking(scope);}
+    catch(error){
+      if(error instanceof ApiError&&[401,403,404].includes(error.statusCode))throw error;
+      throw Object.assign(new Error(`准备小组已保存，但行程和行李刷新失败，请重新进入行程：${message(error)}`),{cause:error});
+    }
+  },true);
 }
 
 function startOverviewPulse() {

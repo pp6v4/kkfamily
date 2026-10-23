@@ -1,5 +1,7 @@
 # 隔离数据库验收
 
+2026-10-23证据入口：0.1.3主体df776da已取得真实双事务2/2、20迁移/结构、旧库升级及四组HTTP各61/61，来源和限制见[当前交接](../../docs/project-status-20261023.md)。e60a134仅前端RV01；本轮仅整理文档，不重复启动数据库/挂载/镜像验证。下方是需要数据库验证时的方法，不是自动恢复生产发布；Q01与真机仍见[未完成清单](../../docs/requirements-closure-20261023.md)。
+
 在已授权的 Docker 主机上，从仓库根目录执行：
 
 ```sh
@@ -26,7 +28,9 @@ VERIFY_NETWORK_SUBNET=10.254.240.0/24 node scripts/verify-database.cjs
 
 非秘密网段写入 `result.json` 的 `networkSubnet` 字段；未设置时为 `null`。配置无效直接失败，合法配置下 Docker 或测试失败仍保留阶段错误和日志供排查。
 
-执行顺序：Docker/Compose 可用性 → Compose 配置校验 → API build阶段镜像 → 全部迁移deploy → 迁移status → 数据库与Prisma模型的结构差异检查 → 独立verify_legacy数据库旧数据升级回归 → 通知worker单元测试 → HTTP集成测试。启动迁移前核对数据库用户名、地址、端口、库名和schema，任何一项不符即退出。构建失败不会启动测试容器；结构不一致或测试失败会通过退出码返回。
+执行顺序：Docker/Compose 可用性 → Compose 配置校验 → API build阶段镜像 → 全部迁移deploy → 迁移status → 数据库与Prisma模型的结构差异检查 → 独立verify_legacy数据库旧数据升级回归 → 业务单元及行李分配真实双事务并发检查 → HTTP集成测试。启动迁移前核对数据库用户名、地址、端口、库名和schema，任何一项不符即退出。构建失败不会启动测试容器；结构不一致或测试失败会通过退出码返回。
+
+行李分配并发专项为 `apps/api/test/packing-assignment-concurrency.integration.test.cjs`，由同一运行器在迁移后执行。它使用真实 Prisma 和服务，控制“负责人有效性读取完成 → 撤销成员并清除责任提交 → 原分配继续”的确定时序，分别检查新增与改派的最终状态；同步屏障不是模拟数据库。专项存在不等于已运行，结果以本次日志中的阶段、断言和退出码为准。此脚本同样拒绝非隔离库，不对生产发起竞争写入。
 
 旧数据回归先在同一隔离PostgreSQL中的第二个数据库执行最初3批迁移和虚构数据，再升级全部迁移；覆盖纪念日日期、餐次/票数、食材库存、行程负责人、账号购物保留及重入幂等。它不会改动生产库，也不替代主verify数据库的空库迁移及HTTP回归。PostgreSQL健康检查使用TCP localhost，不依赖初始化临时进程的Unix socket。
 

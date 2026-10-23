@@ -43,8 +43,9 @@ async function load(){
 function open(field:ArchiveField){close();selected.value=field;valueVersion.value=field.valueVersion;}
 function close(){viewEpoch++;selected.value=undefined;showFieldForm.value=false;revealed.value=false;editingValue.value=false;value.value='';valueVersion.value=0;busy.value=false;}
 function clearPage(){close();session.value=undefined;fields.value=[];members.value=[];editingField.value=false;form.value={key:'',label:'',typeIndex:0,visibilityIndex:0,sensitive:false,grantModes:{}};}
-function newField(){editingField.value=false;selected.value=undefined;showFieldForm.value=true;form.value={key:'',label:'',typeIndex:0,visibilityIndex:0,sensitive:false,grantModes:{}};}
-function editField(){const field=selected.value;if(!field)return;editingField.value=true;showFieldForm.value=true;const modes:Record<string,number>={};for(const grant of field.grants||[])modes[grant.membershipId]=grant.canEdit?2:grant.canRead?1:0;form.value={key:field.key,label:field.label,typeIndex:Math.max(0,types.findIndex(item=>item.value===field.valueType)),visibilityIndex:Math.max(0,visibilities.findIndex(item=>item.value===field.visibility)),sensitive:field.sensitive,grantModes:modes};}
+function cancelField(){const field=selected.value;if(field)open(field);else close();}
+function newField(){if(!manager.value)return;close();editingField.value=false;showFieldForm.value=true;form.value={key:'',label:'',typeIndex:0,visibilityIndex:0,sensitive:false,grantModes:{}};}
+function editField(){const field=selected.value;if(!field||!manager.value)return;open(field);editingField.value=true;showFieldForm.value=true;const modes:Record<string,number>={};for(const grant of field.grants||[])modes[grant.membershipId]=grant.canEdit?2:grant.canRead?1:0;form.value={key:field.key,label:field.label,typeIndex:Math.max(0,types.findIndex(item=>item.value===field.valueType)),visibilityIndex:Math.max(0,visibilities.findIndex(item=>item.value===field.visibility)),sensitive:field.sensitive,grantModes:modes};}
 async function saveField(){
   if(busy.value||!manager.value)return;
   if(!form.value.label.trim()||(!editingField.value&&!form.value.key.trim())){uni.showToast({title:'请填写字段名称和英文标识',icon:'none'});return;}
@@ -80,13 +81,13 @@ onUnload(clearPage);
       <text v-if="!fields.length" class="empty">当前没有你可以查看的档案字段。</text><view v-if="manager" class="primary" @tap="newField">＋ 新建档案字段</view>
     </template>
     <view v-if="showFieldForm" class="card">
-      <text class="back" @tap="showFieldForm=false">‹ 返回</text><text class="card-title">{{editingField?'编辑字段和授权':'新建档案字段'}}</text>
+      <text class="back" @tap="cancelField">‹ 返回</text><text class="card-title">{{editingField?'编辑字段和授权':'新建档案字段'}}</text>
       <input v-model="form.label" class="input" placeholder="字段名称，例如：家庭联系人"/><input v-if="!editingField" v-model="form.key" class="input" placeholder="英文标识，例如 family_contact"/>
       <picker :range="types" range-key="label" :value="form.typeIndex" @change="form.typeIndex=Number($event.detail.value)"><view class="input">内容类型：{{types[form.typeIndex].label}} ›</view></picker>
       <picker :range="visibilities" range-key="label" :value="form.visibilityIndex" @change="form.visibilityIndex=Number($event.detail.value)"><view class="input">默认可见：{{visibilities[form.visibilityIndex].label}} ›</view></picker>
       <view class="switch-row"><text>敏感内容（列表始终不返回明文）</text><switch :checked="form.sensitive" color="#739b82" @change="changeSensitive"/></view>
       <view v-if="members.length" class="grants"><text class="section-title">逐成员授权</text><view v-for="member in members" :key="member.id" class="grant" @tap="cycleGrant(member.id)"><text>{{member.user.nickname||'家庭成员'}}</text><text>{{grantLabel(member.id)}} ›</text></view><text class="note">“指定成员”按此处查看权限生效；非管理员要修改字段，必须单独授予“可编辑”。</text></view>
-      <view class="primary" :class="{disabled:busy}" @tap="saveField">{{busy?'保存中…':'保存字段与授权'}}</view><view class="cancel" @tap="showFieldForm=false">取消</view>
+      <view class="primary" :class="{disabled:busy}" @tap="saveField">{{busy?'保存中…':'保存字段与授权'}}</view><view class="cancel" @tap="cancelField">取消</view>
     </view>
     <view v-if="selected&&!showFieldForm" class="card detail">
       <text class="back" @tap="close">‹ 返回档案</text><view class="badges"><text>{{typeLabel(selected)}}</text><text>{{visibilityLabel(selected)}}</text><text v-if="selected.sensitive">敏感</text></view><text class="detail-title">{{selected.label}}</text>

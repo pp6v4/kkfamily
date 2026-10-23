@@ -3,6 +3,7 @@ import { Level, permits } from '../access/permission-policy';
 import { BadRequestException, ConflictException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common';
 import { Prisma, TripMemberStatus, TripStatus } from '@prisma/client';
 import { PrismaService } from '../prisma/prisma.service';
+import { serializable } from '../prisma/serializable';
 import { ApplyPackingTemplateDto } from './dto/apply-packing-template.dto';
 import { CreatePackingTemplateDto } from './dto/create-packing-template.dto';
 import { CreateTripPackingItemDto } from './dto/create-trip-packing-item.dto';
@@ -83,66 +84,74 @@ export class PackingService {
   }
 
   async applyTemplate(userId: string, householdId: string, tripId: string, dto: ApplyPackingTemplateDto) {
-    await this.requireTripAccess(userId, householdId, tripId, true);
-    await this.requireMember(userId, householdId);
-    const template = await this.prisma.packingTemplate.findFirst({ where: { id: dto.templateId, householdId, archived: false }, include: { items: { where: { archivedAt: null }, orderBy: { sortOrder: 'asc' } } } });
-    if (!template) throw new NotFoundException('Packing template was not found');
-    const result = await this.prisma.tripPackingItem.createMany({
-      data: template.items.map((item) => ({
-        tripId,
-        sourceTemplateId: template.id,
-        sourceTemplateItemId: item.id,
-        sourceTemplateNameSnapshot: template.name,
-        sourceItemNameSnapshot: item.name,
-        name: item.name,
-        quantity: item.defaultQuantity,
-        unit: item.unit,
-        note: item.note,
-      })),
-      skipDuplicates: true,
-    });
-    const addedCount = result.count;
-    return { data: { templateId: template.id, addedCount, skippedCount: template.items.length - addedCount, items: await this.getTripItems(tripId) } };
+    return { data: await serializable(this.prisma, async tx => {
+      await this.requireTripAccess(userId, householdId, tripId, true, tx);
+      await this.requireMember(userId, householdId, 'VIEW', tx);
+      const template = await tx.packingTemplate.findFirst({ where: { id: dto.templateId, householdId, archived: false }, include: { items: { where: { archivedAt: null }, orderBy: { sortOrder: 'asc' } } } });
+      if (!template) throw new NotFoundException('Packing template was not found');
+      const result = await tx.tripPackingItem.createMany({
+        data: template.items.map((item) => ({
+          tripId,
+          sourceTemplateId: template.id,
+          sourceTemplateItemId: item.id,
+          sourceTemplateNameSnapshot: template.name,
+          sourceItemNameSnapshot: item.name,
+          name: item.name,
+          quantity: item.defaultQuantity,
+          unit: item.unit,
+          note: item.note,
+        })),
+        skipDuplicates: true,
+      });
+      const addedCount = result.count;
+      return { templateId: template.id, addedCount, skippedCount: template.items.length - addedCount, items: await this.getTripItems(tripId, tx) };
+    }) };
   }
 
   async createTripItem(userId: string, householdId: string, tripId: string, dto: CreateTripPackingItemDto) {
-    await this.requireTripAccess(userId, householdId, tripId, true);
-    const responsibleMembershipId = dto.responsibleMembershipId?.trim();
-    const groupId = dto.groupId?.trim();
-    await this.requireValidAssignment(tripId, responsibleMembershipId, groupId);
-    return { data: await this.prisma.tripPackingItem.create({
-      data: { tripId, name: dto.name.trim(), quantity: dto.quantity, unit: dto.unit?.trim(), note: dto.note?.trim(), responsibleMembershipId, groupId },
-      include: this.tripItemInclude(),
+    return { data: await serializable(this.prisma, async tx => {
+      await this.requireTripAccess(userId, householdId, tripId, true, tx);
+      const responsibleMembershipId = dto.responsibleMembershipId?.trim();
+      const groupId = dto.groupId?.trim();
+      await this.requireValidAssignment(tripId, responsibleMembershipId, groupId, tx);
+      return tx.tripPackingItem.create({
+        data: { tripId, name: dto.name.trim(), quantity: dto.quantity, unit: dto.unit?.trim(), note: dto.note?.trim(), responsibleMembershipId, groupId },
+        include: this.tripItemInclude(),
+      });
     }) };
   }
 
   async updateTripItem(userId: string, householdId: string, tripId: string, itemId: string, dto: UpdateTripPackingItemDto) {
-    await this.requireTripAccess(userId, householdId, tripId, true);
-    const item = await this.prisma.tripPackingItem.findFirst({ where: { id: itemId, tripId, excludedAt: null } });
-    if (!item) throw new NotFoundException('Packing item was not found');
-    if (item.version !== dto.expectedVersion) throw new ConflictException('行李项已更新，请刷新后重试');
-    const responsibleMembershipId = dto.responsibleMembershipId === undefined ? undefined : dto.responsibleMembershipId.trim() || null;
-    const groupId = dto.groupId === undefined ? undefined : dto.groupId.trim() || null;
-    await this.requireValidAssignment(tripId, responsibleMembershipId === undefined ? item.responsibleMembershipId : responsibleMembershipId, groupId === undefined ? item.groupId : groupId);
-    const data: Prisma.TripPackingItemUncheckedUpdateInput = {
-      name: dto.name?.trim(), quantity: dto.quantity, unit: dto.unit?.trim(), note: dto.note?.trim(), status: dto.status, responsibleMembershipId, groupId, version: { increment: 1 },
-    };
-    const updated = await this.prisma.tripPackingItem.updateMany({ where: { id: itemId, tripId, excludedAt: null, version: dto.expectedVersion }, data });
-    if (!updated.count) throw new ConflictException('行李项已更新，请刷新后重试');
-    return { data: await this.prisma.tripPackingItem.findUniqueOrThrow({ where: { id: itemId }, include: this.tripItemInclude() }) };
+    return { data: await serializable(this.prisma, async tx => {
+      await this.requireTripAccess(userId, householdId, tripId, true, tx);
+      const item = await tx.tripPackingItem.findFirst({ where: { id: itemId, tripId, excludedAt: null } });
+      if (!item) throw new NotFoundException('Packing item was not found');
+      if (item.version !== dto.expectedVersion) throw new ConflictException('行李项已更新，请刷新后重试');
+      const responsibleMembershipId = dto.responsibleMembershipId === undefined ? undefined : dto.responsibleMembershipId.trim() || null;
+      const groupId = dto.groupId === undefined ? undefined : dto.groupId.trim() || null;
+      await this.requireValidAssignment(tripId, responsibleMembershipId === undefined ? item.responsibleMembershipId : responsibleMembershipId, groupId === undefined ? item.groupId : groupId, tx);
+      const data: Prisma.TripPackingItemUncheckedUpdateInput = {
+        name: dto.name?.trim(), quantity: dto.quantity, unit: dto.unit?.trim(), note: dto.note?.trim(), status: dto.status, responsibleMembershipId, groupId, version: { increment: 1 },
+      };
+      const updated = await tx.tripPackingItem.updateMany({ where: { id: itemId, tripId, excludedAt: null, version: dto.expectedVersion }, data });
+      if (!updated.count) throw new ConflictException('行李项已更新，请刷新后重试');
+      return tx.tripPackingItem.findUniqueOrThrow({ where: { id: itemId }, include: this.tripItemInclude() });
+    }) };
   }
 
   async removeTripItem(userId: string, householdId: string, tripId: string, itemId: string, expectedVersion: number) {
-    await this.requireTripAccess(userId, householdId, tripId, true);
-    const exists = await this.prisma.tripPackingItem.findFirst({ where: { id: itemId, tripId, excludedAt: null } });
-    if (!exists) throw new NotFoundException('Packing item was not found');
-    const result = await this.prisma.tripPackingItem.updateMany({ where: { id: itemId, tripId, excludedAt: null, version: expectedVersion }, data: { excludedAt: new Date(), version: { increment: 1 } } });
-    if (result.count === 0) throw new ConflictException('行李项已更新，请刷新后重试');
-    return { data: { removed: true } };
+    return { data: await serializable(this.prisma, async tx => {
+      await this.requireTripAccess(userId, householdId, tripId, true, tx);
+      const exists = await tx.tripPackingItem.findFirst({ where: { id: itemId, tripId, excludedAt: null } });
+      if (!exists) throw new NotFoundException('Packing item was not found');
+      const result = await tx.tripPackingItem.updateMany({ where: { id: itemId, tripId, excludedAt: null, version: expectedVersion }, data: { excludedAt: new Date(), version: { increment: 1 } } });
+      if (result.count === 0) throw new ConflictException('行李项已更新，请刷新后重试');
+      return { removed: true };
+    }) };
   }
 
-  private async getTripItems(tripId: string) {
-    return this.prisma.tripPackingItem.findMany({ where: { tripId, excludedAt: null }, include: this.tripItemInclude(), orderBy: [{ status: 'asc' }, { createdAt: 'asc' }] });
+  private async getTripItems(tripId: string, tx: Prisma.TransactionClient | PrismaService = this.prisma) {
+    return tx.tripPackingItem.findMany({ where: { tripId, excludedAt: null }, include: this.tripItemInclude(), orderBy: [{ status: 'asc' }, { createdAt: 'asc' }] });
   }
 
   private tripItemInclude() {
@@ -161,27 +170,27 @@ export class PackingService {
     throw error;
   }
 
-  private async requireMember(userId: string, householdId: string, level: Level = 'VIEW') {
-    return this.access.require(userId, householdId, 'packing_templates', level);
+  private async requireMember(userId: string, householdId: string, level: Level = 'VIEW', tx: Prisma.TransactionClient | PrismaService = this.prisma) {
+    return this.access.require(userId, householdId, 'packing_templates', level, tx);
   }
 
-  private async requireTripAccess(userId: string, householdId: string, tripId: string, edit: boolean) {
-    const membership = await this.access.require(userId, householdId, 'trips', edit ? 'EDIT' : 'VIEW');
-    const tripMember = await this.prisma.tripMember.findFirst({ where: { tripId, membershipId: membership.id, status: { in: [TripMemberStatus.ACTIVE, TripMemberStatus.HISTORY] }, trip: { householdId } }, include: { trip: true } });
+  private async requireTripAccess(userId: string, householdId: string, tripId: string, edit: boolean, tx: Prisma.TransactionClient | PrismaService = this.prisma) {
+    const membership = await this.access.require(userId, householdId, 'trips', edit ? 'EDIT' : 'VIEW', tx);
+    const tripMember = await tx.tripMember.findFirst({ where: { tripId, membershipId: membership.id, status: { in: [TripMemberStatus.ACTIVE, TripMemberStatus.HISTORY] }, trip: { householdId } }, include: { trip: true } });
     if (!tripMember) throw new ForbiddenException('No access to this trip');
     if (edit && (tripMember.status !== TripMemberStatus.ACTIVE || !tripMember.canEdit)) throw new ForbiddenException('This trip is read-only for the current member');
     if (edit && (tripMember.trip.status === TripStatus.COMPLETED || tripMember.trip.status === TripStatus.CANCELLED)) throw new ConflictException('已结束的行程只能查看');
     return { membership, tripMember };
   }
 
-  private async requireValidAssignment(tripId: string, membershipId?: string | null, groupId?: string | null) {
+  private async requireValidAssignment(tripId: string, membershipId?: string | null, groupId?: string | null, tx: Prisma.TransactionClient | PrismaService = this.prisma) {
     if (groupId) {
-      const group = await this.prisma.tripPreparationGroup.findFirst({ where: { id: groupId, tripId } });
+      const group = await tx.tripPreparationGroup.findFirst({ where: { id: groupId, tripId } });
       if (!group) throw new BadRequestException('准备小组不属于当前行程');
     }
     if (!membershipId) return;
-    const member = await this.prisma.tripMember.findUnique({ where: { tripId_membershipId: { tripId, membershipId } } });
-    if (!member || member.status !== TripMemberStatus.ACTIVE || !(await this.prisma.membership.findFirst({ where: { id: membershipId, status: 'ACTIVE' } }))) throw new BadRequestException('The responsible member must be active and belong to this trip');
-    if (groupId && !(await this.prisma.tripPreparationGroupMember.findUnique({ where: { groupId_membershipId: { groupId, membershipId } } }))) throw new BadRequestException('物品负责人必须属于所选准备小组');
+    const member = await tx.tripMember.findUnique({ where: { tripId_membershipId: { tripId, membershipId } } });
+    if (!member || member.status !== TripMemberStatus.ACTIVE || !(await tx.membership.findFirst({ where: { id: membershipId, status: 'ACTIVE' } }))) throw new BadRequestException('The responsible member must be active and belong to this trip');
+    if (groupId && !(await tx.tripPreparationGroupMember.findUnique({ where: { groupId_membershipId: { groupId, membershipId } } }))) throw new BadRequestException('物品负责人必须属于所选准备小组');
   }
 }
