@@ -1,10 +1,12 @@
 # 生产部署目录
 
+2026-10-23当前边界：本文是操作手册，不是现在启动部署的授权。[R09](../../docs/design/decisions-20261023-review-first.md)要求保留0.1.2，候选0.1.3不合并、不部署、不上传、不清库。[当前交接](../../docs/project-status-20261023.md)区分旧产物与最新源；[闭环清单](../../docs/requirements-closure-20261023.md)记录Q01 OPEN及正式发布门槛。仅文档整理不重建容器、证书或镜像。
+
 此目录由服务器上的 `/opt/family-life` 使用。生产环境不使用 Windows 的 Node.js 或 `node_modules`。
 
 ## 上线前准备
 
-1. 不需要子域名。API 固定使用 `https://pp6v4.com/api/`；微信后台合法域名登记 `https://pp6v4.com`。
+1. 不需要子域名。业务API基地址为 `https://pp6v4.com/api/v1`；Nginx转发入口为`/api/`，后端内部前缀为`/v1`。微信后台合法域名登记 `https://pp6v4.com`，平台现状须另取回执。
 2. 服务器安装 Docker Engine 与 Docker Compose plugin。
 3. 在 `apps/api/.env` 填入微信、COS、JWT 密钥，并用 `openssl rand -base64 32` 生成 `ARCHIVE_ENCRYPTION_KEY`；在 `infra/.env` 填入 PostgreSQL/Redis 密码。档案加密密钥必须单独备份，丢失后数据库密文不能恢复。
 4. 首次申请证书前，将 `infra/nginx/bootstrap.conf` 复制为 `infra/nginx/nginx.conf`。
@@ -44,4 +46,4 @@ sudo docker compose --profile certbot run --rm certbot renew --dry-run --non-int
 
 执行日志用 `journalctl -u family-life-cert-renew.service` 查看。生产 `nginx.conf` 已切换 HTTPS；新服务器首次签发前仍须使用 `bootstrap.conf`，不得在已有证书的服务器上误覆盖回 HTTP 配置。API 需要同时加入 `internal` 与 `edge` 网络以访问微信/COS；PostgreSQL、Redis 保持仅内部访问。
 
-`notification-worker` 会等待 API 健康检查通过后启动，每30秒领取到期的站内提醒；完成、取消、改派或版本变化会使旧任务失效。微信订阅发送仍须先在微信后台取得模板并完成模板字段联调，未配置时站内提醒正常工作。
+`notification-worker` 会等待 API 健康检查通过后启动，每30秒领取到期的站内提醒；完成、取消、改派或版本变化会使旧任务失效。微信订阅模板、主动申请及外部发送已由R05延期，不是当前部署前置；站内提醒保留。以后恢复该通道须另明确范围并取得真实模板/字段联调证据。

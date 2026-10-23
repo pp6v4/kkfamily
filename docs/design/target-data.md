@@ -1,5 +1,7 @@
 # 扣扣的家：目标字段字典与迁移约束（2026-08-31）
 
+2026-10-23对照提示：本文保留目标模型，不代表现有物理库；当前50个Prisma模型、20迁移的完整目录及关系见[实际架构与数据](../architecture-and-data.md)和仓库schema/SQL。0.1.3 F06仅改变行李操作事务边界，没有第21迁移；不要按本稿的RolePermission/EventException/TripPhoto等目标直接建表或清库。尚未实现及延期范围见[闭环清单](../requirements-closure-20261023.md)，版本/交付见[当前状态](../project-status-20261023.md)。
+
 ## 模型命名与范围
 
 这是待开发的目标模型，不是已经执行的DDL。现有Prisma没有@@map，物理表为带引号的PascalCase（例如"TripPackingItem"），并非旧文档列出的snake_case小写表。新增模型维持相同命名，避免迁移误新建重复表。本文B=Boolean、I=Integer、S=String、D=Decimal(12,3)、T=UTC时间、J=JSONB；?表示nullable；ID为cuid字符串。所有tenant实体householdId必填，version默认1，用于乐观锁。

@@ -2,7 +2,7 @@
 
 适用于本仓库内的协作开发。先读下列文件，不依赖聊天历史或其他代理的口头结论。
 
-1. `docs/release-notes-0.1.2.md`、`docs/deployment-20261022.md`：最新交付状态、生产回执及手机复测；`docs/handoff-20261021.md`保留此前交接时点。
+1. `docs/project-status-20261023.md`、`docs/requirements-closure-20261023.md`：当前候选/体验版区别、U01～U14闭环、Q01未修复及下一步；`docs/release-notes-0.1.2.md`、`docs/deployment-20261022.md`保存已交付证据，`docs/handoff-20261021.md`保留历史时点。
 2. `docs/requirements-traceability.md` 和 `docs/design/decisions-*.md`：用户要求、明确决定、建议与延期。
 3. `docs/architecture-and-data.md`、`docs/development-guide.md`：源码入口、数据约束和准确命令。
 4. `CONTRIBUTING.md`：分支、测试、文档和交付纪律。
@@ -10,6 +10,8 @@
 最新交付决定优先读 `docs/design/decisions-20261023-review-first.md`：用户目前只要求修改与审查，继续测试0.1.2，暂停新版本部署/上传。`docs/design/decisions-20261022.md`的体验版测试与清理边界继续保留，但不得以此前R07自动恢复发布。
 
 已交付基线为业务提交`58e2bc7`的配套API/worker及20迁移，客户端0.1.2已有上传成功回执和用户体验版确认；交付文档提交`05859fd`已推送。当前工作区后续闭环及行李并发修复尚未部署或再次上传，不自动包含在正在测试的0.1.2中；手机业务与多账号验收仍需另取证。
+
+0.1.3业务修复`df776da`及RV01审查补丁`e60a134`已推送候选分支，客户端382/382与审查已完成，不再描述成正在等待开发工具信任。后续文档复核确认Q01地图阶段线型仍未闭环；须显式列为OPEN，不能沿用上一轮有限审查结论宣称全项目无已知缺陷。旧候选编译不含RV01，恢复发版要重建。
 
 ## 不得改变的产品边界
 
