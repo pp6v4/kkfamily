@@ -2,6 +2,8 @@
 
 适用于本仓库内的协作开发。先读下列文件，不依赖聊天历史或其他代理的口头结论。
 
+2026-10-23后续R10：[Q02空JSON兼容热修](docs/hotfix-empty-json-20261023.md)已获用户明确“可以，做”并要求继续修复，允许验证后仅部署该兼容补丁。当前生产版本以后续热修回执为准，其余候选交付安排沿用R09。执行前按任务一次性确认，执行中汇报真实进展。
+
 1. `docs/project-status-20261023.md`、`docs/requirements-closure-20261023.md`：当前候选/体验版区别、U01～U14闭环、Q01未修复及下一步；`docs/release-notes-0.1.2.md`、`docs/deployment-20261022.md`保存已交付证据，`docs/handoff-20261021.md`保留历史时点。
 2. `docs/requirements-traceability.md` 和 `docs/design/decisions-*.md`：用户要求、明确决定、建议与延期。
 3. `docs/architecture-and-data.md`、`docs/development-guide.md`：源码入口、数据约束和准确命令。
