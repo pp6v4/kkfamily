@@ -2,6 +2,8 @@
 
 私密家庭生活协作平台：微信小程序优先，后续扩展 Web 与 App。
 
+2026-10-26：[统一请求与交互异常审核](docs/request-audit-20261026.md)覆盖118条原生接口及客户端实际请求链，并整理RA01～RA06候选页面修正、回归入口和证据边界；Q01地图阶段线型仍OPEN。接手先核对此记录，再读以下历史交接入口。
+
 ## 协作接手入口
 
 交接整理日期：2026-10-23。新开发者或大模型先读 [当前版本与接手状态](docs/project-status-20261023.md)、[需求闭环与未完成清单](docs/requirements-closure-20261023.md)，再读 [文档导航](docs/README.md)、[需求追踪](docs/requirements-traceability.md)、[架构与数据库](docs/architecture-and-data.md) 和 [开发指南](docs/development-guide.md)。协作规则见 [CONTRIBUTING.md](CONTRIBUTING.md)，编码代理入口见 [AGENTS.md](AGENTS.md)；[10月21日交接](docs/handoff-20261021.md)保留历史批次。
