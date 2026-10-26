@@ -23,6 +23,7 @@ const creatingTrip = ref(false);
 const editingTrip = ref(false);
 const editingTemplateId = ref('');
 const showingTemplateForm = ref(false);
+const templateRefreshFailed = ref(false);
 const showingItemForm = ref(false);
 const showingTemplatePicker = ref(false);
 const templateTripTarget = ref<{ id: string; householdId: string; membershipId: string }>();
@@ -86,7 +87,7 @@ type ViewStamp={epoch:number;detail:number;householdId:string;membershipId:strin
 let returnTarget:{id:string;householdId:string;membershipId:string}|undefined;
 function stamp():ViewStamp{return{epoch:viewEpoch,detail:detailEpoch,householdId:session.value?.householdId||'',membershipId:session.value?.membershipId||'',tripId:selectedTripId.value,tab:active.value};}
 function current(scope:ViewStamp){const stored=getStoredSession();return!disposed&&pageVisible.value&&scope.epoch===viewEpoch&&scope.detail===detailEpoch&&scope.tab===active.value&&scope.tripId===selectedTripId.value&&Boolean(scope.membershipId)&&session.value?.householdId===scope.householdId&&session.value?.membershipId===scope.membershipId&&stored?.householdId===scope.householdId&&stored?.membershipId===scope.membershipId;}
-function clearForms(){creatingTrip.value=false;editingTrip.value=false;showingTemplateForm.value=false;editingTemplateId.value='';showingItemForm.value=false;showingTemplatePicker.value=false;showingCollaboration.value=false;tripForm.value={title:'',destination:'',startsAt:'',endsAt:''};tripEditForm.value={title:'',destination:'',startsAt:'',endsAt:''};templateForm.value={name:'',description:'',items:[{name:'',quantity:'',unit:'',note:''}]};itemForm.value={name:'',quantity:'',unit:'',note:''};resetGroupForm();}
+function clearForms(){creatingTrip.value=false;editingTrip.value=false;showingTemplateForm.value=false;templateRefreshFailed.value=false;editingTemplateId.value='';showingItemForm.value=false;showingTemplatePicker.value=false;showingCollaboration.value=false;tripForm.value={title:'',destination:'',startsAt:'',endsAt:''};tripEditForm.value={title:'',destination:'',startsAt:'',endsAt:''};templateForm.value={name:'',description:'',items:[{name:'',quantity:'',unit:'',note:''}]};itemForm.value={name:'',quantity:'',unit:'',note:''};resetGroupForm();}
 function clearView(){viewEpoch++;detailEpoch++;trips.value=[];templates.value=[];packingItems.value=[];candidates.value=[];session.value=undefined;selectedTripId.value='';templateTripTarget.value=undefined;loadingTrip.value=false;tripBusy.value=false;pageBusy.value=false;returnedStop.value=undefined;initialDestination.value=undefined;clearForms();}
 function cancelNative(){nativeEpoch++;nativeBusy.value=false;nativeReturn=undefined;returnedStop.value=undefined;destinationReturn=undefined;initialDestination.value=undefined;}
 async function restoreDestination() {
@@ -236,7 +237,7 @@ function assertTextLimit(value: string, label: string, maximum: number) {
 }
 function dateText(value: string) { return shanghaiDate(value); }
 function statusText(status: Trip['status']) { return ({ PLANNING: '规划中', PENDING: '待出行', DEPARTING: '旅途中', COMPLETED: '已完成', CANCELLED: '已取消' } as Record<Trip['status'], string>)[status]; }
-function quantityText(quantity: string | number | null, unit: string | null) { return quantity === null ? '' : `${Number(quantity)}${unit ? ` ${unit}` : ''}`; }
+function quantityText(quantity: string | number | null, unit: string | null) { return quantity === null ? unit || '' : `${Number(quantity)}${unit ? ` ${unit}` : ''}`; }
 function responsibleName(item: TripPackingItem) { return item.responsibleMembership?.user.nickname || (item.responsibleMembership ? '家庭成员' : '未分配'); }
 
 async function loadData() {
@@ -332,12 +333,12 @@ async function saveTripEdit() {
 
 function newTemplate() {
   if(!current(stamp())||pageBusy.value||!canAccess(session.value,'packing_templates','EDIT'))return;
-  detailEpoch++;
+  detailEpoch++;templateRefreshFailed.value=false;
   editingTemplateId.value = ''; templateForm.value = { name: '', description: '', items: [{ name: '', quantity: '', unit: '', note: '' }] }; showingTemplateForm.value = true;
 }
 function editTemplate(template: PackingTemplate) {
   if(!current(stamp())||pageBusy.value||!canEditTemplate(template))return;
-  detailEpoch++;
+  detailEpoch++;templateRefreshFailed.value=false;
   editingTemplateId.value = template.id;
   templateForm.value = { name: template.name, description: template.description || '', items: template.items.map((item) => ({ id: item.id, name: item.name, quantity: item.defaultQuantity === null ? '' : String(Number(item.defaultQuantity)), unit: item.unit || '', note: item.note || '' })) };
   showingTemplateForm.value = true;
@@ -355,7 +356,7 @@ function packingQuantity(text: string) {
   return Number(value);
 }
 async function saveTemplate() {
-  const scope=stamp();if(!current(scope)||pageBusy.value||!canAccess(session.value,'packing_templates','EDIT'))return;
+  const scope=stamp();if(!current(scope)||pageBusy.value||!showingTemplateForm.value||!canAccess(session.value,'packing_templates','EDIT'))return;
   if (templateForm.value.items.length > 100) { uni.showToast({ title: '一个行李模板最多保存100件物品，请移除多余项', icon: 'none' }); return; }
   const rows = templateForm.value.items.filter((item) => item.name.trim());
   if (!templateForm.value.name.trim() || !rows.length) { uni.showToast({ title: '请填写模板名称和至少一件物品', icon: 'none' }); return; }
@@ -371,10 +372,37 @@ async function saveTemplate() {
     const editing = templates.value.find((template) => template.id === editingTemplateId.value);
     if (editingTemplateId.value && !editing) throw new Error('行李模板已变更，请刷新后重试');
     if(editing&&!canEditTemplate(editing))throw new Error('没有模板编辑权限');
-    if (editing) await updatePackingTemplate(editing, payload); else await createPackingTemplate(payload);
-    if(!current(scope))return;const updated=await listPackingTemplates();if(!current(scope))return;templates.value=updated;showingTemplateForm.value=false;uni.showToast({title:editing?'模板已更新':'模板已创建',icon:'success'});
+    const saved = editing ? await updatePackingTemplate(editing, payload) : await createPackingTemplate(payload);
+    if(!current(scope))return;
+    const index=templates.value.findIndex(template=>template.id===saved.id);
+    if(index<0)templates.value.unshift(saved);else templates.value[index]=saved;
+    editingTemplateId.value=saved.id;showingTemplateForm.value=false;
+    if(!await refreshSavedTemplates(scope))return;
+    uni.showToast({title:editing?'模板已更新':'模板已创建',icon:'success'});
     if (templateTripTarget.value) { pageBusy.value = false; await returnToTrip(); }
   }catch(error){scopedError(scope,error);}finally{if(current(scope))pageBusy.value=false;}
+}
+async function refreshSavedTemplates(scope:ViewStamp){
+  try{
+    const rows=await listPackingTemplates();if(!current(scope))return false;
+    templates.value=rows;templateRefreshFailed.value=false;return true;
+  }catch(error){
+    if(!current(scope))return false;
+    if(error instanceof ApiError&&[401,403,404].includes(error.statusCode)){scopedError(scope,error);return false;}
+    templateRefreshFailed.value=true;
+    uni.showToast({title:`模板已保存，但列表刷新失败，可重新读取：${message(error)}`,icon:'none',duration:3000});
+    return false;
+  }
+}
+async function retryTemplateRefresh(){
+  const scope=stamp();
+  if(!current(scope)||scope.tab!=='templates'||!templateRefreshFailed.value||showingTemplateForm.value||pageBusy.value||tripBusy.value||nativeBusy.value||!canAccess(session.value,'packing_templates'))return;
+  pageBusy.value=true;
+  try{
+    if(!await refreshSavedTemplates(scope))return;
+    if(templateTripTarget.value){pageBusy.value=false;await returnToTrip();}
+    else uni.showToast({title:'模板列表已更新',icon:'success'});
+  }finally{if(current(scope))pageBusy.value=false;}
 }
 function archiveTemplate(template: PackingTemplate) {
   const scope=stamp();if(!current(scope)||!canEditTemplate(template)||pageBusy.value)return;
@@ -555,6 +583,7 @@ onUnmounted(unloadPage);
     <view v-else>
       <view v-if="templateTripTarget" class="notice" @tap="returnToTrip">‹ 返回“{{templateTargetTitle}}”，选择模板加入行李</view>
       <view class="template-explain">模板名称和物品均由家庭成员自定义。套用到行程后会生成独立清单，不会反向修改模板。</view>
+      <view v-if="templateRefreshFailed" class="notice"><text>模板已保存，但列表刷新失败，不需要再次保存。</text><view class="button small" :class="{disabled:pageBusy}" @tap="retryTemplateRefresh">重新读取模板列表</view></view>
       <view v-if="!templates.length && !showingTemplateForm" class="empty">还没有自定义模板</view>
       <template v-if="!showingTemplateForm">
       <view v-for="template in templates" :key="template.id" class="template-card"><view class="template-top"><view><text class="template-name">{{ template.name }}</text><text class="template-description">{{ template.description || `${template.items.length} 件物品` }}</text></view><text v-if="canEditTemplate(template)" class="edit" @tap="editTemplate(template)">编辑</text></view><view class="chips"><text v-for="item in template.items.slice(0,6)" :key="item.id" class="chip">{{ item.name }}</text><text v-if="template.items.length > 6" class="chip">+{{ template.items.length - 6 }}</text></view><text v-if="canEditTemplate(template)" class="archive" @tap="archiveTemplate(template)">归档模板</text></view>

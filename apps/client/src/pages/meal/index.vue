@@ -18,6 +18,7 @@ let resume: { identity: HouseholdContext; date: string; type: string; id?: strin
 const date = ref(today()), recipes = ref<Recipe[]>([]), meal = ref<Meal>();
 const comparison = ref<IngredientComparison[]>([]), checkedShortages = ref<string[]>([]);
 const category = ref('全部'), loading = ref(false), errorText = ref('');
+const mealLoaded = ref(false), comparisonError = ref('');
 const recipeCategories = ref<RecipeCategory[]>([]), categoryName = ref('');
 const categoryEditing = ref<RecipeCategory>(), categoryEditName = ref(''), categoryEditOrder = ref('');
 const session = ref<HouseholdContext>();
@@ -60,7 +61,7 @@ function message(error: unknown) { return error instanceof Error ? error.message
 function formatQuantity(value: string | number | null) { return value === null ? '待确认' : String(Number(value)); }
 const busy = computed(() => loading.value || writing.value);
 function sameIdentity(a?: HouseholdContext, b?: HouseholdContext) { return Boolean(a && b && a.householdId === b.householdId && a.membershipId === b.membershipId); }
-function clearMeal() { closeRecipeDetail(); meal.value = undefined; comparison.value = []; checkedShortages.value = []; servings.value = {}; history.value = []; reopenReason.value = ''; loadedSelection = ''; historyEpoch++; }
+function clearMeal() { closeRecipeDetail(); meal.value = undefined; mealLoaded.value = false; comparisonError.value = ''; comparison.value = []; checkedShortages.value = []; servings.value = {}; history.value = []; reopenReason.value = ''; loadedSelection = ''; historyEpoch++; }
 function clearPrivate() { clearMeal(); recipes.value = []; recipeCategories.value = []; coverUrls.value = {}; session.value = undefined; category.value = '全部'; categoryName.value = ''; cancelCategoryEdit(); }
 function alive(token: number) { return !disposed && pageVisible.value && token === viewEpoch; }
 function current(token: number, identity?: HouseholdContext) {
@@ -68,9 +69,9 @@ function current(token: number, identity?: HouseholdContext) {
   if (!sameIdentity(identity, getStoredSession())) { viewEpoch++; mealEpoch++; clearPrivate(); loading.value = false; errorText.value = '账号或家庭已变化，请重新加载'; return false; }
   return true;
 }
-function fail(error: unknown) {
+function fail(error: unknown, prefix = '') {
   if (error instanceof ApiError && [401, 403].includes(error.statusCode)) { viewEpoch++; mealEpoch++; clearPrivate(); loading.value = false; }
-  errorText.value = message(error); uni.showToast({ title: errorText.value, icon: 'none' });
+  errorText.value = prefix + message(error); uni.showToast({ title: errorText.value, icon: 'none' });
 }
 function selectionKey() { return [date.value, mealType.value, slotKey.value, targetMealId.value || ''].join('|'); }
 function capture() { return { token: viewEpoch, read: mealEpoch, interaction: interactionEpoch, editor: editorEpoch, identity: session.value, selection: selectionKey(), slotDraft: slotInput.value, active: active.value, mealId: meal.value?.id, version: meal.value?.version }; }
@@ -82,7 +83,7 @@ function ready(module: string, level: 'VIEW' | 'EDIT' | 'MANAGE' = 'VIEW') {
   if (busy.value || !current(viewEpoch, session.value)) return false;
   if (!canAccess(session.value, module, level)) { fail(new Error('尚未获得该操作权限')); return false; }
   if (module !== 'recipes' && mealType.value === '加餐' && slotInput.value.trim() !== slotKey.value) { fail(new Error('请先点击“查看这顿加餐”再操作')); return false; }
-  if (module !== 'recipes' && loadedSelection && loadedSelection !== selectionKey()) { fail(new Error('请先查看所选餐点')); return false; }
+  if (module !== 'recipes' && (!mealLoaded.value || loadedSelection !== selectionKey())) { fail(new Error('餐点信息尚未加载，请先刷新所选餐点')); return false; }
   return true;
 }
 async function runWrite<T>(scope: ReturnType<typeof capture>, operation: () => Promise<T>, done: (value: T) => void | Promise<void>) {
@@ -92,8 +93,9 @@ async function runWrite<T>(scope: ReturnType<typeof capture>, operation: () => P
   catch (error) { if (valid(scope)) fail(error); }
   finally { writing.value = false; }
 }
-async function loadMealFromDatabase() {
-  const token = viewEpoch, identity = session.value, read = ++mealEpoch, key = selectionKey();
+async function loadMealFromDatabase(afterWrite = false) {
+  const token = viewEpoch, identity = session.value, read = ++mealEpoch;
+  let key = selectionKey();
   const selected = { day: date.value, type: mealType.value, slot: slotKey.value, id: targetMealId.value };
   clearMeal();
   const stillCurrent = () => current(token, identity) && read === mealEpoch && key === selectionKey();
@@ -104,15 +106,27 @@ async function loadMealFromDatabase() {
     if (!stillCurrent()) return;
     const found = rows.find(item => item.localDate === selected.day && (selected.id ? item.id === selected.id : item.mealType === mealTypeCodes[selected.type] && item.slotKey === selected.slot));
     if (selected.id && !found) throw new Error('该餐点不存在或已经没有访问权限');
-    const stock = found && !found.legacyWithoutSnapshot && canAccess(identity, 'inventory') ? await recalculateMeal(found.id) : [];
-    if (!stillCurrent()) return;
-    meal.value = found; comparison.value = stock;
+    // An optional inventory read must not turn a known saved meal into "no meal".
+    // Only the meal query determines whether creating/ordering is safe.
+    meal.value = found;
     if (found) { mealType.value = mealTypeLabel(found.mealType); slotKey.value = found.slotKey; }
     slotInput.value = slotKey.value;
     servings.value = Object.fromEntries((found?.menu || []).map(dish => [dish.recipeId, String(Number(dish.cookMultiplier))]));
-    checkedShortages.value = stock.filter(item => item.status === 'SHORTAGE').map(item => item.key);
-    loadedSelection = selectionKey();
-  } catch (error) { if (stillCurrent()) { clearMeal(); fail(error); } }
+    key = selectionKey(); loadedSelection = key; mealLoaded.value = true;
+    if (found && !found.legacyWithoutSnapshot && canAccess(identity, 'inventory')) {
+      try {
+        const stock = await recalculateMeal(found.id);
+        if (!stillCurrent()) return;
+        comparison.value = stock;
+        checkedShortages.value = stock.filter(item => item.status === 'SHORTAGE').map(item => item.key);
+      } catch (error) {
+        if (!stillCurrent()) return;
+        if (error instanceof ApiError && [401, 403, 404].includes(error.statusCode)) throw error;
+        comparisonError.value = (afterWrite ? '本次操作已保存，但库存对照加载失败：' : '库存对照加载失败：') + message(error);
+        uni.showToast({ title: comparisonError.value, icon: 'none' });
+      }
+    }
+  } catch (error) { if (stillCurrent()) { clearMeal(); fail(error, afterWrite ? '本次操作已保存，但刷新失败，请刷新后再操作：' : ''); } }
 }
 async function loadRecipes(token: number, identity: HouseholdContext) {
   if (!canAccess(identity, 'recipes')) return;
@@ -165,7 +179,7 @@ async function beginOrdering() {
   switchView('order');category.value='全部';
   if(meal.value)return;
   const hour=({早餐:'08',午餐:'12',晚餐:'18',加餐:'21'} as Record<string,string>)[mealType.value];
-  await runWrite(capture(),()=>createMeal({scheduledAt:`${date.value}T${hour}:00:00+08:00`,mealType:mealTypeCodes[mealType.value],slotKey:slotKey.value||undefined}),()=>loadMealFromDatabase());
+  await runWrite(capture(),()=>createMeal({scheduledAt:`${date.value}T${hour}:00:00+08:00`,mealType:mealTypeCodes[mealType.value],slotKey:slotKey.value||undefined}),()=>loadMealFromDatabase(true));
 }
 async function toggleRecipe(recipeId:string) {
   if (!ready('meals', 'EDIT')) return;
@@ -180,7 +194,7 @@ async function toggleRecipe(recipeId:string) {
     if (!valid(scope)) return;
     if (target.status !== 'DRAFT') throw new Error('餐单已锁定；需由厨师重新打开后点菜');
     if (withdraw) await removeMealRecipe(target.id, recipeId); else await addMealRecipe(target.id, recipeId);
-  }, () => loadMealFromDatabase());
+  }, () => loadMealFromDatabase(true));
 }
 function addRecipe() { if (ready('recipes', 'EDIT')) uni.navigateTo({url:'/pages/recipe-editor/index'}); }
 function editRecipe(id:string) { if (ready('recipes', 'EDIT') && recipes.value.some(row => row.id === id)) uni.navigateTo({url:'/pages/recipe-editor/index?id='+encodeURIComponent(id)}); }
@@ -224,7 +238,7 @@ async function saveServings(recipeId:string) {
   if(!ready('meals','MANAGE')||!meal.value||meal.value.status!=='DRAFT'||!mealItems.value.some(row=>row.recipeId===recipeId))return;
   const value=(servings.value[recipeId]||'').trim(), quantity=Number(value), target=meal.value;
   if(!/^\d+(?:\.\d{1,3})?$/.test(value)||quantity<0.001||quantity>100){fail(new Error('份数请填0.001到100，最多3位小数'));return;}
-  await runWrite(capture(), () => updateMealDish(target,recipeId,quantity), () => loadMealFromDatabase());
+  await runWrite(capture(), () => updateMealDish(target,recipeId,quantity), () => loadMealFromDatabase(true));
 }
 function confirmRemoveDish(recipeId:string) {
   const target=meal.value,dish=mealItems.value.find(item=>item.recipeId===recipeId);
@@ -232,7 +246,7 @@ function confirmRemoveDish(recipeId:string) {
   const scope=capture();
   uni.showModal({title:'移除本餐这道菜？',content:`将移除所有人对“${dish.recipe.name}”的本餐选择；已确认的旧快照和本次变更记录会保留。`,success:async result=>{
     if(!result.confirm||!valid(scope)||!ready('meals','MANAGE')||meal.value?.status!=='DRAFT')return;
-    await runWrite(scope,()=>removeMealDish(target,recipeId),()=>loadMealFromDatabase());
+    await runWrite(scope,()=>removeMealDish(target,recipeId),()=>loadMealFromDatabase(true));
   }});
 }
 function confirmAction(action:'confirm'|'reopen'|'start'|'cancel') {
@@ -243,7 +257,7 @@ function confirmAction(action:'confirm'|'reopen'|'start'|'cancel') {
   const scope=capture(), reason=reopenReason.value.trim()||undefined;
   uni.showModal({title:titles[action],content:action==='confirm'?'按已保存份数锁定菜名和用料快照；普通点菜将停止。':action==='reopen'?'旧快照保留。重新确认时生成新版菜单，并记录原因。':'确认执行此操作？',success:async result=>{
     if(!result.confirm||!valid(scope)||!ready('meals','MANAGE'))return;
-    await runWrite(scope, () => transitionMeal(current,action,reason), () => loadMealFromDatabase());
+    await runWrite(scope, () => transitionMeal(current,action,reason), () => loadMealFromDatabase(true));
   }});
 }
 function toggleShortage(item:IngredientComparison) { if(!ready('inventory')||item.status!=='SHORTAGE'||!comparison.value.some(row=>row.key===item.key&&row.status==='SHORTAGE'))return; checkedShortages.value=checkedShortages.value.includes(item.key)?checkedShortages.value.filter(k=>k!==item.key):[...checkedShortages.value,item.key]; }
@@ -258,7 +272,7 @@ function finishCooking(){
   const scope=capture();
   uni.showModal({title:'完成这顿饭',content:'只记录餐点已完成，不会自动减少任何库存。库存仍由家人按需要手工核实。',success:async result=>{
     if(!result.confirm||!valid(scope)||!ready('meals','MANAGE'))return;
-    await runWrite(scope, () => completeMeal(current), async () => {uni.showToast({title:'餐点已完成',icon:'success'});await loadMealFromDatabase();});
+    await runWrite(scope, () => completeMeal(current), async () => {uni.showToast({title:'餐点已完成',icon:'success'});await loadMealFromDatabase(true);});
   }});
 }
 async function showHistory(){if(!ready('meals')||!meal.value)return;const scope=capture(),id=meal.value.id,read=++historyEpoch;history.value=[];try{const rows=await listMealSnapshots(id);if(valid(scope)&&read===historyEpoch)history.value=rows;}catch(error){if(valid(scope)&&read===historyEpoch)fail(error);}}
@@ -272,6 +286,7 @@ onUnload(()=>{disposed=true;hide();resume=undefined;});
     <view class="heading"><text class="label">吃什么</text><text class="title">一起好好吃饭</text></view>
     <view class="tabs"><view class="tab" :class="{selected:active==='order'}" @tap="switchView('order')">去点餐</view><view class="tab" :class="{selected:active==='recipes'}" @tap="switchView('recipes')">菜谱</view><view class="tab" :class="{selected:active==='menu'}" @tap="switchView('menu')">待做菜单</view></view>
     <view v-if="errorText" class="error">{{errorText}}<text class="small-action" @tap="loadPage">刷新</text></view>
+    <view v-if="comparisonError" class="error">{{comparisonError}}<text class="small-action" @tap="loadPage">刷新库存对照</text></view>
     <view v-if="busy" class="hint">{{ writing ? '正在保存本次操作…' : '正在同步家里的数据…' }}</view>
     <view v-if="active!=='recipes'" class="picker-row"><picker mode="date" :disabled="writing" :value="date" @change="changeDate"><text class="field-value">{{date}} ›</text></picker><view class="meal-types"><text v-for="item in mealTypes" :key="item" class="meal-type" :class="{chosen:mealType===item}" @tap="chooseMealType(item)">{{item}}</text></view></view>
     <view v-if="active!=='recipes' && mealType==='加餐'" class="form-box"><input v-model="slotInput" :disabled="busy" class="entry" placeholder="加餐名称，可留空；如下午茶" /><button :disabled="writing" @tap="changeSelection(date,mealType)">查看这顿加餐</button><text v-if="slotInput.trim()!==slotKey" class="material">名称尚未应用，请先查看这顿加餐。</text></view>
@@ -289,11 +304,11 @@ onUnload(()=>{disposed=true;hide();resume=undefined;});
         <text v-else class="material">请联系厨师添加并发布菜谱；发布后可在这里为所选餐次点菜。</text>
       </view>
       <view v-else-if="!loading && !errorText && publishedRecipes.length && !visibleRecipes.length" class="ordering-guide"><text class="material">这个分类还没有可点的菜。</text><button class="order-start secondary-order" :disabled="busy" @tap="category='全部'">查看全部菜谱</button></view>
-      <view v-for="recipe in visibleRecipes" :key="recipe.id" class="recipe-card"><image v-if="coverUrls[recipe.id]" class="recipe-cover" :src="coverUrls[recipe.id]" mode="aspectFill" /><view v-else class="recipe-icon">🍽️</view><view class="recipe-info" @tap="openRecipeDetail(recipe.id,'CURRENT')"><text class="recipe-name">{{recipe.name}}</text><text v-for="i in recipe.ingredients" :key="i.ingredientId" class="material">{{i.ingredient.name}} {{formatQuantity(i.quantity)}} {{i.unit}}</text><text class="material">调料：{{recipe.seasonings.map(s=>s.name).join('、')||'无'}}</text><text class="detail-link">查看用料与做法 ›</text></view><button v-if="canOrder && (!meal || meal.status==='DRAFT')" :disabled="busy" class="add" :class="{added:selectedRecipeIds.has(recipe.id)}" @tap.stop="toggleRecipe(recipe.id)">{{ownRecipeIds.has(recipe.id)?'撤回我的选择':selectedRecipeIds.has(recipe.id)?'我也想吃':'点这道菜'}}</button></view>
+      <view v-for="recipe in visibleRecipes" :key="recipe.id" class="recipe-card"><image v-if="coverUrls[recipe.id]" class="recipe-cover" :src="coverUrls[recipe.id]" mode="aspectFill" /><view v-else class="recipe-icon">🍽️</view><view class="recipe-info" @tap="openRecipeDetail(recipe.id,'CURRENT')"><text class="recipe-name">{{recipe.name}}</text><text v-for="i in recipe.ingredients" :key="i.ingredientId" class="material">{{i.ingredient.name}} {{formatQuantity(i.quantity)}} {{i.unit}}</text><text class="material">调料：{{recipe.seasonings.map(s=>s.name).join('、')||'无'}}</text><text class="detail-link">查看用料与做法 ›</text></view><button v-if="canOrder && (!meal || meal.status==='DRAFT')" :disabled="busy || !mealLoaded" class="add" :class="{added:selectedRecipeIds.has(recipe.id)}" @tap.stop="toggleRecipe(recipe.id)">{{ownRecipeIds.has(recipe.id)?'撤回我的选择':selectedRecipeIds.has(recipe.id)?'我也想吃':'点这道菜'}}</button></view>
       <view v-if="canAccess(session,'meals')" class="primary" @tap="switchView('menu')">查看待做菜单（{{mealItems.length}}道）</view>
     </view>
     <view v-else-if="active==='recipes'">
-      <view v-if="canOrder" class="ordering-guide"><text class="material">当前选中 {{date}} {{mealType}} {{slotKey}}；发布菜谱后，回到点菜页将菜加入本餐。</text><button class="order-start" :disabled="busy" @tap="beginOrdering">{{meal && meal.status!=='DRAFT'?'查看所选餐次菜单':'为所选餐次点菜'}}</button></view>
+      <view v-if="canOrder" class="ordering-guide"><text class="material">当前选中 {{date}} {{mealType}} {{slotKey}}；发布菜谱后，回到点菜页将菜加入本餐。</text><button class="order-start" :disabled="busy || !mealLoaded" @tap="beginOrdering">{{meal && meal.status!=='DRAFT'?'查看所选餐次菜单':'为所选餐次点菜'}}</button></view>
       <view v-if="canAccess(session,'recipes','EDIT')" class="primary" @tap="addRecipe">＋ 添加菜谱</view>
       <view v-if="canAccess(session,'recipes','MANAGE')" class="form-box">
         <text class="block-title plain-title">菜谱分类</text>
@@ -306,7 +321,7 @@ onUnload(()=>{disposed=true;hide();resume=undefined;});
     <view v-else>
       <view v-if="!loading && !canAccess(session,'meals')" class="empty">尚未获得餐点查看权限</view>
       <template v-if="canAccess(session,'meals')">
-      <view class="meal-summary"><text>{{date}} {{mealType}} {{slotKey}}</text><text>{{meal?statusLabels[meal.status]:'尚未点菜'}}</text></view>
+      <view class="meal-summary"><text>{{date}} {{mealType}} {{slotKey}}</text><text>{{meal?statusLabels[meal.status]:mealLoaded?'尚未点菜':'餐点信息未加载'}}</text></view>
       <view v-if="meal?.legacyWithoutSnapshot" class="hint">这是旧版餐单，没有历史快照；不将当前菜谱当作当时用料。</view>
       <view v-if="!mealItems.length && !meal?.legacyWithoutSnapshot" class="empty">还没有选择菜品</view>
       <button v-if="!loading && !errorText && canOrder && (!meal || meal.status==='DRAFT')" class="order-start" :disabled="busy" @tap="beginOrdering">{{meal?'继续为这顿饭点菜':'创建这顿餐点，开始点菜'}}</button>

@@ -7,11 +7,14 @@ import { canAccess, refreshAccess, type HouseholdContext } from '../../services/
 
 const session=ref<HouseholdContext>(),fields=ref<ArchiveField[]>([]),members=ref<Member[]>([]),selected=ref<ArchiveField>(),showFieldForm=ref(false),editingField=ref(false),busy=ref(false);
 const revealed=ref(false),value=ref(''),valueVersion=ref(0),editingValue=ref(false);
+const notice=ref('');
 const form=ref({key:'',label:'',typeIndex:0,visibilityIndex:0,sensitive:false,grantModes:{} as Record<string,number>});
 const types=[{value:'TEXT' as const,label:'文字'},{value:'DATE' as const,label:'日期'},{value:'CONTACT' as const,label:'联系人'},{value:'ADDRESS' as const,label:'地址'}];
 const visibilities=[{value:'MANAGERS' as const,label:'仅管理员'},{value:'MEMBERS' as const,label:'家庭成员'},{value:'SELECTED' as const,label:'指定成员'}];
 const manager=computed(()=>canAccess(session.value,'archive','MANAGE'));
 let viewEpoch=0;
+type ReturnTarget={id:string;householdId:string;membershipId:string};
+let retryTarget:ReturnTarget|undefined;
 function changeSensitive(event:unknown){
   if(!event||typeof event!=='object'||!('detail' in event))return;
   const detail=event.detail;
@@ -19,6 +22,16 @@ function changeSensitive(event:unknown){
 }
 
 function message(error:unknown){return error instanceof Error?error.message:'操作失败';}
+function sameIdentity(a?:HouseholdContext,b?:HouseholdContext){return Boolean(a&&b&&a.householdId===b.householdId&&a.membershipId===b.membershipId);}
+function current(token:number,owner?:HouseholdContext){return token===viewEpoch&&sameIdentity(owner,session.value);}
+function responseStatus(error:unknown){return error&&typeof error==='object'&&'statusCode'in error?error.statusCode:undefined;}
+function failure(error:unknown,token:number,owner?:HouseholdContext,targetId?:string){
+  if(!current(token,owner))return;
+  const status=responseStatus(error);
+  if(status===401||status===403)clearPage();
+  else if(status===404&&targetId){fields.value=fields.value.filter(row=>row.id!==targetId);close();}
+  uni.showToast({title:message(error),icon:'none',duration:3000});
+}
 function typeLabel(field:ArchiveField){return types.find(item=>item.value===field.valueType)?.label||field.valueType;}
 function visibilityLabel(field:ArchiveField){return visibilities.find(item=>item.value===field.visibility)?.label||field.visibility;}
 function formatTime(input:string|null){if(!input)return'尚未填写';const date=new Date(input);return`${date.getFullYear()}-${String(date.getMonth()+1).padStart(2,'0')}-${String(date.getDate()).padStart(2,'0')}`;}
@@ -26,8 +39,8 @@ function grantMode(memberId:string){return form.value.grantModes[memberId]||0;}
 function cycleGrant(memberId:string){form.value.grantModes[memberId]=(grantMode(memberId)+1)%3;}
 function grantLabel(memberId:string){return['不授权','可查看','可编辑'][grantMode(memberId)];}
 function grants():ArchiveGrant[]{return Object.entries(form.value.grantModes).filter(([,mode])=>mode>0).map(([membershipId,mode])=>({membershipId,canRead:true,canEdit:mode===2}));}
-async function load(){
-  const previousHousehold=session.value?.householdId,previousField=selected.value?.id;
+async function load(target=retryTarget||(selected.value&&session.value?{id:selected.value.id,householdId:session.value.householdId,membershipId:session.value.membershipId}:undefined)){
+  const previousNotice=notice.value;
   clearPage();const epoch=viewEpoch;busy.value=true;
   try{
     const context=await refreshAccess();
@@ -35,13 +48,20 @@ async function load(){
     const [rows,people]=await Promise.all([listArchiveFields(),canAccess(context,'archive','MANAGE')&&canAccess(context,'members')?listMembers().then(result=>result.items):Promise.resolve([])]);
     if(epoch!==viewEpoch)return false;
     session.value=context;fields.value=rows;members.value=people;
-    if(context.householdId===previousHousehold){selected.value=rows.find(field=>field.id===previousField);valueVersion.value=selected.value?.valueVersion??0;}
+    if(target&&context.householdId===target.householdId&&context.membershipId===target.membershipId){selected.value=rows.find(field=>field.id===target.id);valueVersion.value=selected.value?.valueVersion??0;}
     return true;
-  }catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});return false;}
+  }catch(error){if(epoch===viewEpoch){if(responseStatus(error)!==401&&responseStatus(error)!==403){retryTarget=target;notice.value=previousNotice;}uni.showToast({title:message(error),icon:'none'});}return false;}
   finally{if(epoch===viewEpoch)busy.value=false;}
 }
+async function reloadSaved(id:string,owner:HouseholdContext,success:string){
+  const target={id,householdId:owner.householdId,membershipId:owner.membershipId};
+  const refreshing=load(target),token=viewEpoch;const loaded=await refreshing;
+  if(token!==viewEpoch)return;
+  if(loaded)uni.showToast({title:success,icon:'success'});
+  else{retryTarget=target;notice.value=`${success}，但刷新失败。请重试读取确认结果，勿重复提交。`;uni.showToast({title:notice.value,icon:'none',duration:3000});}
+}
 function open(field:ArchiveField){close();selected.value=field;valueVersion.value=field.valueVersion;}
-function close(){viewEpoch++;selected.value=undefined;showFieldForm.value=false;revealed.value=false;editingValue.value=false;value.value='';valueVersion.value=0;busy.value=false;}
+function close(){viewEpoch++;retryTarget=undefined;notice.value='';selected.value=undefined;showFieldForm.value=false;revealed.value=false;editingValue.value=false;value.value='';valueVersion.value=0;busy.value=false;}
 function clearPage(){close();session.value=undefined;fields.value=[];members.value=[];editingField.value=false;form.value={key:'',label:'',typeIndex:0,visibilityIndex:0,sensitive:false,grantModes:{}};}
 function cancelField(){const field=selected.value;if(field)open(field);else close();}
 function newField(){if(!manager.value)return;close();editingField.value=false;showFieldForm.value=true;form.value={key:'',label:'',typeIndex:0,visibilityIndex:0,sensitive:false,grantModes:{}};}
@@ -49,26 +69,25 @@ function editField(){const field=selected.value;if(!field||!manager.value)return
 async function saveField(){
   if(busy.value||!manager.value)return;
   if(!form.value.label.trim()||(!editingField.value&&!form.value.key.trim())){uni.showToast({title:'请填写字段名称和英文标识',icon:'none'});return;}
-  const epoch=viewEpoch;busy.value=true;
+  const epoch=viewEpoch,owner=session.value,targetId=editingField.value?selected.value?.id:undefined;busy.value=true;
   try{
     const common={label:form.value.label.trim(),valueType:types[form.value.typeIndex].value,sensitive:form.value.sensitive,visibility:visibilities[form.value.visibilityIndex].value,grants:grants()};
     const saved=editingField.value&&selected.value?await updateArchiveField(selected.value,common):await createArchiveField({key:form.value.key.trim(),...common});
-    if(epoch!==viewEpoch||!await load())return;
-    const current=fields.value.find(field=>field.id===saved.id);if(current)open(current);
-    uni.showToast({title:'档案字段已保存',icon:'success'});
-  }catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none',duration:3000});}
-  finally{if(epoch===viewEpoch)busy.value=false;}
+    if(!current(epoch,owner)||!owner)return;
+    await reloadSaved(saved.id,owner,'档案字段已保存');
+  }catch(error){failure(error,epoch,owner,targetId);}
+  finally{if(current(epoch,owner))busy.value=false;}
 }
-async function reveal(){const field=selected.value;if(!field||busy.value)return false;const epoch=viewEpoch;busy.value=true;try{const result=await getArchiveValue(field.id);if(epoch!==viewEpoch||selected.value?.id!==field.id)return false;value.value=result.value||'';valueVersion.value=result.valueVersion;revealed.value=true;return true;}catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});return false;}finally{if(epoch===viewEpoch)busy.value=false;}}
+async function reveal(){const field=selected.value;if(!field||busy.value)return false;const epoch=viewEpoch,owner=session.value;busy.value=true;try{const result=await getArchiveValue(field.id);if(!current(epoch,owner)||selected.value?.id!==field.id)return false;value.value=result.value||'';valueVersion.value=result.valueVersion;revealed.value=true;return true;}catch(error){failure(error,epoch,owner,field.id);return false;}finally{if(current(epoch,owner))busy.value=false;}}
 async function beginEdit(){if(busy.value||!selected.value?.canEdit)return;if(!revealed.value&&!await reveal())return;editingValue.value=true;}
 async function saveValue(){
-  const field=selected.value;if(!field?.canEdit||busy.value)return;const epoch=viewEpoch;busy.value=true;
-  try{await setArchiveValue(field.id,value.value,valueVersion.value);if(epoch!==viewEpoch||!await load())return;uni.showToast({title:'档案内容已加密保存',icon:'success'});}
-  catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none',duration:3000});}
-  finally{if(epoch===viewEpoch)busy.value=false;}
+  const field=selected.value;if(!field?.canEdit||busy.value)return;const epoch=viewEpoch,owner=session.value;busy.value=true;
+  try{await setArchiveValue(field.id,value.value,valueVersion.value);if(!current(epoch,owner)||!owner)return;await reloadSaved(field.id,owner,'档案内容已加密保存');}
+  catch(error){failure(error,epoch,owner,field.id);}
+  finally{if(current(epoch,owner))busy.value=false;}
 }
-function askArchive(){const field=selected.value;if(!field||busy.value||!manager.value)return;const epoch=viewEpoch;uni.showModal({title:'归档字段？',content:'字段和值会从家庭档案中隐藏，不进行物理删除。',success:async result=>{if(!result.confirm||epoch!==viewEpoch)return;busy.value=true;try{await archiveArchiveField(field);if(epoch!==viewEpoch||!await load())return;uni.showToast({title:'已归档',icon:'success'});}catch(error){if(epoch===viewEpoch)uni.showToast({title:message(error),icon:'none'});}finally{if(epoch===viewEpoch)busy.value=false;}}});}
-onShow(load);
+function askArchive(){const field=selected.value;if(!field||busy.value||!manager.value)return;const epoch=viewEpoch,owner=session.value;uni.showModal({title:'归档字段？',content:'字段和值会从家庭档案中隐藏，不进行物理删除。',success:async result=>{if(!result.confirm||!current(epoch,owner)||busy.value)return;busy.value=true;try{await archiveArchiveField(field);if(!current(epoch,owner)||!owner)return;await reloadSaved(field.id,owner,'档案字段已归档');}catch(error){failure(error,epoch,owner,field.id);}finally{if(current(epoch,owner))busy.value=false;}}});}
+onShow(()=>load());
 onHide(clearPage);
 onUnload(clearPage);
 </script>
@@ -76,6 +95,7 @@ onUnload(clearPage);
 <template>
   <view class="page">
     <view class="head"><text class="eyebrow">家庭档案</text><text class="title">重要的小事，安心放好</text><text class="subtitle">只展示你被授权查看的字段，内容默认不直接展开。</text></view>
+    <view v-if="notice" class="card"><text class="note">{{notice}}</text><button :disabled="busy" @tap="load()">重试读取</button></view>
     <template v-if="!selected&&!showFieldForm">
       <view v-for="field in fields" :key="field.id" class="field" @tap="open(field)"><view class="icon">{{field.valueType==='ADDRESS'?'📍':field.valueType==='CONTACT'?'☎️':field.valueType==='DATE'?'📅':'📄'}}</view><view class="grow"><text class="field-title">{{field.label}}</text><text class="meta">{{typeLabel(field)}} · {{visibilityLabel(field)}} · {{formatTime(field.updatedAt)}}</text></view><text v-if="field.sensitive" class="lock">🔒</text><text class="go">›</text></view>
       <text v-if="!fields.length" class="empty">当前没有你可以查看的档案字段。</text><view v-if="manager" class="primary" @tap="newField">＋ 新建档案字段</view>

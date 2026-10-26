@@ -1131,16 +1131,16 @@ test('Recipe editor preserves an archived historical category unless the user ex
 test('Meal confirmation modal never confirms when the user cancels',async()=>{
   const uni=mockUni();let modal,transitions=0;
   uni.showModal=input=>modal=input;
-  const page=loadPage('src/pages/meal/index.vue',mealDependencies({transitionMeal:async meal=>{transitions++;return {...meal,status:'CONFIRMED'};}}),uni);
-  page.pageVisible.value=true;page.session.value=mealSession;page.meal.value=mealRecord({status:'DRAFT',version:3});
+  const page=loadPage('src/pages/meal/index.vue',mealDependencies({listMeals:async()=>[mealRecord({status:'DRAFT',version:3})],transitionMeal:async meal=>{transitions++;return {...meal,status:'CONFIRMED'};}}),uni);
+  page.pageVisible.value=true;page.session.value=mealSession;page.date.value='2026-09-01';await page.loadMealFromDatabase();
   page.confirmAction('confirm');await modal.success({confirm:false,cancel:true});assert.equal(transitions,0);
   page.confirmAction('confirm');await modal.success({confirm:true,cancel:false});assert.equal(transitions,1);
 });
 test('Meal completion confirms explicitly, is retryable, and has no stock payload',async()=>{
   const uni=mockUni(),requests=[];let modal,fail=true;
   uni.showModal=input=>modal=input;
-  const page=loadPage('src/pages/meal/index.vue',mealDependencies({completeMeal:async meal=>{requests.push(meal);if(fail)throw Error('网络中断');return mealRecord({status:'COMPLETED',version:8});}}),uni);
-  page.pageVisible.value=true;page.session.value=mealSession;page.meal.value=mealRecord();page.finishCooking();await modal.success({confirm:false,cancel:true});assert.equal(requests.length,0);
+  const page=loadPage('src/pages/meal/index.vue',mealDependencies({listMeals:async()=>[mealRecord()],completeMeal:async meal=>{requests.push(meal);if(fail)throw Error('网络中断');return mealRecord({status:'COMPLETED',version:8});}}),uni);
+  page.pageVisible.value=true;page.session.value=mealSession;page.date.value='2026-09-01';await page.loadMealFromDatabase();page.finishCooking();await modal.success({confirm:false,cancel:true});assert.equal(requests.length,0);
   page.finishCooking();await modal.success({confirm:true,cancel:false});assert.equal(requests[0].version,7);assert.match(page.errorText.value,/网络中断/);
   fail=false;page.finishCooking();await modal.success({confirm:true,cancel:false});assert.equal(requests[1].version,7);
 });
