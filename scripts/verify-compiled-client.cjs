@@ -216,6 +216,7 @@ function flatten(nodes) {
 
 function createPage(directory, name) {
   const hooks = {}, stops = [], notices = [], calls = [], templates = [];
+  const storage = new Map();
   const context = { householdId: 'probe-house', membershipId: 'probe-member', householdName: 'Probe', roles: ['ADMIN'], effectivePermissions: { recipes: 'EDIT', trips: 'EDIT', packing_templates: 'EDIT' } };
   const rank = { VIEW: 1, EDIT: 2, MANAGE: 3 };
   const record = (operation, ...args) => calls.push({ operation, args: clone(args) });
@@ -223,6 +224,9 @@ function createPage(directory, name) {
   const trips = new Map([['probe-trip', makeTrip('probe-trip')]]);
   let recipe, definition;
   const uni = {
+    getStorageSync: key => storage.has(key) ? clone(storage.get(key)) : undefined,
+    setStorageSync: (key, value) => storage.set(key, clone(value)),
+    removeStorageSync: key => storage.delete(key),
     showToast: input => notices.push(input.title),
     setNavigationBarTitle() {},
     navigateBack: () => record('navigateBack'),
@@ -268,6 +272,7 @@ function createPage(directory, name) {
     createTrip: async input => { record('createTrip', input); const trip = makeTrip('probe-created-trip', clone(input)); trips.set(trip.id, trip); return clone(trip); },
   };
   const dependencies = {
+    '../common/vendor.js': vendor,
     '../../common/vendor.js': vendor,
     '../../services/family-api.js': api,
     '../../services/session.js': { getStoredSession: () => context, refreshAccess: async () => context, canAccess: (value, module, level = 'VIEW') => (rank[value?.effectivePermissions?.[module]] || 0) >= rank[level] },
@@ -286,6 +291,11 @@ function createPage(directory, name) {
     const module = { exports: {} };
     vm.runInNewContext(requiredFile(directory, 'services/trip-form.js'), sandbox('services/trip-form.js', module), { filename: 'compiled-trip-form.js', timeout: 1000 });
     dependencies['../../services/trip-form.js'] = module.exports;
+  }
+  if (name === 'recipe-editor') {
+    const module = { exports: {} };
+    vm.runInNewContext(requiredFile(directory, 'services/recipe-draft.js'), sandbox('services/recipe-draft.js', module), { filename: 'compiled-recipe-draft.js', timeout: 1000 });
+    dependencies['../../services/recipe-draft.js'] = module.exports;
   }
   const filename = `pages/${name}/index.js`;
   vm.runInNewContext(requiredFile(directory, filename), sandbox(filename), { filename: `compiled-${name}.js`, timeout: 1000 });
@@ -316,7 +326,7 @@ function createPage(directory, name) {
     return node.attrs[event]({ detail: { value } });
   }
   return {
-    calls, notices, nodes,
+    calls, notices, nodes, storage,
     show: async () => { hooks.load?.({}); assert.equal(typeof hooks.show, 'function', `No onShow hook: ${name}`); await hooks.show(); },
     tap: (label, contains) => dispatch(action(label, contains), 'bindtap'),
     input: (placeholder, value, index) => dispatch(control(placeholder, index), 'bindinput', value),
@@ -338,6 +348,10 @@ async function recipeCase(directory) {
     page.input('例如：个、克、把', '个');
     page.input('例如：生抽', '生抽');
     page.input('例如：番茄切块，鸡蛋打散备用。', '打散后炒熟');
+    const recovery = [...page.storage.values()];
+    assert.equal(recovery.length, 1, 'Compiled input must persist one local recovery draft');
+    assert.equal(recovery[0].fields.name, '探针菜');
+    assert.equal(recovery[0].fields.ingredients[0].quantity, '2.125');
     assert.equal(page.value('例如：番茄炒蛋'), '探针菜');
     await page.tap('＋ 再加一种食材');
     await page.tap('＋ 再加一个步骤');
@@ -354,6 +368,7 @@ async function recipeCase(directory) {
     assert.equal(writes.length, 1);
     assert.deepEqual(writes[0].args[0], { name: '探针菜', ingredients: [{ name: '鸡蛋', quantity: 2.125, unit: '个' }, { name: '番茄', unit: 'g' }], seasonings: ['生抽'], steps: ['打散后炒熟', '加入番茄翻炒'] });
     assert.equal(page.calls.filter(call => call.operation === 'navigateBack').length, 1);
+    assert.equal(page.storage.size, 0, 'Successful save must remove the local recovery draft');
     return page.calls;
   } finally { page.dispose(); }
 }

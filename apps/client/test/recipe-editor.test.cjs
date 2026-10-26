@@ -15,7 +15,8 @@ const tick = () => new Promise(setImmediate);
 function form(api = {}, access) {
   const life = {}, toasts = [], routes = [], pickers = [];
   let stored = context, liveRecipe = { ...recipe };
-  const uni = { showToast: input => toasts.push(input.title), setNavigationBarTitle() {}, navigateBack: () => routes.push('back'), chooseMedia: input => pickers.push(input), getFileSystemManager: () => ({ readFile: input => input.success({ data: new ArrayBuffer(4) }) }) };
+  const storage = new Map();
+  const uni = { getStorageSync: key => storage.get(key), setStorageSync: (key, value) => storage.set(key, JSON.parse(JSON.stringify(value))), removeStorageSync: key => storage.delete(key), showModal() {}, showToast: input => toasts.push(input.title), setNavigationBarTitle() {}, navigateBack: () => routes.push('back'), chooseMedia: input => pickers.push(input), getFileSystemManager: () => ({ readFile: input => input.success({ data: new ArrayBuffer(4) }) }) };
   const defaults = {
     listRecipeCategories: async () => [], getRecipe: async () => liveRecipe,
     createRecipe: async input => { liveRecipe = { ...recipe, ...input, version: 1 }; return liveRecipe; },
@@ -32,6 +33,10 @@ function form(api = {}, access) {
   const script = compileScript(descriptor, { id: 'recipe-test', inlineTemplate: false });
   const code = ts.transpileModule(script.content, { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
   const deps = { vue, '@dcloudio/uni-app': { onLoad: fn => life.load = fn, onShow: fn => life.show = fn, onHide: fn => life.hide = fn, onUnload: fn => life.unload = fn }, '../../services/session': session, '../../services/family-api': defaults, '../../services/transport': { ApiError } };
+  const draftModule = { exports: {} };
+  const draftCode = ts.transpileModule(fs.readFileSync(path.resolve(__dirname, '../src/services/recipe-draft.ts'), 'utf8'), { compilerOptions: { target: ts.ScriptTarget.ES2022, module: ts.ModuleKind.CommonJS } }).outputText;
+  vm.runInNewContext(draftCode, { module: draftModule, exports: draftModule.exports, uni, Date, Error, Math, JSON });
+  deps['../../services/recipe-draft'] = draftModule.exports;
   const module = { exports: {} };
   vm.runInNewContext(code, { module, exports: module.exports, require: id => { if (id in deps) return deps[id]; throw new Error('Unexpected import ' + id); }, uni, Date, Error, Promise, setTimeout, clearTimeout });
   const page = module.exports.default.setup({}, { expose() {} });

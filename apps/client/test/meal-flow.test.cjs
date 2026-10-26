@@ -78,9 +78,9 @@ test('Ordering entry creates the selected date and meal, then adds and withdraws
   await life.show();
   await page.changeDate({ detail: { value: '2026-10-23' } }); await page.chooseMealType('午餐');
   let html = await renderPage(page);
-  assert.match(html, /创建这顿餐点，开始点菜/); assert.match(html, /2026-10-23/); assert.match(html, /午餐/);
+  assert.match(html, /开始点菜/); assert.match(html, /2026-10-23/); assert.match(html, /午餐/);
   assert.equal(writes.length, 0);
-  await renderPage(page, '创建这顿餐点，开始点菜');
+  await renderPage(page, '开始点菜');
   assert.equal(page.meal.value.id, 'selected-lunch'); assert.equal(page.active.value, 'order');
   assert.deepEqual(writes, [['create', { scheduledAt: '2026-10-23T12:00:00+08:00', mealType: 'LUNCH', slotKey: undefined }]]);
   await renderPage(page, '点这道菜');
@@ -106,9 +106,9 @@ test('Draft-only recipes explain publishing and lead to recipe preparation witho
   const { page, life, routes } = form({ listMeals: async () => [], listRecipes: async () => [{ ...recipe, status: 'DRAFT' }], addMealRecipe: async () => writes++ });
   await life.show();
   let html = await renderPage(page);
-  assert.match(html, /还没有可点的已发布菜谱/); assert.match(html, /草稿/); assert.match(html, /发布/); assert.match(html, /去准备并发布菜谱/);
+  assert.match(html, /暂无可点菜品/); assert.match(html, /发布/); assert.match(html, /管理菜谱/);
   assert.doesNotMatch(html, /class="add[" ]/);
-  await renderPage(page, '去准备并发布菜谱'); html = await renderPage(page);
+  await renderPage(page, '管理菜谱'); html = await renderPage(page);
   assert.match(html, /为所选餐次点菜/);
   page.addRecipe(); assert.deepEqual(routes, ['/pages/recipe-editor/index']); assert.equal(writes, 0);
 });
@@ -116,13 +116,13 @@ test('Draft-only recipes explain publishing and lead to recipe preparation witho
 test('Filtered categories, unavailable recipes and missing meal permissions have distinct actionable states', async () => {
   const filtered = form({ listMeals: async () => [], listRecipes: async () => [recipe], listRecipeCategories: async () => [{ id: 'empty', name: '汤', version: 1 }] });
   await filtered.life.show(); filtered.page.category.value = '汤';
-  let html = await renderPage(filtered.page); assert.match(html, /这个分类还没有可点的菜/); assert.match(html, /查看全部菜谱/); assert.doesNotMatch(html, /还没有可点的已发布菜谱/);
+  let html = await renderPage(filtered.page); assert.match(html, /这个分类还没有可点的菜/); assert.match(html, /查看全部菜谱/); assert.doesNotMatch(html, /暂无可点菜品/);
   await renderPage(filtered.page, '查看全部菜谱'); assert.equal(filtered.page.visibleRecipes.value[0].id, recipe.id);
   for (const effectivePermissions of [{ recipes: 'VIEW', meals: 'VIEW' }, { recipes: 'VIEW' }, { meals: 'EDIT' }]) {
     let writes = 0;
     const denied = form({ listMeals: async () => [], createMeal: async () => writes++, addMealRecipe: async () => writes++ }, async () => ({ ...context, effectivePermissions }));
     await denied.life.show(); html = await renderPage(denied.page);
-    assert.match(html, /请.*管理员.*授权/); assert.doesNotMatch(html, /创建这顿餐点，开始点菜/); assert.doesNotMatch(html, /class="add[" ]/);
+    assert.match(html, /请.*管理员.*授权/); assert.doesNotMatch(html, /开始点菜/); assert.doesNotMatch(html, /class="add[" ]/);
     await denied.page.beginOrdering(); assert.equal(writes, 0);
   }
 });
@@ -147,7 +147,7 @@ test('Ordering an extra meal requires applying its name and sends that exact dat
   } });
   await life.show(); await page.chooseMealType('加餐'); page.slotInput.value = '下午茶';
   await page.beginOrdering(); assert.equal(writes.length, 0); assert.match(page.errorText.value, /查看这顿加餐/);
-  await page.changeSelection(page.date.value, '加餐'); await renderPage(page, '创建这顿餐点，开始点菜');
+  await page.changeSelection(page.date.value, '加餐'); await renderPage(page, '开始点菜');
   assert.deepEqual(writes, [{ scheduledAt: '2026-09-01T21:00:00+08:00', mealType: 'OTHER', slotKey: '下午茶' }]);
   assert.equal(page.meal.value.id, 'afternoon-tea'); assert.equal(page.slotKey.value, '下午茶');
 });
@@ -156,7 +156,7 @@ test('An existing locked meal is shown as locked instead of creating another mea
   let creates = 0, additions = 0;
   const { page, life } = form({ createMeal: async () => creates++, addMealRecipe: async () => additions++ });
   await life.show(); let html = await renderPage(page);
-  assert.match(html, /普通点菜已停止/); assert.match(html, /查看这顿餐点/); assert.doesNotMatch(html, /创建这顿餐点，开始点菜/); assert.doesNotMatch(html, /class="add[" ]/);
+  assert.match(html, /菜单已确认/); assert.match(html, /查看这顿餐点/); assert.doesNotMatch(html, /开始点菜/); assert.doesNotMatch(html, /class="add[" ]/);
   await renderPage(page, '查看这顿餐点'); assert.equal(page.active.value, 'menu');
   await page.beginOrdering(); await page.toggleRecipe(recipe.id);
   assert.equal(creates, 0); assert.equal(additions, 0); assert.equal(page.meal.value.status, 'CONFIRMED');
@@ -166,7 +166,7 @@ test('A read failure offers retry rather than claiming no published recipes or c
   let creates = 0;
   const { page, life } = form({ listRecipes: async () => { throw new ApiError('菜谱读取失败，请稍后重试', 502); }, createMeal: async () => creates++ });
   await life.show(); const html = await renderPage(page);
-  assert.match(html, /菜谱读取失败/); assert.match(html, /刷新/); assert.doesNotMatch(html, /还没有可点的已发布菜谱/); assert.doesNotMatch(html, /创建这顿餐点，开始点菜/);
+  assert.match(html, /菜谱读取失败/); assert.match(html, /刷新/); assert.doesNotMatch(html, /暂无可点菜品/); assert.doesNotMatch(html, /开始点菜/);
   await page.beginOrdering(); assert.equal(creates, 0); assert.equal(page.writing.value, false);
 });
 
@@ -417,10 +417,10 @@ test('P06 a dining viewer opens complete read-only recipe details with every ste
   const current = { ...recipe, ingredients: [{ ingredientId: 'egg', ingredient: { name: '鸡蛋' }, quantity: '2.125', unit: '个' }], seasonings: [{ name: '生抽' }], steps: ['先打散鸡蛋', '再倒入生抽', '最后翻炒装盘'] };
   const { page, life, routes } = form({ listRecipes: async () => [current], listMeals: async () => [] }, async () => viewer);
   await life.show(); page.openRecipeDetail(recipe.id, 'CURRENT');
-  assert.equal(page.recipeDetail.value.recipe.id, recipe.id); assert.equal(page.recipeDetail.value.sourceLabel, '当前菜谱 · 第3版');
+  assert.equal(page.recipeDetail.value.recipe.id, recipe.id); assert.equal(page.recipeDetail.value.sourceLabel, '当前菜谱');
   assert.deepEqual(Array.from(page.recipeDetail.value.recipe.steps), current.steps);
   const html = await renderPage(page);
-  assert.match(html, /当前菜谱 · 第3版/); assert.match(html, /鸡蛋/); assert.match(html, /2\.125/); assert.match(html, /生抽/);
+  assert.match(html, /当前菜谱/); assert.match(html, /鸡蛋/); assert.match(html, /2\.125/); assert.match(html, /生抽/);
   let previous = -1; for (const step of current.steps) { const index = html.indexOf(step); assert.ok(index > previous, step); previous = index; }
   assert.doesNotMatch(html, /编辑菜谱/); page.editRecipe(recipe.id); assert.equal(routes.length, 0);
 });
@@ -429,8 +429,8 @@ test('P06 confirmed meal details render frozen ordered steps instead of the curr
   const historical = { ...meal, menu: [{ ...meal.menu[0], recipe: { ...recipe, name: '当时的炒蛋', steps: ['旧做法第一步', '旧做法第二步'] } }] };
   const { page, life } = form({ listRecipes: async () => [{ ...recipe, name: '现在的炒蛋', steps: ['新版做法不应出现在历史详情'] }], listMeals: async () => [historical] });
   await life.show(); page.switchView('menu'); page.openRecipeDetail(recipe.id, 'MEAL');
-  assert.equal(page.recipeDetail.value.sourceLabel, '已确认菜单快照 · 第2版'); assert.equal(page.recipeDetail.value.recipe.name, '当时的炒蛋');
-  const html = await renderPage(page); assert.match(html, /已确认菜单快照 · 第2版/); assert.ok(html.indexOf('旧做法第一步') < html.indexOf('旧做法第二步')); assert.doesNotMatch(html, /新版做法不应出现在历史详情/);
+  assert.equal(page.recipeDetail.value.sourceLabel, '已确认菜单'); assert.equal(page.recipeDetail.value.recipe.name, '当时的炒蛋');
+  const html = await renderPage(page); assert.match(html, /已确认菜单/); assert.ok(html.indexOf('旧做法第一步') < html.indexOf('旧做法第二步')); assert.doesNotMatch(html, /新版做法不应出现在历史详情/);
 });
 
 test('P06 closing, leaving, switching identity or losing view permission cannot retain an open recipe detail', async () => {
@@ -441,7 +441,7 @@ test('P06 closing, leaving, switching identity or losing view permission cannot 
     if (change === 'identity') { setStored({ ...context, membershipId: 'other-member' }); page.openRecipeDetail(recipe.id, 'CURRENT'); }
     if (change === 'permission') { page.session.value = { ...context, effectivePermissions: { meals: 'EDIT' } }; page.openRecipeDetail(recipe.id, 'CURRENT'); }
     assert.equal(page.recipeDetail.value, undefined); assert.equal(page.detailTarget.value, undefined);
-    const html = await renderPage(page); assert.doesNotMatch(html, /当前菜谱 · 第3版/);
+    const html = await renderPage(page); assert.doesNotMatch(html, /当前菜谱/);
   }
 });
 

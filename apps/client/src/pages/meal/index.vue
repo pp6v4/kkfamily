@@ -20,6 +20,7 @@ const comparison = ref<IngredientComparison[]>([]), checkedShortages = ref<strin
 const category = ref('全部'), loading = ref(false), errorText = ref('');
 const mealLoaded = ref(false), comparisonError = ref('');
 const recipeCategories = ref<RecipeCategory[]>([]), categoryName = ref('');
+const managingCategories = ref(false);
 const categoryEditing = ref<RecipeCategory>(), categoryEditName = ref(''), categoryEditOrder = ref('');
 const session = ref<HouseholdContext>();
 const servings = ref<Record<string, string>>({});
@@ -35,16 +36,29 @@ const recipeDetail=computed(()=>{
     if(!canAccess(session.value,'recipes'))return undefined;
     const recipe=recipes.value.find(item=>item.id===target.recipeId);
     if(!recipe||recipe.status!=='PUBLISHED'&&!canAccess(session.value,'recipes','EDIT'))return undefined;
-    return{recipe,sourceLabel:`当前菜谱 · 第${recipe.version}版`,coverUrl:coverUrls.value[recipe.id]};
+    return{recipe,sourceLabel:'当前菜谱',coverUrl:coverUrls.value[recipe.id]};
   }
   if(!canAccess(session.value,'meals'))return undefined;
   const recipe=meal.value?.menu.find(item=>item.recipeId===target.recipeId)?.recipe;
   if(!recipe)return undefined;
-  return{recipe,sourceLabel:meal.value?.status==='DRAFT'?'当前待做菜单 · 随菜谱动态更新':`已确认菜单快照 · 第${meal.value?.snapshotVersion}版`,coverUrl:undefined};
+  return{recipe,sourceLabel:meal.value?.status==='DRAFT'?'本餐菜单':'已确认菜单',coverUrl:undefined};
 });
-const categories = computed(() => ['全部', ...recipeCategories.value.map(item => item.name)]);
+const categories = computed(() => {
+  const groups = recipeCategories.value.map(item => ({id:item.id,name:item.name}));
+  for(const recipe of recipes.value){
+    const group=recipe.category;
+    if(group&&!groups.some(item=>item.id===group.id))groups.push({id:group.id,name:group.name+'（停用）'});
+  }
+  if(recipes.value.some(recipe=>!recipe.category))groups.push({id:'未分类',name:'未分类'});
+  return [{id:'全部',name:'全部'},...groups];
+});
+function matchesCategory(recipe:Recipe) { return category.value==='全部'||(recipe.category?.id??'未分类')===category.value; }
 const publishedRecipes = computed(() => recipes.value.filter(r => r.status === 'PUBLISHED'));
-const visibleRecipes = computed(() => publishedRecipes.value.filter(r => category.value === '全部' || r.category?.name === category.value));
+const visibleRecipes = computed(() => publishedRecipes.value.filter(matchesCategory));
+const libraryRecipes = computed(() => recipes.value.filter(matchesCategory));
+function categoryRecipeCount(id:string) { return recipes.value.filter(recipe=>recipe.category?.id===id).length; }
+function chooseCategory(id:string) { if(busy.value)return; closeRecipeDetail();category.value=id;interactionEpoch++; }
+function toggleCategoryManager() { if(!ready('recipes','MANAGE'))return;cancelCategoryEdit();managingCategories.value=!managingCategories.value; }
 const canOrder = computed(() => canAccess(session.value,'meals','EDIT') && canAccess(session.value,'recipes'));
 const orderPermissionHint = computed(() => {
   if(!canAccess(session.value,'meals','EDIT'))return canAccess(session.value,'meals')?'当前仅可查看餐点；点菜和撤回需要餐点编辑权限，请联系管理员授权。':'尚未获得点餐权限，请联系管理员授权餐点编辑权限。';
@@ -54,7 +68,7 @@ const mealItems = computed(() => meal.value?.menu ?? []);
 const selectedRecipeIds = computed(() => new Set(mealItems.value.map(i => i.recipeId)));
 const ownRecipeIds = computed(() => new Set((meal.value?.items ?? []).filter(i => i.addedById === session.value?.membershipId).map(i => i.recipeId)));
 const statusLabels = { DRAFT: '大家点菜中', CONFIRMED: '菜单已确认', COOKING: '烹饪中', COMPLETED: '已完成', CANCELLED: '已取消' };
-const stockLabels: Record<string,string> = { SUFFICIENT:'充足', UNKNOWN:'待确认', PRESENT:'有', ABSENT:'无', NEEDS_CHECK:'请核实过期批次' };
+const stockLabels: Record<string,string> = { SUFFICIENT:'充足', UNKNOWN:'待确认', PRESENT:'家中有', ABSENT:'家中暂无', NEEDS_CHECK:'检查保质期' };
 function today() { return new Date(Date.now()+8*3600000).toISOString().slice(0,10); }
 function dayRange(day: string) { const from=day+'T00:00:00+08:00'; return {from,to:new Date(new Date(from).getTime()+86400000).toISOString()}; }
 function message(error: unknown) { return error instanceof Error ? error.message : '操作失败'; }
@@ -62,7 +76,7 @@ function formatQuantity(value: string | number | null) { return value === null ?
 const busy = computed(() => loading.value || writing.value);
 function sameIdentity(a?: HouseholdContext, b?: HouseholdContext) { return Boolean(a && b && a.householdId === b.householdId && a.membershipId === b.membershipId); }
 function clearMeal() { closeRecipeDetail(); meal.value = undefined; mealLoaded.value = false; comparisonError.value = ''; comparison.value = []; checkedShortages.value = []; servings.value = {}; history.value = []; reopenReason.value = ''; loadedSelection = ''; historyEpoch++; }
-function clearPrivate() { clearMeal(); recipes.value = []; recipeCategories.value = []; coverUrls.value = {}; session.value = undefined; category.value = '全部'; categoryName.value = ''; cancelCategoryEdit(); }
+function clearPrivate() { clearMeal(); recipes.value = []; recipeCategories.value = []; coverUrls.value = {}; session.value = undefined; category.value = '全部'; categoryName.value = ''; managingCategories.value=false;cancelCategoryEdit(); }
 function alive(token: number) { return !disposed && pageVisible.value && token === viewEpoch; }
 function current(token: number, identity?: HouseholdContext) {
   if (!alive(token)) return false;
@@ -218,13 +232,13 @@ async function saveCategoryEdit() {
   const current=categoryEditing.value;if(!current||!ready('recipes','MANAGE'))return;
   const name=categoryEditName.value.trim(),sortOrder=Number(categoryEditOrder.value);
   if(!name){fail(new Error('请输入分类名称'));return;}if(!/^\d+$/.test(categoryEditOrder.value.trim())||!Number.isInteger(sortOrder)||sortOrder<0||sortOrder>999){fail(new Error('排序请输入0到999的整数'));return;}
-  await runWrite(capture(), () => updateRecipeCategory(current, {name,sortOrder}), updated => { recipeCategories.value=recipeCategories.value.map(item=>item.id===updated.id?updated:item).sort((a,b)=>a.sortOrder-b.sortOrder||a.name.localeCompare(b.name,'zh-CN'));cancelCategoryEdit();uni.showToast({title:'分类已更新',icon:'success'}); });
+  await runWrite(capture(), () => updateRecipeCategory(current, {name,sortOrder}), updated => { recipeCategories.value=recipeCategories.value.map(item=>item.id===updated.id?updated:item).sort((a,b)=>a.sortOrder-b.sortOrder||a.name.localeCompare(b.name,'zh-CN'));recipes.value=recipes.value.map(recipe=>recipe.category?.id===updated.id?{...recipe,category:updated}:recipe);cancelCategoryEdit();uni.showToast({title:'分类已更新',icon:'success'}); });
 }
 async function applyCategoryArchive(item:RecipeCategory) {
   if(!ready('recipes','MANAGE'))return;
-  await runWrite(capture(), () => archiveRecipeCategory(item), () => { recipeCategories.value=recipeCategories.value.filter(group=>group.id!==item.id);if(category.value===item.name)category.value='全部';if(categoryEditing.value?.id===item.id)cancelCategoryEdit();uni.showToast({title:'分类已归档',icon:'none'}); });
+  await runWrite(capture(), () => archiveRecipeCategory(item), () => { recipeCategories.value=recipeCategories.value.filter(group=>group.id!==item.id);if(category.value===item.id&&!recipes.value.some(recipe=>recipe.category?.id===item.id))category.value='全部';if(categoryEditing.value?.id===item.id)cancelCategoryEdit();uni.showToast({title:'分类已停用',icon:'none'}); });
 }
-function confirmCategoryArchive(item:RecipeCategory) { if(!ready('recipes','MANAGE'))return;const scope=capture();uni.showModal({title:'归档这个分类？',content:'分类会从新菜谱选项中隐藏；已有菜谱仍保留原分类名称。',success:async result=>{if(result.confirm&&valid(scope))await applyCategoryArchive(item);}}); }
+function confirmCategoryArchive(item:RecipeCategory) { if(!ready('recipes','MANAGE'))return;const scope=capture();uni.showModal({title:'停用这个分类？',content:`停用“${item.name}”后，新菜谱将不能选择此分类，已有菜谱仍会保留。`,success:async result=>{if(result.confirm&&valid(scope))await applyCategoryArchive(item);}}); }
 async function applyRecipeStatus(recipe:Recipe,status:Recipe['status']) {
   if(!ready('recipes','EDIT'))return;
   await runWrite(capture(), () => updateRecipeStatus(recipe,status), updated => { recipes.value=recipes.value.map(item=>item.id===updated.id?updated:item);uni.showToast({title:status==='PUBLISHED'?'菜谱已发布':status==='ARCHIVED'?'菜谱已下架':'已恢复为草稿',icon:'none'}); });
@@ -244,7 +258,7 @@ function confirmRemoveDish(recipeId:string) {
   const target=meal.value,dish=mealItems.value.find(item=>item.recipeId===recipeId);
   if(!target||target.status!=='DRAFT'||!dish||!ready('meals','MANAGE'))return;
   const scope=capture();
-  uni.showModal({title:'移除本餐这道菜？',content:`将移除所有人对“${dish.recipe.name}”的本餐选择；已确认的旧快照和本次变更记录会保留。`,success:async result=>{
+  uni.showModal({title:'移除本餐这道菜？',content:`将移除所有人对“${dish.recipe.name}”的本餐选择。`,success:async result=>{
     if(!result.confirm||!valid(scope)||!ready('meals','MANAGE')||meal.value?.status!=='DRAFT')return;
     await runWrite(scope,()=>removeMealDish(target,recipeId),()=>loadMealFromDatabase(true));
   }});
@@ -255,7 +269,7 @@ function confirmAction(action:'confirm'|'reopen'|'start'|'cancel') {
   if(action==='reopen'&&!reopenReason.value.trim()){fail(new Error('请填写重新打开餐单的原因'));return;}
   const titles={confirm:'确认本餐菜单',reopen:'重新打开菜单',start:'开始烹饪',cancel:'取消这顿餐点'};
   const scope=capture(), reason=reopenReason.value.trim()||undefined;
-  uni.showModal({title:titles[action],content:action==='confirm'?'按已保存份数锁定菜名和用料快照；普通点菜将停止。':action==='reopen'?'旧快照保留。重新确认时生成新版菜单，并记录原因。':'确认执行此操作？',success:async result=>{
+  uni.showModal({title:titles[action],content:action==='confirm'?'确认后将按当前份数准备，点菜暂时结束。':action==='reopen'?'重新开放点菜并调整本餐菜单？':'确认执行此操作？',success:async result=>{
     if(!result.confirm||!valid(scope)||!ready('meals','MANAGE'))return;
     await runWrite(scope, () => transitionMeal(current,action,reason), () => loadMealFromDatabase(true));
   }});
@@ -265,12 +279,12 @@ async function confirmShopping() {
   if(!ready('shopping','EDIT')||!canAccess(session.value,'inventory')||!canAccess(session.value,'meals')||!meal.value||!['CONFIRMED','COOKING'].includes(meal.value.status))return;
   const target=meal.value, keys=[...checkedShortages.value];
   if(!keys.length||keys.some(key=>!comparison.value.some(row=>row.key===key&&row.status==='SHORTAGE'))){fail(new Error('请重新勾选当前餐点要购买的缺料'));return;}
-  await runWrite(capture(), () => importMealShortages(target,keys), () => { uni.showToast({title:'已加入清单，重复提交不会加倍',icon:'none'}); });
+  await runWrite(capture(), () => importMealShortages(target,keys), () => { uni.showToast({title:'已加入购物清单',icon:'none'}); });
 }
 function finishCooking(){
   const current=meal.value;if(!current||!ready('meals','MANAGE')||!['CONFIRMED','COOKING'].includes(current.status))return;
   const scope=capture();
-  uni.showModal({title:'完成这顿饭',content:'只记录餐点已完成，不会自动减少任何库存。库存仍由家人按需要手工核实。',success:async result=>{
+  uni.showModal({title:'完成这顿饭',content:'将本餐标记为已完成？',success:async result=>{
     if(!result.confirm||!valid(scope)||!ready('meals','MANAGE'))return;
     await runWrite(scope, () => completeMeal(current), async () => {uni.showToast({title:'餐点已完成',icon:'success'});await loadMealFromDatabase(true);});
   }});
@@ -287,60 +301,63 @@ onUnload(()=>{disposed=true;hide();resume=undefined;});
     <view class="tabs"><view class="tab" :class="{selected:active==='order'}" @tap="switchView('order')">去点餐</view><view class="tab" :class="{selected:active==='recipes'}" @tap="switchView('recipes')">菜谱</view><view class="tab" :class="{selected:active==='menu'}" @tap="switchView('menu')">待做菜单</view></view>
     <view v-if="errorText" class="error">{{errorText}}<text class="small-action" @tap="loadPage">刷新</text></view>
     <view v-if="comparisonError" class="error">{{comparisonError}}<text class="small-action" @tap="loadPage">刷新库存对照</text></view>
-    <view v-if="busy" class="hint">{{ writing ? '正在保存本次操作…' : '正在同步家里的数据…' }}</view>
+    <view v-if="busy" class="hint">{{ writing ? '保存中…' : '加载中…' }}</view>
     <view v-if="active!=='recipes'" class="picker-row"><picker mode="date" :disabled="writing" :value="date" @change="changeDate"><text class="field-value">{{date}} ›</text></picker><view class="meal-types"><text v-for="item in mealTypes" :key="item" class="meal-type" :class="{chosen:mealType===item}" @tap="chooseMealType(item)">{{item}}</text></view></view>
     <view v-if="active!=='recipes' && mealType==='加餐'" class="form-box"><input v-model="slotInput" :disabled="busy" class="entry" placeholder="加餐名称，可留空；如下午茶" /><button :disabled="writing" @tap="changeSelection(date,mealType)">查看这顿加餐</button><text v-if="slotInput.trim()!==slotKey" class="material">名称尚未应用，请先查看这顿加餐。</text></view>
     <view v-if="active==='order'">
       <view v-if="!loading && !errorText" class="ordering-guide">
         <text class="block-title plain-title">为 {{date}} {{mealType}} {{slotKey}} 点菜</text>
         <text v-if="orderPermissionHint" class="material">{{orderPermissionHint}}</text>
-        <template v-else-if="meal && meal.status!=='DRAFT'"><text class="material">{{statusLabels[meal.status]}}，普通点菜已停止；请查看本餐菜单。</text><button class="order-start" :disabled="busy" @tap="switchView('menu')">查看这顿餐点</button></template>
-        <template v-else><text class="material">{{meal?'点击“点这道菜”加入本餐；选错后可撤回自己的选择。':'先创建这顿餐点，再选择下面想吃的菜，家人的选择会汇总到同一张菜单。'}}</text><button v-if="!meal" class="order-start" :disabled="busy" @tap="beginOrdering">创建这顿餐点，开始点菜</button><text v-else class="material">大家点菜中 · 本餐已选 {{mealItems.length}} 道</text></template>
+        <template v-else-if="meal && meal.status!=='DRAFT'"><text class="material">{{statusLabels[meal.status]}}</text><button class="order-start" :disabled="busy" @tap="switchView('menu')">查看这顿餐点</button></template>
+        <template v-else><button v-if="!meal" class="order-start" :disabled="busy" @tap="beginOrdering">开始点菜</button><text v-else class="material">本餐已选 {{mealItems.length}} 道</text></template>
       </view>
-      <scroll-view v-if="publishedRecipes.length" class="categories" scroll-x><text v-for="item in categories" :key="item" class="category" :class="{chosen:category===item}" @tap="category=item">{{item}}</text></scroll-view>
+      <scroll-view v-if="publishedRecipes.length" class="categories" scroll-x><text v-for="item in categories" :key="item.id" class="category" :class="{chosen:category===item.id}" @tap="chooseCategory(item.id)">{{item.name}}</text></scroll-view>
       <view v-if="!loading && !errorText && canAccess(session,'recipes') && !publishedRecipes.length" class="ordering-guide">
-        <text class="block-title plain-title">还没有可点的已发布菜谱</text>
-        <template v-if="canAccess(session,'recipes','EDIT')"><text class="material">草稿不会出现在点菜列表。请先补齐食材、做法和成品图并发布，再回来点击“点这道菜”加入本餐。图片上传或发布失败时，请按错误提示处理后重试。</text><button class="order-start secondary-order" :disabled="busy" @tap="switchView('recipes')">去准备并发布菜谱</button></template>
-        <text v-else class="material">请联系厨师添加并发布菜谱；发布后可在这里为所选餐次点菜。</text>
+        <text class="block-title plain-title">暂无可点菜品</text>
+        <template v-if="canAccess(session,'recipes','EDIT')"><text class="material">发布菜谱后即可点菜。</text><button class="order-start secondary-order" :disabled="busy" @tap="switchView('recipes')">管理菜谱</button></template>
+        <text v-else class="material">请联系厨师添加菜品。</text>
       </view>
       <view v-else-if="!loading && !errorText && publishedRecipes.length && !visibleRecipes.length" class="ordering-guide"><text class="material">这个分类还没有可点的菜。</text><button class="order-start secondary-order" :disabled="busy" @tap="category='全部'">查看全部菜谱</button></view>
       <view v-for="recipe in visibleRecipes" :key="recipe.id" class="recipe-card"><image v-if="coverUrls[recipe.id]" class="recipe-cover" :src="coverUrls[recipe.id]" mode="aspectFill" /><view v-else class="recipe-icon">🍽️</view><view class="recipe-info" @tap="openRecipeDetail(recipe.id,'CURRENT')"><text class="recipe-name">{{recipe.name}}</text><text v-for="i in recipe.ingredients" :key="i.ingredientId" class="material">{{i.ingredient.name}} {{formatQuantity(i.quantity)}} {{i.unit}}</text><text class="material">调料：{{recipe.seasonings.map(s=>s.name).join('、')||'无'}}</text><text class="detail-link">查看用料与做法 ›</text></view><button v-if="canOrder && (!meal || meal.status==='DRAFT')" :disabled="busy || !mealLoaded" class="add" :class="{added:selectedRecipeIds.has(recipe.id)}" @tap.stop="toggleRecipe(recipe.id)">{{ownRecipeIds.has(recipe.id)?'撤回我的选择':selectedRecipeIds.has(recipe.id)?'我也想吃':'点这道菜'}}</button></view>
       <view v-if="canAccess(session,'meals')" class="primary" @tap="switchView('menu')">查看待做菜单（{{mealItems.length}}道）</view>
     </view>
     <view v-else-if="active==='recipes'">
-      <view v-if="canOrder" class="ordering-guide"><text class="material">当前选中 {{date}} {{mealType}} {{slotKey}}；发布菜谱后，回到点菜页将菜加入本餐。</text><button class="order-start" :disabled="busy || !mealLoaded" @tap="beginOrdering">{{meal && meal.status!=='DRAFT'?'查看所选餐次菜单':'为所选餐次点菜'}}</button></view>
+      <view v-if="canOrder" class="ordering-guide"><text class="material">{{date}} {{mealType}} {{slotKey}}</text><button class="order-start" :disabled="busy || !mealLoaded" @tap="beginOrdering">{{meal && meal.status!=='DRAFT'?'查看所选餐次菜单':'为所选餐次点菜'}}</button></view>
       <view v-if="canAccess(session,'recipes','EDIT')" class="primary" @tap="addRecipe">＋ 添加菜谱</view>
-      <view v-if="canAccess(session,'recipes','MANAGE')" class="form-box">
+      <view v-if="canAccess(session,'recipes','MANAGE')" class="category-toolbar"><text class="small-action" @tap="toggleCategoryManager">{{managingCategories?'收起分类管理':'管理分类'}}</text></view>
+      <view v-if="canAccess(session,'recipes','MANAGE') && managingCategories" class="form-box">
         <text class="block-title plain-title">菜谱分类</text>
-        <view class="inline-form"><input v-model="categoryName" :disabled="busy" maxlength="30" class="entry category-entry" placeholder="如主食、炒菜、海鲜" /><text class="small-action" @tap="saveCategory">添加分类</text></view>
-        <view v-for="item in recipeCategories" :key="item.id" class="category-manage-row"><view><text>{{item.name}}</text><text class="material">排序 {{item.sortOrder}} · 第{{item.version}}版</text></view><view><text class="small-action" @tap="startCategoryEdit(item)">编辑</text><text class="archive-link" @tap="confirmCategoryArchive(item)">归档</text></view></view>
-        <view v-if="categoryEditing" class="category-editor"><input v-model="categoryEditName" :disabled="busy" maxlength="30" class="entry" placeholder="分类名称" /><input v-model="categoryEditOrder" :disabled="busy" type="number" class="entry order-entry" placeholder="排序0-999" /><view class="inline-form"><text class="small-action" @tap="saveCategoryEdit">保存修改</text><text class="archive-link" @tap="!busy&&cancelCategoryEdit()">取消</text></view></view>
+        <text class="field-label">新分类名称</text><view class="inline-form"><input v-model="categoryName" :disabled="busy" maxlength="30" class="entry category-entry" placeholder="例如：主食、炒菜、海鲜" /><text class="small-action" @tap="saveCategory">添加分类</text></view>
+        <view v-for="item in recipeCategories" :key="item.id" class="category-manage-row"><view><text>{{item.name}}</text><text class="material">{{categoryRecipeCount(item.id)}} 道菜谱</text></view><view><text class="small-action" @tap="startCategoryEdit(item)">改名</text><text class="archive-link" @tap="confirmCategoryArchive(item)">停用</text></view></view>
+        <view v-if="categoryEditing" class="category-editor"><text class="field-label">分类名称</text><input v-model="categoryEditName" :disabled="busy" maxlength="30" class="entry" placeholder="请输入新的分类名称" /><view class="inline-form"><text class="small-action" @tap="saveCategoryEdit">保存修改</text><text class="archive-link" @tap="!busy&&cancelCategoryEdit()">取消</text></view></view>
       </view>
-      <view v-for="recipe in recipes" :key="recipe.id" class="recipe-card"><view class="recipe-info" @tap="openRecipeDetail(recipe.id,'CURRENT')"><text class="recipe-name">{{recipe.name}}</text><text class="recipe-meta">{{recipe.category?.name||'未分类'}} · {{recipe.ingredients.length}}种食材 · {{recipe.seasonings.length}}种调料 · 第{{recipe.version}}版</text><text class="detail-link">查看用料与做法 ›</text></view><text v-if="canAccess(session,'recipes','EDIT')" class="small-action" @tap="editRecipe(recipe.id)">编辑菜谱</text><text v-if="recipe.status==='DRAFT' && canAccess(session,'recipes','EDIT')" class="publish" @tap="changeRecipeStatus(recipe,'PUBLISHED')">发布</text><text v-else-if="recipe.status==='PUBLISHED' && canAccess(session,'recipes','EDIT')" class="archive-action" @tap="changeRecipeStatus(recipe,'ARCHIVED')">下架</text><text v-else-if="recipe.status==='ARCHIVED' && canAccess(session,'recipes','EDIT')" class="restore-action" @tap="changeRecipeStatus(recipe,'DRAFT')">恢复草稿</text><text v-else class="status">{{recipe.status==='PUBLISHED'?'已发布':'已归档'}}</text></view>
+      <scroll-view v-if="recipes.length || recipeCategories.length" class="categories" scroll-x><text v-for="item in categories" :key="item.id" class="category" :class="{chosen:category===item.id}" @tap="chooseCategory(item.id)">{{item.name}}</text></scroll-view>
+      <view v-if="!loading && !errorText && !libraryRecipes.length" class="empty">{{category==='全部'?'还没有菜谱':'这个分类还没有菜谱'}}</view>
+      <view v-for="recipe in libraryRecipes" :key="recipe.id" class="recipe-card"><view class="recipe-info" @tap="openRecipeDetail(recipe.id,'CURRENT')"><text class="recipe-name">{{recipe.name}}</text><text class="recipe-meta">{{recipe.category?.name||'未分类'}} · {{recipe.status==='DRAFT'?'草稿':recipe.status==='PUBLISHED'?'已发布':'已下架'}}</text><text class="detail-link">查看用料与做法 ›</text></view><text v-if="canAccess(session,'recipes','EDIT')" class="small-action" @tap="editRecipe(recipe.id)">编辑菜谱</text><text v-if="recipe.status==='DRAFT' && canAccess(session,'recipes','EDIT')" class="publish" @tap="changeRecipeStatus(recipe,'PUBLISHED')">发布</text><text v-else-if="recipe.status==='PUBLISHED' && canAccess(session,'recipes','EDIT')" class="archive-action" @tap="changeRecipeStatus(recipe,'ARCHIVED')">下架</text><text v-else-if="recipe.status==='ARCHIVED' && canAccess(session,'recipes','EDIT')" class="restore-action" @tap="changeRecipeStatus(recipe,'DRAFT')">恢复草稿</text><text v-else class="status">{{recipe.status==='PUBLISHED'?'已发布':recipe.status==='DRAFT'?'草稿':'已下架'}}</text></view>
     </view>
     <view v-else>
       <view v-if="!loading && !canAccess(session,'meals')" class="empty">尚未获得餐点查看权限</view>
       <template v-if="canAccess(session,'meals')">
       <view class="meal-summary"><text>{{date}} {{mealType}} {{slotKey}}</text><text>{{meal?statusLabels[meal.status]:mealLoaded?'尚未点菜':'餐点信息未加载'}}</text></view>
-      <view v-if="meal?.legacyWithoutSnapshot" class="hint">这是旧版餐单，没有历史快照；不将当前菜谱当作当时用料。</view>
+      <view v-if="meal?.legacyWithoutSnapshot" class="hint">此餐点的历史用料暂不可用。</view>
       <view v-if="!mealItems.length && !meal?.legacyWithoutSnapshot" class="empty">还没有选择菜品</view>
-      <button v-if="!loading && !errorText && canOrder && (!meal || meal.status==='DRAFT')" class="order-start" :disabled="busy" @tap="beginOrdering">{{meal?'继续为这顿饭点菜':'创建这顿餐点，开始点菜'}}</button>
+      <button v-if="!loading && !errorText && canOrder && (!meal || meal.status==='DRAFT')" class="order-start" :disabled="busy" @tap="beginOrdering">{{meal?'继续为这顿饭点菜':'开始点菜'}}</button>
       <text v-if="!loading && orderPermissionHint && (!meal || meal.status==='DRAFT')" class="material">{{orderPermissionHint}}</text>
       <view v-for="item in mealItems" :key="item.recipeId" class="menu-item"><view class="menu-line"><text @tap="openRecipeDetail(item.recipeId,'MEAL')">{{item.recipe.name}} · 查看做法 ›</text><text class="person">做{{Number(item.cookMultiplier)}}份</text></view><text class="material">想吃的人：{{item.wantedBy.map(w=>w.nickname||'家人').join('、')}}（{{item.wantedBy.length}}人）</text><text class="material">{{item.recipe.ingredients.map(i=>i.ingredient.name+' '+formatQuantity(i.quantity)+' '+i.unit).join('、')}}</text>
         <button v-if="meal?.status==='DRAFT' && canAccess(session,'meals','EDIT') && ownRecipeIds.has(item.recipeId)" class="order-start secondary-order" :disabled="busy" @tap="toggleRecipe(item.recipeId)">撤回我的选择</button>
         <view v-if="meal?.status==='DRAFT' && canAccess(session,'meals','MANAGE')" class="menu-line"><input v-model="servings[item.recipeId]" :disabled="busy" type="digit" class="entry servings" placeholder="实际份数" /><text class="small-action" @tap="saveServings(item.recipeId)">保存份数</text><text class="archive-link" @tap="confirmRemoveDish(item.recipeId)">移除本餐这道菜</text></view>
       </view>
-      <view v-if="mealItems.length && !canAccess(session,'inventory')" class="hint">用料可见，家庭库存只向获授权成员展示。</view>
-      <view v-if="comparison.length" class="ingredients"><text class="block-title">全部食材、调料与库存对照</text><view v-for="item in comparison" :key="item.key" class="ingredient-row" :class="item.status.toLowerCase()" @tap="toggleShortage(item)"><text v-if="item.status==='SHORTAGE'" class="check">{{checkedShortages.includes(item.key)?'✓':''}}</text><view class="ingredient-name"><text>{{item.name}}</text><text v-if="item.kind==='FOOD'" class="amount-text">需要{{formatQuantity(item.required)}} {{item.unit}} · 库存{{formatQuantity(item.onHand)}} {{item.unit}}</text><text class="material">{{item.reason}}</text></view><text class="stock-status">{{item.status==='SHORTAGE'?'缺 '+formatQuantity(item.shortage)+' '+item.unit:stockLabels[item.status]}}</text></view></view>
-      <view v-if="meal?.status==='DRAFT' && comparison.length" class="hint">当前是动态预估；确认菜单后才可按快照导入缺料。</view>
+      <view v-if="mealItems.length && !canAccess(session,'inventory')" class="hint">暂无库存查看权限。</view>
+      <view v-if="comparison.length" class="ingredients"><text class="block-title">备菜清单</text><view v-for="item in comparison" :key="item.key" class="ingredient-row" :class="item.status.toLowerCase()" @tap="toggleShortage(item)"><text v-if="item.status==='SHORTAGE'" class="check">{{checkedShortages.includes(item.key)?'✓':''}}</text><view class="ingredient-name"><text>{{item.name}}</text><text v-if="item.kind==='FOOD'" class="amount-text">需要{{formatQuantity(item.required)}} {{item.unit}} · 库存{{formatQuantity(item.onHand)}} {{item.unit}}</text></view><text class="stock-status">{{item.status==='SHORTAGE'?'缺 '+formatQuantity(item.shortage)+' '+item.unit:stockLabels[item.status]}}</text></view></view>
+      <view v-if="meal?.status==='DRAFT' && comparison.length" class="hint">确认菜单后可添加购物清单。</view>
       <view v-if="meal && ['CONFIRMED','COOKING'].includes(meal.status) && canAccess(session,'shopping','EDIT') && comparison.some(i=>i.status==='SHORTAGE')" class="primary" @tap="confirmShopping">把勾选缺料加入购物清单</view>
       <view v-if="meal && canAccess(session,'meals','MANAGE')">
-        <view v-if="meal.status==='DRAFT' && mealItems.length" class="primary" @tap="confirmAction('confirm')">确认已保存的份数和菜单</view>
-        <view v-if="meal.status==='CONFIRMED'" class="form-box"><view class="primary" @tap="confirmAction('start')">开始烹饪</view><input v-model="reopenReason" :disabled="busy" maxlength="300" class="entry" placeholder="改单原因" /><view class="secondary" @tap="confirmAction('reopen')">重新打开并保留旧快照</view></view>
-        <view v-if="['CONFIRMED','COOKING'].includes(meal.status)" class="secondary" @tap="finishCooking">完成用餐（库存不自动变化）</view>
+        <view v-if="meal.status==='DRAFT' && mealItems.length" class="primary" @tap="confirmAction('confirm')">确认菜单</view>
+        <view v-if="meal.status==='CONFIRMED'" class="form-box"><view class="primary" @tap="confirmAction('start')">开始烹饪</view><text class="field-label">调整原因</text><input v-model="reopenReason" :disabled="busy" maxlength="300" class="entry" placeholder="请输入本次调整的原因" /><view class="secondary" @tap="confirmAction('reopen')">调整菜单</view></view>
+        <view v-if="['CONFIRMED','COOKING'].includes(meal.status)" class="secondary" @tap="finishCooking">完成用餐</view>
         <view v-if="!['COMPLETED','CANCELLED'].includes(meal.status)" class="small-action" @tap="confirmAction('cancel')">取消这顿餐点</view>
       </view>
-      <view v-if="meal?.snapshotVersion" class="secondary" @tap="showHistory">查看历史菜单快照（{{meal.snapshotVersion}}版）</view><view v-for="entry in history" :key="entry.version" class="form-box"><text>版本{{entry.version}} · {{entry.createdAt}}</text><view v-for="dish in entry.data.dishes" :key="dish.recipeId" class="history-row"><text>{{dish.recipe.name}} × {{Number(dish.cookMultiplier)}}份</text><text class="material">{{dish.recipe.ingredients.map(i=>i.ingredient.name+' '+formatQuantity(i.quantity)+' '+i.unit).join('、')}}</text><text class="material">调料：{{dish.recipe.seasonings.map(s=>s.name).join('、')}}</text></view></view>
+      <view v-if="meal?.snapshotVersion" class="secondary" @tap="showHistory">查看历史菜单</view><view v-for="entry in history" :key="entry.version" class="form-box"><text>{{entry.createdAt}}</text><view v-for="dish in entry.data.dishes" :key="dish.recipeId" class="history-row"><text>{{dish.recipe.name}} × {{Number(dish.cookMultiplier)}}份</text><text class="material">{{dish.recipe.ingredients.map(i=>i.ingredient.name+' '+formatQuantity(i.quantity)+' '+i.unit).join('、')}}</text><text class="material">调料：{{dish.recipe.seasonings.map(s=>s.name).join('、')}}</text></view></view>
       </template>
     </view>
     <view v-if="recipeDetail" class="recipe-detail-mask" @tap="closeRecipeDetail">

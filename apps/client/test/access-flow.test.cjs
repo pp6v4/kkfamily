@@ -21,6 +21,7 @@ function evaluate(source, dependencies, uni) {
   return module.exports;
 }
 function loadPage(relative, dependencies, uni, props = {}, emitted = []) {
+  if(relative==='src/pages/recipe-editor/index.vue')dependencies={'../../services/recipe-draft':loadTs('src/services/recipe-draft.ts',{},uni),...dependencies};
   if(relative==='src/pages/tasks/index.vue')dependencies={'../../services/trip-form':tripForm,...dependencies};
   if(relative==='src/pages/join/index.vue')dependencies={...dependencies,'../../services/transport':{ApiError},'../../services/session':{getSessionEpoch:()=>0,...dependencies['../../services/session']}};
   const filename=path.join(ROOT,relative), {descriptor}=parse(fs.readFileSync(filename,'utf8'),{filename});
@@ -1124,7 +1125,7 @@ test('Recipe editor preserves an archived historical category unless the user ex
     '../../services/session':{canAccess:allowed,getStoredSession:()=>context,refreshAccess:async()=>context},
     '../../services/transport':{ApiError},
     '../../services/family-api':{listRecipeCategories:async()=>[],getRecipe:async()=>recipe,updateRecipe:async(id,input)=>{updates.push({id,input});return{...recipe,...input,version:input.expectedVersion+1};}}},uni);
-  life.load({id:recipe.id});await life.show();assert.match(page.categoryName.value,/旧分类.*已归档/);page.name.value='旧菜新做法';await page.persist(false);
+  life.load({id:recipe.id});await life.show();assert.match(page.categoryName.value,/旧分类.*已停用/);page.name.value='旧菜新做法';await page.persist(false);
   assert.equal(Object.prototype.hasOwnProperty.call(updates[0].input,'categoryId'),false);assert.equal(page.originalCategoryId.value,'category-old');
   page.categoryIndex.value=0;await page.persist(false);assert.equal(updates[1].input.categoryId,null);assert.equal(page.originalCategoryId.value,null);
 });
