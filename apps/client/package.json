@@ -1,6 +1,6 @@
 {
   "name": "@family-life/client",
-  "version": "0.1.3",
+  "version": "0.1.4",
   "private": true,
   "scripts": {
     "dev:mp-weixin": "uni -p mp-weixin",
