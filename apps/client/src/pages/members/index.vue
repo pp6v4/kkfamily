@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue';
+import { computed, nextTick, ref } from 'vue';
 import { onHide, onShow, onUnload } from '@dcloudio/uni-app';
 import { canAccess, getStoredSession, refreshAccess, type HouseholdContext } from '../../services/session';
 import { ApiError } from '../../services/transport';
@@ -21,6 +21,8 @@ const preview = computed(() => {
   for (const entry of overrides.value) if(entry.effect==='DENY')delete result[entry.module];
   return result;
 });
+function permissionLabel(value:string){return ({VIEW:'只读',EDIT:'编辑',MANAGE:'管理'} as Record<string,string>)[value]||'无访问权';}
+function localTime(value:string){const date=new Date(new Date(value).getTime()+8*60*60*1000);return Number.isNaN(date.getTime())?'时间待确认':date.toISOString().slice(0,16).replace('T',' ')+'（北京时间）';}
 function message(e:unknown){return e instanceof Error?e.message:'请求失败';}
 function identity(value?:HouseholdContext){return value?value.householdId+':'+value.membershipId:'';}
 function clearEditor(){++editEpoch;selected.value=undefined;roles.value=[];overrides.value=[];}
@@ -73,6 +75,7 @@ function findMember(member:Member){return members.value.find(row=>row.id===membe
 function edit(member:Member){
   if(!ready())return;const row=findMember(member);if(!row)return;
   clearEditor();++confirmationEpoch;selected.value={...row};roles.value=[...row.roles];overrides.value=row.overrides.map(value=>({...value}));error.value='';
+  void nextTick(() => { uni.pageScrollTo?.({selector:'#member-editor',duration:200}); });
 }
 function toggleRole(code:string){
   if(!ready()||!selected.value||!(code in roleLabels))return;
@@ -142,16 +145,17 @@ function leave(){pageVisible.value=false;++epoch;++confirmationEpoch;clearPrivat
 onShow(()=>{if(disposed)return;pageVisible.value=true;return load();});onHide(leave);onUnload(()=>{disposed=true;leave();});
 </script>
 <template>
-  <view class="page"><text class="title">家人和权限</text><text class="hint">一个账号可以有多个角色。禁止规则优先；行程还需单独加入才能查看。</text>
+  <view class="page"><text class="title">家人和权限</text><text class="hint">管理家人的角色与访问权限。</text>
     <text v-if="busy" class="hint">{{writing?'正在保存并核实权限…':paging?'正在加载更多成员…':'正在核实权限和成员…'}}</text>
     <view v-if="error" class="error">{{ error }}</view><view v-if="notice" class="notice">{{ notice }}</view><button size="mini" :disabled="busy" @tap="load">刷新成员</button>
     <view v-if="manager" class="card"><text class="heading">邀请来我们家</text><view class="row"><button :disabled="busy||reloadRequired" @tap="invite('family')">邀请家人</button><button :disabled="busy||reloadRequired" @tap="invite('dining')">只来点菜</button><button :disabled="busy||reloadRequired" @tap="invite('camping')">一起露营</button></view><text class="hint">露营邀请只授予模块权限，尚需行程管理者把成员加入指定行程。</text><view v-if="newCode" class="code"><text selectable>{{ newCode }}</text><button size="mini" @tap="copyCode">复制邀请码</button></view></view>
-    <view v-for="(member,index) in members" :key="member.id" class="card"><text class="heading">{{ member.user.nickname || `家庭成员 ${index+1}` }}{{ member.id===session?.membershipId?'（我）':'' }}</text><view v-if="manager"><text class="hint">{{ member.roles.map(r=>roleLabels[r]||r).join('、') || '无角色' }} · {{ member.status }}</text><view class="row"><button :disabled="busy||reloadRequired" @tap="edit(member)">编辑角色与权限</button><button :disabled="busy||reloadRequired" @tap="confirmChange(member)">{{member.status==='ACTIVE'?'停用':'启用'}}</button><button v-if="session?.roles.includes('ADMIN') && member.id!==session.membershipId && member.status==='ACTIVE'" :disabled="busy||reloadRequired" @tap="confirmChange(member,true)">转让管理员</button></view></view></view>
+    <view v-for="(member,index) in members" :key="member.id" class="card"><text class="heading">{{ member.user.nickname || `家庭成员 ${index+1}` }}{{ member.id===session?.membershipId?'（我）':'' }}</text><view v-if="manager"><text class="hint">{{ member.roles.map(r=>roleLabels[r]||r).join('、') || '无角色' }} · {{member.status==='ACTIVE'?'正常':'已停用'}}</text><view class="row"><button :disabled="busy||reloadRequired" @tap="edit(member)">编辑角色与权限</button><button :disabled="busy||reloadRequired" @tap="confirmChange(member)">{{member.status==='ACTIVE'?'停用':'启用'}}</button><button v-if="session?.roles.includes('ADMIN') && member.id!==session.membershipId && member.status==='ACTIVE'" :disabled="busy||reloadRequired" @tap="confirmChange(member,true)">转让管理员</button></view></view></view>
     <button v-if="nextCursor" :disabled="busy||reloadRequired" @tap="more">更多成员</button>
-    <view v-if="selected && manager" class="card"><text class="heading">编辑角色和权限</text><view class="row"><button :disabled="busy||reloadRequired||(code==='ADMIN'&&!session?.roles.includes('ADMIN'))" v-for="(label,code) in roleLabels" :key="code" :class="{chosen:roles.includes(code)}" @tap="toggleRole(code)">{{roles.includes(code)?'✓ ':''}}{{label}}</button></view><view v-for="[module,label] in modules" :key="module" class="permission"><text>{{label}}</text><picker :disabled="busy||reloadRequired" :range="choices" :value="permissionIndex(module)" @change="permissionChange(module,$event)"><text>{{choices[permissionIndex(module)]}} ›</text></picker><text class="hint">最终：{{preview[module] || '无访问权'}}</text></view><text class="hint">模块权限在服务端强制执行；通知的微信外部发送仍取决于正式模板授权。</text><button :disabled="busy||reloadRequired" :loading="busy" @tap="save">保存权限</button><button :disabled="busy||reloadRequired" @tap="cancelEdit">取消编辑</button></view>
-    <view v-if="manager && invitations.length" class="card"><text class="heading">最近邀请码</text><view v-for="item in invitations" :key="item.id" class="permission"><text>{{item.roleCodes.map(r=>roleLabels[r]||r).join('、')}} · 已用{{item.usedCount}}/{{item.maxUses}}</text><text class="hint">到期 {{item.expiresAt.slice(0,16)}} UTC</text><button v-if="!item.revokedAt" size="mini" :disabled="busy||reloadRequired" @tap="revoke(item)">撤销</button><text v-else>已撤销</text></view></view>
+    <view v-if="selected && manager" id="member-editor" class="card member-editor"><text class="heading">正在编辑：{{selected.user.nickname || '家庭成员'}}</text><text class="hint">角色与功能权限</text><view class="row"><button :disabled="busy||reloadRequired||(code==='ADMIN'&&!session?.roles.includes('ADMIN'))" v-for="(label,code) in roleLabels" :key="code" :class="{chosen:roles.includes(code)}" @tap="toggleRole(code)">{{roles.includes(code)?'✓ ':''}}{{label}}</button></view><view v-for="[module,label] in modules" :key="module" class="permission"><text>{{label}}</text><picker :disabled="busy||reloadRequired" :range="choices" :value="permissionIndex(module)" @change="permissionChange(module,$event)"><text>{{choices[permissionIndex(module)]}} ›</text></picker><text class="hint">最终：{{permissionLabel(preview[module])}}</text></view><text class="hint">保存后生效。</text><button :disabled="busy||reloadRequired" :loading="busy" @tap="save">保存权限</button><button :disabled="busy||reloadRequired" @tap="cancelEdit">取消编辑</button></view>
+    <view v-if="manager && invitations.length" class="card"><text class="heading">最近邀请码</text><view v-for="item in invitations" :key="item.id" class="permission"><text>{{item.roleCodes.map(r=>roleLabels[r]||r).join('、')}} · 已用{{item.usedCount}}/{{item.maxUses}}</text><text class="hint">到期 {{localTime(item.expiresAt)}}</text><button v-if="!item.revokedAt" size="mini" :disabled="busy||reloadRequired" @tap="revoke(item)">撤销</button><text v-else>已撤销</text></view></view>
   </view>
 </template>
 <style scoped>
 .page{padding:36rpx 28rpx 80rpx;min-height:100vh;background:#f7f3e8;color:#334f3e}.title,.hint,.heading{display:block}.title{font-size:42rpx;font-weight:700}.hint{font-size:24rpx;color:#798174;line-height:1.7;margin:12rpx 0}.card{background:#fffdf7;padding:26rpx;border-radius:26rpx;margin:24rpx 0}.heading{font-size:30rpx;font-weight:600}.row{display:flex;flex-wrap:wrap;gap:12rpx;margin-top:18rpx}button{font-size:25rpx;background:#e2eddf;color:#3c674d;border-radius:16rpx;margin:8rpx 0}button.chosen{background:#4e9c78;color:white}.permission{padding:18rpx 0;border-bottom:1rpx solid #e7ebdf;font-size:27rpx}.permission picker{padding:14rpx;background:#f1f4ec;border-radius:12rpx;margin-top:10rpx}.error{color:#994818;background:#fff0dc;padding:20rpx;margin:18rpx 0;border-radius:16rpx}.notice{color:#386a4b;padding:18rpx}.code{word-break:break-all;padding:20rpx;background:#edf3e8;font-size:27rpx}
 </style>
+<style scoped src="../../styles/page-foundation.css"></style>

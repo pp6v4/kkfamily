@@ -82,7 +82,7 @@ export function mealTypeLabel(code: string) { return Object.keys(mealTypeCodes).
 export function createMeal(input: { scheduledAt: string; mealType: string; slotKey?: string }) { return request<Meal>('/meals', 'POST', input); }
 export function addMealRecipe(mealId: string, recipeId: string) { return request<MealItem>(`/meals/${mealId}/items`, 'POST', { recipeId }); }
 export function removeMealRecipe(mealId: string, recipeId: string) { return request<{ removed: boolean }>(`/meals/${mealId}/items/${recipeId}`, 'DELETE'); }
-export function recalculateMeal(mealId: string) { return request<IngredientComparison[]>(`/meals/${mealId}/recalculate`, 'POST'); }
+export function recalculateMeal(mealId: string) { return request<IngredientComparison[]>(`/meals/${mealId}/recalculate`, 'POST', {}); }
 export function completeMeal(meal: Meal) { return request<Meal>(`/meals/${meal.id}/complete`, 'POST', { expectedVersion: meal.version }); }
 export function transitionMeal(meal: Meal, action: 'confirm' | 'reopen' | 'start' | 'cancel', reason?: string) { return request<Meal>(`/meals/${meal.id}/${action}`, 'POST', { expectedVersion: meal.version, reason }); }
 export function updateMealDish(meal: Meal, recipeId: string, cookMultiplier: number) { return request<Meal>(`/meals/${meal.id}/dishes/${recipeId}`, 'PATCH', { expectedVersion: meal.version, cookMultiplier }); }

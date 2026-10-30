@@ -20,6 +20,7 @@ process.env.ARCHIVE_ENCRYPTION_KEY_VERSION = '1';
 const { AppModule } = require('../dist/app.module');
 const { configureImageBodyParser } = require('../dist/media/binary-parser');
 const { configurePatchCompatibility } = require('../dist/common/patch-compatibility');
+const { configureEmptyJsonCompatibility } = require('../dist/common/empty-json-compatibility');
 const { NotificationsService } = require('../dist/notifications/notifications.service');
 let app, db, jwt;
 let TEST_PNG;
@@ -30,6 +31,7 @@ before(async () => {
   process.env.JWT_ACCESS_SECRET = 'isolated-verification-signing-key-not-for-production';
   app = await NestFactory.create(AppModule, new FastifyAdapter(), { logger: ['error'], abortOnError: false });
   configureImageBodyParser(app);
+  configureEmptyJsonCompatibility(app);
   configurePatchCompatibility(app);
   app.setGlobalPrefix('v1');
   app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
@@ -48,7 +50,9 @@ async function call(who, method, path, payload, household = who?.householdId) {
     const [pathname, ...query] = path.split('?');
     path = pathname + '/_patch' + (query.length ? '?' + query.join('?') : '');
   }
-  const headers = {};
+  // Match the released transport even when payload is omitted. Without this
+  // header, DELETE/recalculate tests bypass the empty-JSON parser regression.
+  const headers = { 'content-type': 'application/json' };
   if (who?.token) headers.authorization = `Bearer ${who.token}`;
   if (household !== undefined) headers['x-household-id'] = household;
   const response = await app.inject({ method, url: '/v1' + path, headers, ...(payload === undefined ? {} : { payload }) });

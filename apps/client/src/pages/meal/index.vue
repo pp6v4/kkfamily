@@ -18,7 +18,9 @@ let resume: { identity: HouseholdContext; date: string; type: string; id?: strin
 const date = ref(today()), recipes = ref<Recipe[]>([]), meal = ref<Meal>();
 const comparison = ref<IngredientComparison[]>([]), checkedShortages = ref<string[]>([]);
 const category = ref('全部'), loading = ref(false), errorText = ref('');
+const mealLoaded = ref(false), comparisonError = ref('');
 const recipeCategories = ref<RecipeCategory[]>([]), categoryName = ref('');
+const managingCategories = ref(false);
 const categoryEditing = ref<RecipeCategory>(), categoryEditName = ref(''), categoryEditOrder = ref('');
 const session = ref<HouseholdContext>();
 const servings = ref<Record<string, string>>({});
@@ -34,16 +36,29 @@ const recipeDetail=computed(()=>{
     if(!canAccess(session.value,'recipes'))return undefined;
     const recipe=recipes.value.find(item=>item.id===target.recipeId);
     if(!recipe||recipe.status!=='PUBLISHED'&&!canAccess(session.value,'recipes','EDIT'))return undefined;
-    return{recipe,sourceLabel:`当前菜谱 · 第${recipe.version}版`,coverUrl:coverUrls.value[recipe.id]};
+    return{recipe,sourceLabel:'当前菜谱',coverUrl:coverUrls.value[recipe.id]};
   }
   if(!canAccess(session.value,'meals'))return undefined;
   const recipe=meal.value?.menu.find(item=>item.recipeId===target.recipeId)?.recipe;
   if(!recipe)return undefined;
-  return{recipe,sourceLabel:meal.value?.status==='DRAFT'?'当前待做菜单 · 随菜谱动态更新':`已确认菜单快照 · 第${meal.value?.snapshotVersion}版`,coverUrl:undefined};
+  return{recipe,sourceLabel:meal.value?.status==='DRAFT'?'本餐菜单':'已确认菜单',coverUrl:undefined};
 });
-const categories = computed(() => ['全部', ...recipeCategories.value.map(item => item.name)]);
+const categories = computed(() => {
+  const groups = recipeCategories.value.map(item => ({id:item.id,name:item.name}));
+  for(const recipe of recipes.value){
+    const group=recipe.category;
+    if(group&&!groups.some(item=>item.id===group.id))groups.push({id:group.id,name:group.name+'（停用）'});
+  }
+  if(recipes.value.some(recipe=>!recipe.category))groups.push({id:'未分类',name:'未分类'});
+  return [{id:'全部',name:'全部'},...groups];
+});
+function matchesCategory(recipe:Recipe) { return category.value==='全部'||(recipe.category?.id??'未分类')===category.value; }
 const publishedRecipes = computed(() => recipes.value.filter(r => r.status === 'PUBLISHED'));
-const visibleRecipes = computed(() => publishedRecipes.value.filter(r => category.value === '全部' || r.category?.name === category.value));
+const visibleRecipes = computed(() => publishedRecipes.value.filter(matchesCategory));
+const libraryRecipes = computed(() => recipes.value.filter(matchesCategory));
+function categoryRecipeCount(id:string) { return recipes.value.filter(recipe=>recipe.category?.id===id).length; }
+function chooseCategory(id:string) { if(busy.value)return; closeRecipeDetail();category.value=id;interactionEpoch++; }
+function toggleCategoryManager() { if(!ready('recipes','MANAGE'))return;cancelCategoryEdit();managingCategories.value=!managingCategories.value; }
 const canOrder = computed(() => canAccess(session.value,'meals','EDIT') && canAccess(session.value,'recipes'));
 const orderPermissionHint = computed(() => {
   if(!canAccess(session.value,'meals','EDIT'))return canAccess(session.value,'meals')?'当前仅可查看餐点；点菜和撤回需要餐点编辑权限，请联系管理员授权。':'尚未获得点餐权限，请联系管理员授权餐点编辑权限。';
@@ -53,24 +68,24 @@ const mealItems = computed(() => meal.value?.menu ?? []);
 const selectedRecipeIds = computed(() => new Set(mealItems.value.map(i => i.recipeId)));
 const ownRecipeIds = computed(() => new Set((meal.value?.items ?? []).filter(i => i.addedById === session.value?.membershipId).map(i => i.recipeId)));
 const statusLabels = { DRAFT: '大家点菜中', CONFIRMED: '菜单已确认', COOKING: '烹饪中', COMPLETED: '已完成', CANCELLED: '已取消' };
-const stockLabels: Record<string,string> = { SUFFICIENT:'充足', UNKNOWN:'待确认', PRESENT:'有', ABSENT:'无', NEEDS_CHECK:'请核实过期批次' };
+const stockLabels: Record<string,string> = { SUFFICIENT:'充足', UNKNOWN:'待确认', PRESENT:'家中有', ABSENT:'家中暂无', NEEDS_CHECK:'检查保质期' };
 function today() { return new Date(Date.now()+8*3600000).toISOString().slice(0,10); }
 function dayRange(day: string) { const from=day+'T00:00:00+08:00'; return {from,to:new Date(new Date(from).getTime()+86400000).toISOString()}; }
 function message(error: unknown) { return error instanceof Error ? error.message : '操作失败'; }
 function formatQuantity(value: string | number | null) { return value === null ? '待确认' : String(Number(value)); }
 const busy = computed(() => loading.value || writing.value);
 function sameIdentity(a?: HouseholdContext, b?: HouseholdContext) { return Boolean(a && b && a.householdId === b.householdId && a.membershipId === b.membershipId); }
-function clearMeal() { closeRecipeDetail(); meal.value = undefined; comparison.value = []; checkedShortages.value = []; servings.value = {}; history.value = []; reopenReason.value = ''; loadedSelection = ''; historyEpoch++; }
-function clearPrivate() { clearMeal(); recipes.value = []; recipeCategories.value = []; coverUrls.value = {}; session.value = undefined; category.value = '全部'; categoryName.value = ''; cancelCategoryEdit(); }
+function clearMeal() { closeRecipeDetail(); meal.value = undefined; mealLoaded.value = false; comparisonError.value = ''; comparison.value = []; checkedShortages.value = []; servings.value = {}; history.value = []; reopenReason.value = ''; loadedSelection = ''; historyEpoch++; }
+function clearPrivate() { clearMeal(); recipes.value = []; recipeCategories.value = []; coverUrls.value = {}; session.value = undefined; category.value = '全部'; categoryName.value = ''; managingCategories.value=false;cancelCategoryEdit(); }
 function alive(token: number) { return !disposed && pageVisible.value && token === viewEpoch; }
 function current(token: number, identity?: HouseholdContext) {
   if (!alive(token)) return false;
   if (!sameIdentity(identity, getStoredSession())) { viewEpoch++; mealEpoch++; clearPrivate(); loading.value = false; errorText.value = '账号或家庭已变化，请重新加载'; return false; }
   return true;
 }
-function fail(error: unknown) {
+function fail(error: unknown, prefix = '') {
   if (error instanceof ApiError && [401, 403].includes(error.statusCode)) { viewEpoch++; mealEpoch++; clearPrivate(); loading.value = false; }
-  errorText.value = message(error); uni.showToast({ title: errorText.value, icon: 'none' });
+  errorText.value = prefix + message(error); uni.showToast({ title: errorText.value, icon: 'none' });
 }
 function selectionKey() { return [date.value, mealType.value, slotKey.value, targetMealId.value || ''].join('|'); }
 function capture() { return { token: viewEpoch, read: mealEpoch, interaction: interactionEpoch, editor: editorEpoch, identity: session.value, selection: selectionKey(), slotDraft: slotInput.value, active: active.value, mealId: meal.value?.id, version: meal.value?.version }; }
@@ -82,7 +97,7 @@ function ready(module: string, level: 'VIEW' | 'EDIT' | 'MANAGE' = 'VIEW') {
   if (busy.value || !current(viewEpoch, session.value)) return false;
   if (!canAccess(session.value, module, level)) { fail(new Error('尚未获得该操作权限')); return false; }
   if (module !== 'recipes' && mealType.value === '加餐' && slotInput.value.trim() !== slotKey.value) { fail(new Error('请先点击“查看这顿加餐”再操作')); return false; }
-  if (module !== 'recipes' && loadedSelection && loadedSelection !== selectionKey()) { fail(new Error('请先查看所选餐点')); return false; }
+  if (module !== 'recipes' && (!mealLoaded.value || loadedSelection !== selectionKey())) { fail(new Error('餐点信息尚未加载，请先刷新所选餐点')); return false; }
   return true;
 }
 async function runWrite<T>(scope: ReturnType<typeof capture>, operation: () => Promise<T>, done: (value: T) => void | Promise<void>) {
@@ -92,8 +107,9 @@ async function runWrite<T>(scope: ReturnType<typeof capture>, operation: () => P
   catch (error) { if (valid(scope)) fail(error); }
   finally { writing.value = false; }
 }
-async function loadMealFromDatabase() {
-  const token = viewEpoch, identity = session.value, read = ++mealEpoch, key = selectionKey();
+async function loadMealFromDatabase(afterWrite = false) {
+  const token = viewEpoch, identity = session.value, read = ++mealEpoch;
+  let key = selectionKey();
   const selected = { day: date.value, type: mealType.value, slot: slotKey.value, id: targetMealId.value };
   clearMeal();
   const stillCurrent = () => current(token, identity) && read === mealEpoch && key === selectionKey();
@@ -104,15 +120,27 @@ async function loadMealFromDatabase() {
     if (!stillCurrent()) return;
     const found = rows.find(item => item.localDate === selected.day && (selected.id ? item.id === selected.id : item.mealType === mealTypeCodes[selected.type] && item.slotKey === selected.slot));
     if (selected.id && !found) throw new Error('该餐点不存在或已经没有访问权限');
-    const stock = found && !found.legacyWithoutSnapshot && canAccess(identity, 'inventory') ? await recalculateMeal(found.id) : [];
-    if (!stillCurrent()) return;
-    meal.value = found; comparison.value = stock;
+    // An optional inventory read must not turn a known saved meal into "no meal".
+    // Only the meal query determines whether creating/ordering is safe.
+    meal.value = found;
     if (found) { mealType.value = mealTypeLabel(found.mealType); slotKey.value = found.slotKey; }
     slotInput.value = slotKey.value;
     servings.value = Object.fromEntries((found?.menu || []).map(dish => [dish.recipeId, String(Number(dish.cookMultiplier))]));
-    checkedShortages.value = stock.filter(item => item.status === 'SHORTAGE').map(item => item.key);
-    loadedSelection = selectionKey();
-  } catch (error) { if (stillCurrent()) { clearMeal(); fail(error); } }
+    key = selectionKey(); loadedSelection = key; mealLoaded.value = true;
+    if (found && !found.legacyWithoutSnapshot && canAccess(identity, 'inventory')) {
+      try {
+        const stock = await recalculateMeal(found.id);
+        if (!stillCurrent()) return;
+        comparison.value = stock;
+        checkedShortages.value = stock.filter(item => item.status === 'SHORTAGE').map(item => item.key);
+      } catch (error) {
+        if (!stillCurrent()) return;
+        if (error instanceof ApiError && [401, 403, 404].includes(error.statusCode)) throw error;
+        comparisonError.value = (afterWrite ? '本次操作已保存，但库存对照加载失败：' : '库存对照加载失败：') + message(error);
+        uni.showToast({ title: comparisonError.value, icon: 'none' });
+      }
+    }
+  } catch (error) { if (stillCurrent()) { clearMeal(); fail(error, afterWrite ? '本次操作已保存，但刷新失败，请刷新后再操作：' : ''); } }
 }
 async function loadRecipes(token: number, identity: HouseholdContext) {
   if (!canAccess(identity, 'recipes')) return;
@@ -165,7 +193,7 @@ async function beginOrdering() {
   switchView('order');category.value='全部';
   if(meal.value)return;
   const hour=({早餐:'08',午餐:'12',晚餐:'18',加餐:'21'} as Record<string,string>)[mealType.value];
-  await runWrite(capture(),()=>createMeal({scheduledAt:`${date.value}T${hour}:00:00+08:00`,mealType:mealTypeCodes[mealType.value],slotKey:slotKey.value||undefined}),()=>loadMealFromDatabase());
+  await runWrite(capture(),()=>createMeal({scheduledAt:`${date.value}T${hour}:00:00+08:00`,mealType:mealTypeCodes[mealType.value],slotKey:slotKey.value||undefined}),()=>loadMealFromDatabase(true));
 }
 async function toggleRecipe(recipeId:string) {
   if (!ready('meals', 'EDIT')) return;
@@ -180,7 +208,7 @@ async function toggleRecipe(recipeId:string) {
     if (!valid(scope)) return;
     if (target.status !== 'DRAFT') throw new Error('餐单已锁定；需由厨师重新打开后点菜');
     if (withdraw) await removeMealRecipe(target.id, recipeId); else await addMealRecipe(target.id, recipeId);
-  }, () => loadMealFromDatabase());
+  }, () => loadMealFromDatabase(true));
 }
 function addRecipe() { if (ready('recipes', 'EDIT')) uni.navigateTo({url:'/pages/recipe-editor/index'}); }
 function editRecipe(id:string) { if (ready('recipes', 'EDIT') && recipes.value.some(row => row.id === id)) uni.navigateTo({url:'/pages/recipe-editor/index?id='+encodeURIComponent(id)}); }
@@ -204,13 +232,13 @@ async function saveCategoryEdit() {
   const current=categoryEditing.value;if(!current||!ready('recipes','MANAGE'))return;
   const name=categoryEditName.value.trim(),sortOrder=Number(categoryEditOrder.value);
   if(!name){fail(new Error('请输入分类名称'));return;}if(!/^\d+$/.test(categoryEditOrder.value.trim())||!Number.isInteger(sortOrder)||sortOrder<0||sortOrder>999){fail(new Error('排序请输入0到999的整数'));return;}
-  await runWrite(capture(), () => updateRecipeCategory(current, {name,sortOrder}), updated => { recipeCategories.value=recipeCategories.value.map(item=>item.id===updated.id?updated:item).sort((a,b)=>a.sortOrder-b.sortOrder||a.name.localeCompare(b.name,'zh-CN'));cancelCategoryEdit();uni.showToast({title:'分类已更新',icon:'success'}); });
+  await runWrite(capture(), () => updateRecipeCategory(current, {name,sortOrder}), updated => { recipeCategories.value=recipeCategories.value.map(item=>item.id===updated.id?updated:item).sort((a,b)=>a.sortOrder-b.sortOrder||a.name.localeCompare(b.name,'zh-CN'));recipes.value=recipes.value.map(recipe=>recipe.category?.id===updated.id?{...recipe,category:updated}:recipe);cancelCategoryEdit();uni.showToast({title:'分类已更新',icon:'success'}); });
 }
 async function applyCategoryArchive(item:RecipeCategory) {
   if(!ready('recipes','MANAGE'))return;
-  await runWrite(capture(), () => archiveRecipeCategory(item), () => { recipeCategories.value=recipeCategories.value.filter(group=>group.id!==item.id);if(category.value===item.name)category.value='全部';if(categoryEditing.value?.id===item.id)cancelCategoryEdit();uni.showToast({title:'分类已归档',icon:'none'}); });
+  await runWrite(capture(), () => archiveRecipeCategory(item), () => { recipeCategories.value=recipeCategories.value.filter(group=>group.id!==item.id);if(category.value===item.id&&!recipes.value.some(recipe=>recipe.category?.id===item.id))category.value='全部';if(categoryEditing.value?.id===item.id)cancelCategoryEdit();uni.showToast({title:'分类已停用',icon:'none'}); });
 }
-function confirmCategoryArchive(item:RecipeCategory) { if(!ready('recipes','MANAGE'))return;const scope=capture();uni.showModal({title:'归档这个分类？',content:'分类会从新菜谱选项中隐藏；已有菜谱仍保留原分类名称。',success:async result=>{if(result.confirm&&valid(scope))await applyCategoryArchive(item);}}); }
+function confirmCategoryArchive(item:RecipeCategory) { if(!ready('recipes','MANAGE'))return;const scope=capture();uni.showModal({title:'停用这个分类？',content:`停用“${item.name}”后，新菜谱将不能选择此分类，已有菜谱仍会保留。`,success:async result=>{if(result.confirm&&valid(scope))await applyCategoryArchive(item);}}); }
 async function applyRecipeStatus(recipe:Recipe,status:Recipe['status']) {
   if(!ready('recipes','EDIT'))return;
   await runWrite(capture(), () => updateRecipeStatus(recipe,status), updated => { recipes.value=recipes.value.map(item=>item.id===updated.id?updated:item);uni.showToast({title:status==='PUBLISHED'?'菜谱已发布':status==='ARCHIVED'?'菜谱已下架':'已恢复为草稿',icon:'none'}); });
@@ -224,15 +252,15 @@ async function saveServings(recipeId:string) {
   if(!ready('meals','MANAGE')||!meal.value||meal.value.status!=='DRAFT'||!mealItems.value.some(row=>row.recipeId===recipeId))return;
   const value=(servings.value[recipeId]||'').trim(), quantity=Number(value), target=meal.value;
   if(!/^\d+(?:\.\d{1,3})?$/.test(value)||quantity<0.001||quantity>100){fail(new Error('份数请填0.001到100，最多3位小数'));return;}
-  await runWrite(capture(), () => updateMealDish(target,recipeId,quantity), () => loadMealFromDatabase());
+  await runWrite(capture(), () => updateMealDish(target,recipeId,quantity), () => loadMealFromDatabase(true));
 }
 function confirmRemoveDish(recipeId:string) {
   const target=meal.value,dish=mealItems.value.find(item=>item.recipeId===recipeId);
   if(!target||target.status!=='DRAFT'||!dish||!ready('meals','MANAGE'))return;
   const scope=capture();
-  uni.showModal({title:'移除本餐这道菜？',content:`将移除所有人对“${dish.recipe.name}”的本餐选择；已确认的旧快照和本次变更记录会保留。`,success:async result=>{
+  uni.showModal({title:'移除本餐这道菜？',content:`将移除所有人对“${dish.recipe.name}”的本餐选择。`,success:async result=>{
     if(!result.confirm||!valid(scope)||!ready('meals','MANAGE')||meal.value?.status!=='DRAFT')return;
-    await runWrite(scope,()=>removeMealDish(target,recipeId),()=>loadMealFromDatabase());
+    await runWrite(scope,()=>removeMealDish(target,recipeId),()=>loadMealFromDatabase(true));
   }});
 }
 function confirmAction(action:'confirm'|'reopen'|'start'|'cancel') {
@@ -241,9 +269,9 @@ function confirmAction(action:'confirm'|'reopen'|'start'|'cancel') {
   if(action==='reopen'&&!reopenReason.value.trim()){fail(new Error('请填写重新打开餐单的原因'));return;}
   const titles={confirm:'确认本餐菜单',reopen:'重新打开菜单',start:'开始烹饪',cancel:'取消这顿餐点'};
   const scope=capture(), reason=reopenReason.value.trim()||undefined;
-  uni.showModal({title:titles[action],content:action==='confirm'?'按已保存份数锁定菜名和用料快照；普通点菜将停止。':action==='reopen'?'旧快照保留。重新确认时生成新版菜单，并记录原因。':'确认执行此操作？',success:async result=>{
+  uni.showModal({title:titles[action],content:action==='confirm'?'确认后将按当前份数准备，点菜暂时结束。':action==='reopen'?'重新开放点菜并调整本餐菜单？':'确认执行此操作？',success:async result=>{
     if(!result.confirm||!valid(scope)||!ready('meals','MANAGE'))return;
-    await runWrite(scope, () => transitionMeal(current,action,reason), () => loadMealFromDatabase());
+    await runWrite(scope, () => transitionMeal(current,action,reason), () => loadMealFromDatabase(true));
   }});
 }
 function toggleShortage(item:IngredientComparison) { if(!ready('inventory')||item.status!=='SHORTAGE'||!comparison.value.some(row=>row.key===item.key&&row.status==='SHORTAGE'))return; checkedShortages.value=checkedShortages.value.includes(item.key)?checkedShortages.value.filter(k=>k!==item.key):[...checkedShortages.value,item.key]; }
@@ -251,14 +279,14 @@ async function confirmShopping() {
   if(!ready('shopping','EDIT')||!canAccess(session.value,'inventory')||!canAccess(session.value,'meals')||!meal.value||!['CONFIRMED','COOKING'].includes(meal.value.status))return;
   const target=meal.value, keys=[...checkedShortages.value];
   if(!keys.length||keys.some(key=>!comparison.value.some(row=>row.key===key&&row.status==='SHORTAGE'))){fail(new Error('请重新勾选当前餐点要购买的缺料'));return;}
-  await runWrite(capture(), () => importMealShortages(target,keys), () => { uni.showToast({title:'已加入清单，重复提交不会加倍',icon:'none'}); });
+  await runWrite(capture(), () => importMealShortages(target,keys), () => { uni.showToast({title:'已加入购物清单',icon:'none'}); });
 }
 function finishCooking(){
   const current=meal.value;if(!current||!ready('meals','MANAGE')||!['CONFIRMED','COOKING'].includes(current.status))return;
   const scope=capture();
-  uni.showModal({title:'完成这顿饭',content:'只记录餐点已完成，不会自动减少任何库存。库存仍由家人按需要手工核实。',success:async result=>{
+  uni.showModal({title:'完成这顿饭',content:'将本餐标记为已完成？',success:async result=>{
     if(!result.confirm||!valid(scope)||!ready('meals','MANAGE'))return;
-    await runWrite(scope, () => completeMeal(current), async () => {uni.showToast({title:'餐点已完成',icon:'success'});await loadMealFromDatabase();});
+    await runWrite(scope, () => completeMeal(current), async () => {uni.showToast({title:'餐点已完成',icon:'success'});await loadMealFromDatabase(true);});
   }});
 }
 async function showHistory(){if(!ready('meals')||!meal.value)return;const scope=capture(),id=meal.value.id,read=++historyEpoch;history.value=[];try{const rows=await listMealSnapshots(id);if(valid(scope)&&read===historyEpoch)history.value=rows;}catch(error){if(valid(scope)&&read===historyEpoch)fail(error);}}
@@ -269,63 +297,76 @@ onUnload(()=>{disposed=true;hide();resume=undefined;});
 </script>
 <template>
   <view class="page">
-    <view class="heading"><text class="label">吃什么</text><text class="title">一起好好吃饭</text></view>
+    <view class="heading"><text class="title">今天想吃什么？</text></view>
     <view class="tabs"><view class="tab" :class="{selected:active==='order'}" @tap="switchView('order')">去点餐</view><view class="tab" :class="{selected:active==='recipes'}" @tap="switchView('recipes')">菜谱</view><view class="tab" :class="{selected:active==='menu'}" @tap="switchView('menu')">待做菜单</view></view>
     <view v-if="errorText" class="error">{{errorText}}<text class="small-action" @tap="loadPage">刷新</text></view>
-    <view v-if="busy" class="hint">{{ writing ? '正在保存本次操作…' : '正在同步家里的数据…' }}</view>
+    <view v-if="comparisonError" class="error">{{comparisonError}}<text class="small-action" @tap="loadPage">刷新库存对照</text></view>
+    <view v-if="busy" class="hint">{{ writing ? '保存中…' : '加载中…' }}</view>
     <view v-if="active!=='recipes'" class="picker-row"><picker mode="date" :disabled="writing" :value="date" @change="changeDate"><text class="field-value">{{date}} ›</text></picker><view class="meal-types"><text v-for="item in mealTypes" :key="item" class="meal-type" :class="{chosen:mealType===item}" @tap="chooseMealType(item)">{{item}}</text></view></view>
     <view v-if="active!=='recipes' && mealType==='加餐'" class="form-box"><input v-model="slotInput" :disabled="busy" class="entry" placeholder="加餐名称，可留空；如下午茶" /><button :disabled="writing" @tap="changeSelection(date,mealType)">查看这顿加餐</button><text v-if="slotInput.trim()!==slotKey" class="material">名称尚未应用，请先查看这顿加餐。</text></view>
     <view v-if="active==='order'">
       <view v-if="!loading && !errorText" class="ordering-guide">
         <text class="block-title plain-title">为 {{date}} {{mealType}} {{slotKey}} 点菜</text>
         <text v-if="orderPermissionHint" class="material">{{orderPermissionHint}}</text>
-        <template v-else-if="meal && meal.status!=='DRAFT'"><text class="material">{{statusLabels[meal.status]}}，普通点菜已停止；请查看本餐菜单。</text><button class="order-start" :disabled="busy" @tap="switchView('menu')">查看这顿餐点</button></template>
-        <template v-else><text class="material">{{meal?'点击“点这道菜”加入本餐；选错后可撤回自己的选择。':'先创建这顿餐点，再选择下面想吃的菜，家人的选择会汇总到同一张菜单。'}}</text><button v-if="!meal" class="order-start" :disabled="busy" @tap="beginOrdering">创建这顿餐点，开始点菜</button><text v-else class="material">大家点菜中 · 本餐已选 {{mealItems.length}} 道</text></template>
+        <template v-else-if="meal && meal.status!=='DRAFT'"><text class="material">{{statusLabels[meal.status]}}</text><button class="order-start" :disabled="busy" @tap="switchView('menu')">查看这顿餐点</button></template>
+        <template v-else><button v-if="!meal" class="order-start" :disabled="busy" @tap="beginOrdering">开始点菜</button><text v-else class="material">本餐已选 {{mealItems.length}} 道</text></template>
       </view>
-      <scroll-view v-if="publishedRecipes.length" class="categories" scroll-x><text v-for="item in categories" :key="item" class="category" :class="{chosen:category===item}" @tap="category=item">{{item}}</text></scroll-view>
+      <scroll-view v-if="publishedRecipes.length" class="categories" scroll-x><text v-for="item in categories" :key="item.id" class="category" :class="{chosen:category===item.id}" @tap="chooseCategory(item.id)">{{item.name}}</text></scroll-view>
       <view v-if="!loading && !errorText && canAccess(session,'recipes') && !publishedRecipes.length" class="ordering-guide">
-        <text class="block-title plain-title">还没有可点的已发布菜谱</text>
-        <template v-if="canAccess(session,'recipes','EDIT')"><text class="material">草稿不会出现在点菜列表。请先补齐食材、做法和成品图并发布，再回来点击“点这道菜”加入本餐。图片上传或发布失败时，请按错误提示处理后重试。</text><button class="order-start secondary-order" :disabled="busy" @tap="switchView('recipes')">去准备并发布菜谱</button></template>
-        <text v-else class="material">请联系厨师添加并发布菜谱；发布后可在这里为所选餐次点菜。</text>
+        <text class="block-title plain-title">暂无可点菜品</text>
+        <template v-if="canAccess(session,'recipes','EDIT')"><text class="material">发布菜谱后即可点菜。</text><button class="order-start secondary-order" :disabled="busy" @tap="switchView('recipes')">管理菜谱</button></template>
+        <text v-else class="material">请联系厨师添加菜品。</text>
       </view>
       <view v-else-if="!loading && !errorText && publishedRecipes.length && !visibleRecipes.length" class="ordering-guide"><text class="material">这个分类还没有可点的菜。</text><button class="order-start secondary-order" :disabled="busy" @tap="category='全部'">查看全部菜谱</button></view>
-      <view v-for="recipe in visibleRecipes" :key="recipe.id" class="recipe-card"><image v-if="coverUrls[recipe.id]" class="recipe-cover" :src="coverUrls[recipe.id]" mode="aspectFill" /><view v-else class="recipe-icon">🍽️</view><view class="recipe-info" @tap="openRecipeDetail(recipe.id,'CURRENT')"><text class="recipe-name">{{recipe.name}}</text><text v-for="i in recipe.ingredients" :key="i.ingredientId" class="material">{{i.ingredient.name}} {{formatQuantity(i.quantity)}} {{i.unit}}</text><text class="material">调料：{{recipe.seasonings.map(s=>s.name).join('、')||'无'}}</text><text class="detail-link">查看用料与做法 ›</text></view><button v-if="canOrder && (!meal || meal.status==='DRAFT')" :disabled="busy" class="add" :class="{added:selectedRecipeIds.has(recipe.id)}" @tap.stop="toggleRecipe(recipe.id)">{{ownRecipeIds.has(recipe.id)?'撤回我的选择':selectedRecipeIds.has(recipe.id)?'我也想吃':'点这道菜'}}</button></view>
+      <view v-for="recipe in visibleRecipes" :key="recipe.id" class="recipe-card order-card">
+        <view class="recipe-main" @tap="openRecipeDetail(recipe.id,'CURRENT')">
+          <image v-if="coverUrls[recipe.id]" class="recipe-cover" :src="coverUrls[recipe.id]" mode="aspectFill" />
+          <view v-else class="recipe-placeholder"><text>暂无图片</text></view>
+          <view class="recipe-info"><text class="recipe-name">{{recipe.name}}</text><text class="material recipe-summary">{{recipe.ingredients.slice(0,3).map(i=>i.ingredient.name).join(' · ') || '查看用料与做法'}}{{recipe.ingredients.length>3?' 等':''}}</text><text class="detail-link">用料与做法 ›</text></view>
+        </view>
+        <view class="recipe-footer"><text class="selection-note">{{ownRecipeIds.has(recipe.id)?'我已选':selectedRecipeIds.has(recipe.id)?'家人已选':''}}</text>
+          <button v-if="canOrder && (!meal || meal.status==='DRAFT')" :disabled="busy || !mealLoaded" class="add" :class="{added:ownRecipeIds.has(recipe.id)}" @tap.stop="toggleRecipe(recipe.id)">{{ownRecipeIds.has(recipe.id)?'撤回':selectedRecipeIds.has(recipe.id)?'我也想吃':'点菜'}}</button>
+        </view>
+      </view>
       <view v-if="canAccess(session,'meals')" class="primary" @tap="switchView('menu')">查看待做菜单（{{mealItems.length}}道）</view>
     </view>
     <view v-else-if="active==='recipes'">
-      <view v-if="canOrder" class="ordering-guide"><text class="material">当前选中 {{date}} {{mealType}} {{slotKey}}；发布菜谱后，回到点菜页将菜加入本餐。</text><button class="order-start" :disabled="busy" @tap="beginOrdering">{{meal && meal.status!=='DRAFT'?'查看所选餐次菜单':'为所选餐次点菜'}}</button></view>
+      <view v-if="canOrder" class="ordering-guide"><text class="material">{{date}} {{mealType}} {{slotKey}}</text><button class="order-start" :disabled="busy || !mealLoaded" @tap="beginOrdering">{{meal && meal.status!=='DRAFT'?'查看所选餐次菜单':'为所选餐次点菜'}}</button></view>
       <view v-if="canAccess(session,'recipes','EDIT')" class="primary" @tap="addRecipe">＋ 添加菜谱</view>
-      <view v-if="canAccess(session,'recipes','MANAGE')" class="form-box">
+      <view v-if="canAccess(session,'recipes','MANAGE')" class="category-toolbar"><text class="small-action" @tap="toggleCategoryManager">{{managingCategories?'收起分类管理':'管理分类'}}</text></view>
+      <view v-if="canAccess(session,'recipes','MANAGE') && managingCategories" class="form-box">
         <text class="block-title plain-title">菜谱分类</text>
-        <view class="inline-form"><input v-model="categoryName" :disabled="busy" maxlength="30" class="entry category-entry" placeholder="如主食、炒菜、海鲜" /><text class="small-action" @tap="saveCategory">添加分类</text></view>
-        <view v-for="item in recipeCategories" :key="item.id" class="category-manage-row"><view><text>{{item.name}}</text><text class="material">排序 {{item.sortOrder}} · 第{{item.version}}版</text></view><view><text class="small-action" @tap="startCategoryEdit(item)">编辑</text><text class="archive-link" @tap="confirmCategoryArchive(item)">归档</text></view></view>
-        <view v-if="categoryEditing" class="category-editor"><input v-model="categoryEditName" :disabled="busy" maxlength="30" class="entry" placeholder="分类名称" /><input v-model="categoryEditOrder" :disabled="busy" type="number" class="entry order-entry" placeholder="排序0-999" /><view class="inline-form"><text class="small-action" @tap="saveCategoryEdit">保存修改</text><text class="archive-link" @tap="!busy&&cancelCategoryEdit()">取消</text></view></view>
+        <text class="field-label">新分类名称</text><view class="inline-form"><input v-model="categoryName" :disabled="busy" maxlength="30" class="entry category-entry" placeholder="例如：主食、炒菜、海鲜" /><text class="small-action" @tap="saveCategory">添加分类</text></view>
+        <view v-for="item in recipeCategories" :key="item.id" class="category-manage-row"><view><text>{{item.name}}</text><text class="material">{{categoryRecipeCount(item.id)}} 道菜谱</text></view><view><text class="small-action" @tap="startCategoryEdit(item)">改名</text><text class="archive-link" @tap="confirmCategoryArchive(item)">停用</text></view></view>
+        <view v-if="categoryEditing" class="category-editor"><text class="field-label">分类名称</text><input v-model="categoryEditName" :disabled="busy" maxlength="30" class="entry" placeholder="请输入新的分类名称" /><view class="inline-form"><text class="small-action" @tap="saveCategoryEdit">保存修改</text><text class="archive-link" @tap="!busy&&cancelCategoryEdit()">取消</text></view></view>
       </view>
-      <view v-for="recipe in recipes" :key="recipe.id" class="recipe-card"><view class="recipe-info" @tap="openRecipeDetail(recipe.id,'CURRENT')"><text class="recipe-name">{{recipe.name}}</text><text class="recipe-meta">{{recipe.category?.name||'未分类'}} · {{recipe.ingredients.length}}种食材 · {{recipe.seasonings.length}}种调料 · 第{{recipe.version}}版</text><text class="detail-link">查看用料与做法 ›</text></view><text v-if="canAccess(session,'recipes','EDIT')" class="small-action" @tap="editRecipe(recipe.id)">编辑菜谱</text><text v-if="recipe.status==='DRAFT' && canAccess(session,'recipes','EDIT')" class="publish" @tap="changeRecipeStatus(recipe,'PUBLISHED')">发布</text><text v-else-if="recipe.status==='PUBLISHED' && canAccess(session,'recipes','EDIT')" class="archive-action" @tap="changeRecipeStatus(recipe,'ARCHIVED')">下架</text><text v-else-if="recipe.status==='ARCHIVED' && canAccess(session,'recipes','EDIT')" class="restore-action" @tap="changeRecipeStatus(recipe,'DRAFT')">恢复草稿</text><text v-else class="status">{{recipe.status==='PUBLISHED'?'已发布':'已归档'}}</text></view>
+      <scroll-view v-if="recipes.length || recipeCategories.length" class="categories" scroll-x><text v-for="item in categories" :key="item.id" class="category" :class="{chosen:category===item.id}" @tap="chooseCategory(item.id)">{{item.name}}</text></scroll-view>
+      <view v-if="!loading && !errorText && !libraryRecipes.length" class="empty">{{category==='全部'?'还没有菜谱':'这个分类还没有菜谱'}}</view>
+      <view v-for="recipe in libraryRecipes" :key="recipe.id" class="recipe-card library-card"><view class="recipe-info" @tap="openRecipeDetail(recipe.id,'CURRENT')"><text class="recipe-name">{{recipe.name}}</text><text class="recipe-meta">{{recipe.category?.name||'未分类'}} · {{recipe.status==='DRAFT'?'草稿':recipe.status==='PUBLISHED'?'已发布':'已下架'}}</text><text class="detail-link">查看用料与做法 ›</text></view><view class="library-actions"><text v-if="canAccess(session,'recipes','EDIT')" class="small-action" @tap="editRecipe(recipe.id)">编辑菜谱</text><text v-if="recipe.status==='DRAFT' && canAccess(session,'recipes','EDIT')" class="publish" @tap="changeRecipeStatus(recipe,'PUBLISHED')">发布</text><text v-else-if="recipe.status==='PUBLISHED' && canAccess(session,'recipes','EDIT')" class="archive-action" @tap="changeRecipeStatus(recipe,'ARCHIVED')">下架</text><text v-else-if="recipe.status==='ARCHIVED' && canAccess(session,'recipes','EDIT')" class="restore-action" @tap="changeRecipeStatus(recipe,'DRAFT')">恢复草稿</text><text v-else class="status">{{recipe.status==='PUBLISHED'?'已发布':recipe.status==='DRAFT'?'草稿':'已下架'}}</text></view></view>
     </view>
     <view v-else>
       <view v-if="!loading && !canAccess(session,'meals')" class="empty">尚未获得餐点查看权限</view>
       <template v-if="canAccess(session,'meals')">
-      <view class="meal-summary"><text>{{date}} {{mealType}} {{slotKey}}</text><text>{{meal?statusLabels[meal.status]:'尚未点菜'}}</text></view>
-      <view v-if="meal?.legacyWithoutSnapshot" class="hint">这是旧版餐单，没有历史快照；不将当前菜谱当作当时用料。</view>
+      <view class="meal-summary"><text>{{date}} {{mealType}} {{slotKey}}</text><text>{{meal?statusLabels[meal.status]:mealLoaded?'尚未点菜':'餐点信息未加载'}}</text></view>
+      <view v-if="meal?.legacyWithoutSnapshot" class="hint">此餐点的历史用料暂不可用。</view>
       <view v-if="!mealItems.length && !meal?.legacyWithoutSnapshot" class="empty">还没有选择菜品</view>
-      <button v-if="!loading && !errorText && canOrder && (!meal || meal.status==='DRAFT')" class="order-start" :disabled="busy" @tap="beginOrdering">{{meal?'继续为这顿饭点菜':'创建这顿餐点，开始点菜'}}</button>
+      <button v-if="!loading && !errorText && canOrder && (!meal || meal.status==='DRAFT')" class="order-start" :disabled="busy" @tap="beginOrdering">{{meal?'继续为这顿饭点菜':'开始点菜'}}</button>
       <text v-if="!loading && orderPermissionHint && (!meal || meal.status==='DRAFT')" class="material">{{orderPermissionHint}}</text>
       <view v-for="item in mealItems" :key="item.recipeId" class="menu-item"><view class="menu-line"><text @tap="openRecipeDetail(item.recipeId,'MEAL')">{{item.recipe.name}} · 查看做法 ›</text><text class="person">做{{Number(item.cookMultiplier)}}份</text></view><text class="material">想吃的人：{{item.wantedBy.map(w=>w.nickname||'家人').join('、')}}（{{item.wantedBy.length}}人）</text><text class="material">{{item.recipe.ingredients.map(i=>i.ingredient.name+' '+formatQuantity(i.quantity)+' '+i.unit).join('、')}}</text>
         <button v-if="meal?.status==='DRAFT' && canAccess(session,'meals','EDIT') && ownRecipeIds.has(item.recipeId)" class="order-start secondary-order" :disabled="busy" @tap="toggleRecipe(item.recipeId)">撤回我的选择</button>
         <view v-if="meal?.status==='DRAFT' && canAccess(session,'meals','MANAGE')" class="menu-line"><input v-model="servings[item.recipeId]" :disabled="busy" type="digit" class="entry servings" placeholder="实际份数" /><text class="small-action" @tap="saveServings(item.recipeId)">保存份数</text><text class="archive-link" @tap="confirmRemoveDish(item.recipeId)">移除本餐这道菜</text></view>
       </view>
-      <view v-if="mealItems.length && !canAccess(session,'inventory')" class="hint">用料可见，家庭库存只向获授权成员展示。</view>
-      <view v-if="comparison.length" class="ingredients"><text class="block-title">全部食材、调料与库存对照</text><view v-for="item in comparison" :key="item.key" class="ingredient-row" :class="item.status.toLowerCase()" @tap="toggleShortage(item)"><text v-if="item.status==='SHORTAGE'" class="check">{{checkedShortages.includes(item.key)?'✓':''}}</text><view class="ingredient-name"><text>{{item.name}}</text><text v-if="item.kind==='FOOD'" class="amount-text">需要{{formatQuantity(item.required)}} {{item.unit}} · 库存{{formatQuantity(item.onHand)}} {{item.unit}}</text><text class="material">{{item.reason}}</text></view><text class="stock-status">{{item.status==='SHORTAGE'?'缺 '+formatQuantity(item.shortage)+' '+item.unit:stockLabels[item.status]}}</text></view></view>
-      <view v-if="meal?.status==='DRAFT' && comparison.length" class="hint">当前是动态预估；确认菜单后才可按快照导入缺料。</view>
+      <view v-if="mealItems.length && !canAccess(session,'inventory')" class="hint">暂无库存查看权限。</view>
+      <view v-if="comparison.length" class="ingredients"><text class="block-title">备菜清单</text><view v-for="item in comparison" :key="item.key" class="ingredient-row" :class="item.status.toLowerCase()" @tap="toggleShortage(item)"><text v-if="item.status==='SHORTAGE'" class="check">{{checkedShortages.includes(item.key)?'✓':''}}</text><view class="ingredient-name"><text>{{item.name}}</text><text v-if="item.kind==='FOOD'" class="amount-text">需要{{formatQuantity(item.required)}} {{item.unit}} · 库存{{formatQuantity(item.onHand)}} {{item.unit}}</text></view><text class="stock-status">{{item.status==='SHORTAGE'?'缺 '+formatQuantity(item.shortage)+' '+item.unit:stockLabels[item.status]}}</text></view></view>
+      <view v-if="meal?.status==='DRAFT' && comparison.length" class="hint">确认菜单后可添加购物清单。</view>
       <view v-if="meal && ['CONFIRMED','COOKING'].includes(meal.status) && canAccess(session,'shopping','EDIT') && comparison.some(i=>i.status==='SHORTAGE')" class="primary" @tap="confirmShopping">把勾选缺料加入购物清单</view>
       <view v-if="meal && canAccess(session,'meals','MANAGE')">
-        <view v-if="meal.status==='DRAFT' && mealItems.length" class="primary" @tap="confirmAction('confirm')">确认已保存的份数和菜单</view>
-        <view v-if="meal.status==='CONFIRMED'" class="form-box"><view class="primary" @tap="confirmAction('start')">开始烹饪</view><input v-model="reopenReason" :disabled="busy" maxlength="300" class="entry" placeholder="改单原因" /><view class="secondary" @tap="confirmAction('reopen')">重新打开并保留旧快照</view></view>
-        <view v-if="['CONFIRMED','COOKING'].includes(meal.status)" class="secondary" @tap="finishCooking">完成用餐（库存不自动变化）</view>
+        <view v-if="meal.status==='DRAFT' && mealItems.length" class="primary" @tap="confirmAction('confirm')">确认菜单</view>
+        <view v-if="meal.status==='CONFIRMED'" class="form-box"><view class="primary" @tap="confirmAction('start')">开始烹饪</view><text class="field-label">调整原因</text><input v-model="reopenReason" :disabled="busy" maxlength="300" class="entry" placeholder="请输入本次调整的原因" /><view class="secondary" @tap="confirmAction('reopen')">调整菜单</view></view>
+        <view v-if="['CONFIRMED','COOKING'].includes(meal.status)" class="secondary" @tap="finishCooking">完成用餐</view>
         <view v-if="!['COMPLETED','CANCELLED'].includes(meal.status)" class="small-action" @tap="confirmAction('cancel')">取消这顿餐点</view>
       </view>
-      <view v-if="meal?.snapshotVersion" class="secondary" @tap="showHistory">查看历史菜单快照（{{meal.snapshotVersion}}版）</view><view v-for="entry in history" :key="entry.version" class="form-box"><text>版本{{entry.version}} · {{entry.createdAt}}</text><view v-for="dish in entry.data.dishes" :key="dish.recipeId" class="history-row"><text>{{dish.recipe.name}} × {{Number(dish.cookMultiplier)}}份</text><text class="material">{{dish.recipe.ingredients.map(i=>i.ingredient.name+' '+formatQuantity(i.quantity)+' '+i.unit).join('、')}}</text><text class="material">调料：{{dish.recipe.seasonings.map(s=>s.name).join('、')}}</text></view></view>
+      <view v-if="meal?.snapshotVersion" class="secondary" @tap="showHistory">查看历史菜单</view><view v-for="entry in history" :key="entry.version" class="form-box"><text>{{entry.createdAt}}</text><view v-for="dish in entry.data.dishes" :key="dish.recipeId" class="history-row"><text>{{dish.recipe.name}} × {{Number(dish.cookMultiplier)}}份</text><text class="material">{{dish.recipe.ingredients.map(i=>i.ingredient.name+' '+formatQuantity(i.quantity)+' '+i.unit).join('、')}}</text><text class="material">调料：{{dish.recipe.seasonings.map(s=>s.name).join('、')}}</text></view></view>
       </template>
     </view>
     <view v-if="recipeDetail" class="recipe-detail-mask" @tap="closeRecipeDetail">
@@ -343,9 +384,64 @@ onUnload(()=>{disposed=true;hide();resume=undefined;});
   </view>
 </template>
 <style scoped>
-.page{min-height:100vh;padding:36rpx 28rpx 48rpx;background:#fff7e9}.label,.title,.field-label,.field-value,.recipe-name,.recipe-meta,.block-title,.amount-text{display:block}.label{font-size:23rpx;letter-spacing:3rpx;color:#9a7746}.title{margin-top:8rpx;font-size:42rpx;font-weight:700;color:#55452f}.tabs{display:flex;margin:28rpx 0 22rpx;padding:7rpx;border-radius:20rpx;background:#f5e8d0}.tab{flex:1;padding:16rpx 4rpx;border-radius:15rpx;text-align:center;color:#876f50;font-size:24rpx}.tab.selected{background:#fffdf8;color:#5c472e;font-weight:600}.picker-row{display:flex;justify-content:space-between;padding:24rpx;border-radius:24rpx;background:#fffdf8}.field-label{font-size:20rpx;color:#a49788}.field-value{margin-top:8rpx;font-size:28rpx;color:#4e463c}.meal-types{display:flex;gap:9rpx;margin-top:8rpx}.meal-type{padding:7rpx 11rpx;border-radius:99rpx;background:#f1ece4;color:#8b8378;font-size:20rpx}.meal-type.chosen{background:#f7d99a;color:#795321}.categories{white-space:nowrap;margin:22rpx 0}.category{display:inline-block;margin-right:12rpx;padding:12rpx 20rpx;border-radius:99rpx;background:#fffdf8;color:#837668;font-size:23rpx}.category.chosen{background:#dfb96c;color:#fff}.recipe-card{display:flex;align-items:center;gap:16rpx;margin-top:15rpx;padding:22rpx;border-radius:24rpx;background:#fffdf8}.recipe-icon{display:flex;align-items:center;justify-content:center;width:66rpx;height:66rpx;border-radius:20rpx;background:#fbe4b4;font-size:31rpx}.recipe-info{min-width:0;flex:1}.recipe-name{font-size:28rpx;color:#54483b}.recipe-meta{max-width:100%;margin-top:7rpx;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:20rpx;color:#a09382}.add,.status,.publish,.archive-action,.restore-action{flex:none;margin-left:auto;padding:10rpx 14rpx;border-radius:99rpx;color:#967d5b;font-size:21rpx}.add{border:2rpx solid #dec497}.add.added{border-color:#71a57a;background:#e1f0df;color:#4f8058}.status{background:#e2f0df;color:#54825c}.publish{background:#f6ddb0;color:#8c5c20}.archive-action{background:#fbe5dc;color:#a05d43}.restore-action{background:#e3eee0;color:#54825c}.primary,.secondary{margin-top:28rpx;padding:25rpx;border-radius:24rpx;text-align:center;font-size:28rpx}.primary{background:#d99c48;color:#fff}.secondary{border:2rpx solid #d99c48;color:#9b6525}.recipe-actions{display:flex;justify-content:space-between;align-items:center;padding:20rpx 4rpx;color:#8b7b68;font-size:23rpx}.new-recipe{padding:12rpx 16rpx;border-radius:16rpx;background:#d99c48;color:#fff}.hint{margin-top:25rpx;color:#968c80;font-size:21rpx;line-height:1.6}.meal-summary{display:flex;justify-content:space-between;margin-bottom:15rpx;padding:23rpx;border-radius:22rpx;background:#fff0cd;color:#765328;font-size:25rpx}.menu-item,.ingredient-row{display:flex;align-items:center;justify-content:space-between;padding:22rpx;border-bottom:1rpx solid #eee5d6;background:#fffdf8;color:#574d42;font-size:25rpx}.person{color:#9b8e7e;font-size:21rpx}.ingredients{margin-top:24rpx;border-radius:20rpx;overflow:hidden}.block-title{padding:20rpx;background:#f5ead4;color:#785b35;font-size:25rpx}.plain-title{padding:0;background:transparent}.inline-form{display:flex;align-items:center;gap:12rpx}.category-entry{min-width:0;flex:1}.ingredient-row{gap:14rpx;font-size:23rpx}.ingredient-row.shortage{background:#fff1ec}.ingredient-row.sufficient{background:#f1f8ee}.check{display:flex;align-items:center;justify-content:center;width:34rpx;height:34rpx;border:2rpx solid #d6b58c;border-radius:10rpx;color:#c47639}.ingredient-name{min-width:0;flex:1}.amount-text{margin-top:5rpx;color:#9b9387;font-size:19rpx}.stock-status{flex:none;color:#b06a3e;font-size:21rpx}.sufficient .stock-status{color:#5f8b63}.empty{margin-top:80rpx;text-align:center;color:#8f867a;font-size:27rpx}.back{display:inline-block;margin-top:24rpx;padding:17rpx 30rpx;border-radius:18rpx;background:#d99c48;color:white}
-.form-box{margin-top:24rpx;padding:24rpx;border-radius:22rpx;background:#fffdf7}.entry{min-height:88rpx;border:2rpx solid #e4d7bd;border-radius:16rpx;padding:0 16rpx;margin-top:12rpx;font-size:28rpx}.form-box button{margin-top:12rpx;font-size:28rpx}.menu-item{display:block}.menu-line{display:flex;justify-content:space-between;align-items:center;gap:16rpx}.servings{width:130rpx}.small-action{padding:20rpx;color:#8b5d23}.material{display:block;margin-top:10rpx;color:#7c756b;font-size:24rpx}.error{padding:24rpx;background:#fff0e9;color:#ab4f28;line-height:1.6}.history-row{padding:18rpx;border-bottom:1rpx solid #e4d7bd}.needs_check .stock-status{color:#ac5a24}.ingredient-row{align-items:flex-start}.hint{font-size:26rpx}.person{font-size:24rpx}.ingredient-row.absent{background:#fff1ec}.ingredient-row.present{background:#f1f8ee}.recipe-cover{width:100rpx;height:100rpx;flex:none;border-radius:20rpx;background:#fbe4b4}
-.category-manage-row{display:flex;align-items:center;justify-content:space-between;padding:18rpx 0;border-bottom:1rpx solid #eee5d6;color:#574d42;font-size:25rpx}.archive-link{padding:20rpx;color:#aa6245}.category-editor{margin-top:16rpx;padding-top:8rpx;border-top:2rpx dashed #e4d7bd}.order-entry{width:220rpx}
-.detail-link,.detail-source{display:block;margin-top:14rpx;color:#8b652f;font-size:25rpx}.recipe-detail-mask{position:fixed;inset:0;z-index:50;display:flex;align-items:center;padding:28rpx;box-sizing:border-box;background:rgba(45,38,27,.45)}.recipe-detail-panel{width:100%;padding:26rpx;box-sizing:border-box;border-radius:28rpx;background:#fffdf7}.recipe-detail-content{height:65vh;margin-top:20rpx}.detail-cover{width:100%;height:300rpx;border-radius:18rpx}.detail-step{display:block;padding:20rpx 4rpx;font-size:28rpx;line-height:1.7;color:#574d42;white-space:pre-wrap}.recipe-detail-panel .block-title{margin-top:20rpx}.detail-source{font-size:24rpx;color:#8b7b68}
-.ordering-guide{margin-top:22rpx;padding:24rpx;border-radius:22rpx;background:#fffdf7}.order-start{display:flex;align-items:center;justify-content:center;min-height:88rpx;margin:20rpx 0 0;padding:18rpx 24rpx;box-sizing:border-box;border-radius:20rpx;background:#d99c48;color:#fff;font-size:28rpx;line-height:1.5}.order-start::after,.add::after{border:0}.secondary-order{border:2rpx solid #d99c48;background:#fffdf7;color:#9b6525}.recipe-card button.add{display:flex;align-items:center;justify-content:center;min-height:88rpx;max-width:220rpx;box-sizing:border-box;white-space:normal;background:#fffdf8;font-size:26rpx;line-height:1.5}.recipe-card button.add.added{background:#e1f0df}.order-start[disabled],.recipe-card button.add[disabled]{opacity:.55}
+.page{box-sizing:border-box;min-height:100vh;padding:24rpx 32rpx 48rpx;background:#f7f6ef;color:#34453b;font-size:14px;line-height:1.55}
+.heading{padding:8rpx 0 24rpx}.title{display:block;font-size:22px;font-weight:600;line-height:1.35}
+.tabs{display:flex;gap:8rpx;padding:6rpx;margin-bottom:24rpx;background:#e8ede3;border-radius:22rpx}
+.tab{flex:1;min-height:44px;display:flex;align-items:center;justify-content:center;padding:0 8rpx;box-sizing:border-box;border-radius:18rpx;font-size:14px;color:#53624f}
+.tab.selected{background:#38674f;color:#fff;font-weight:500}
+.picker-row{padding:20rpx 24rpx;background:#fffdf7;border-radius:24rpx}
+.field-value{display:block;min-height:44px;line-height:44px;font-size:14px}
+.meal-types{display:flex;gap:12rpx;margin-top:12rpx}
+.meal-type{flex:1;min-height:44px;display:flex;justify-content:center;align-items:center;border-radius:16rpx;background:#efeee6;color:#53624f;font-size:13px}
+.meal-type.chosen{background:#e7c46a;color:#4b3d19;font-weight:500}
+.categories{white-space:nowrap;margin:20rpx 0}
+.category{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-height:44px;padding:0 24rpx;margin-right:12rpx;border-radius:18rpx;background:#fffdf7;color:#53624f;font-size:13px}
+.category.chosen{background:#dce8d5;color:#31543f;font-weight:600}
+.recipe-card{display:flex;flex-wrap:wrap;align-items:center;gap:16rpx;margin-top:16rpx;padding:24rpx;border-radius:24rpx;background:#fffdf7}
+.order-card{display:block}.recipe-main{display:flex;align-items:center;gap:24rpx;min-width:0}
+.recipe-cover,.recipe-placeholder{width:144rpx;height:144rpx;flex:none;border-radius:16rpx;background:#e9eee1}
+.recipe-placeholder{display:flex;align-items:center;justify-content:center;font-size:12px;color:#53624f}
+.library-card .recipe-info{flex-basis:100%}.library-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:12rpx;width:100%;border-top:1px solid #e9eee3;padding-top:8rpx}
+.recipe-info{min-width:0;flex:1}.recipe-name{display:block;font-size:16px;font-weight:600;overflow-wrap:anywhere}
+.material{display:block;margin-top:8rpx;color:#667267;font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.recipe-summary{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.detail-link{display:block;margin-top:10rpx;color:#38674f;font-size:12px}
+.recipe-footer{display:flex;align-items:center;justify-content:flex-end;gap:16rpx;margin-top:12rpx}
+.selection-note{color:#38674f;font-size:12px}
+.recipe-card button.add{display:flex;align-items:center;justify-content:center;box-sizing:border-box;width:88px;min-width:88px;max-width:88px;min-height:44px;padding:0 10px;margin:0;border:1px solid #38674f;border-radius:12px;background:#fffdf7;color:#38674f;font-size:14px;line-height:1.4;white-space:normal}
+.recipe-card button.add.added{background:#e6eee3;border-color:#e6eee3;color:#31543f}
+button::after{border:0}.tab:active,.category:active,.meal-type:active,.recipe-main:active{opacity:.75}
+.primary,.secondary,.order-start{display:flex;justify-content:center;align-items:center;box-sizing:border-box;min-height:48px;margin-top:24rpx;padding:18rpx 24rpx;border-radius:20rpx;font-size:14px;line-height:1.5}
+.primary,.order-start{background:#38674f;color:#fff}.secondary,.secondary-order{border:1px solid #38674f;background:#fffdf7;color:#38674f}
+button[disabled],.disabled{opacity:.55}.recipe-meta,.detail-source{display:block;margin-top:8rpx;color:#667267;font-size:12px;overflow-wrap:anywhere}
+.status,.publish,.archive-action,.restore-action,.small-action,.archive-link{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16rpx;box-sizing:border-box;font-size:13px;color:#38674f}
+.archive-action,.archive-link{color:#9b4132}.status{color:#53624f}.category-toolbar{text-align:right}
+.form-box,.ordering-guide{margin-top:24rpx;padding:24rpx;border-radius:24rpx;background:#fffdf7}
+.field-label{display:block;margin-top:16rpx;font-size:13px;color:#53624f}
+.entry{box-sizing:border-box;min-height:44px;min-width:0;border:1px solid #cdd6c6;border-radius:14rpx;padding:0 16rpx;margin-top:12rpx;background:#fffdf7;font-size:14px;color:#34453b}
+.inline-form{display:flex;align-items:center;gap:12rpx}.category-entry{flex:1}
+.category-manage-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12rpx;padding:16rpx 0;border-bottom:1px solid #e5e8dc}
+.category-editor{margin-top:16rpx;border-top:1px solid #e5e8dc}
+.hint{margin:20rpx 0;color:#667267;font-size:13px;line-height:1.6}
+.error{margin:16rpx 0;padding:24rpx;border-radius:16rpx;background:#fff0e9;color:#953d2c;overflow-wrap:anywhere}
+.empty{padding:60rpx 24rpx;text-align:center;color:#667267;font-size:14px}
+.meal-summary,.menu-line{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:16rpx}
+.meal-summary{margin-top:24rpx;padding:24rpx;border-radius:20rpx;background:#e9eee1}
+.menu-item{padding:24rpx;margin-top:16rpx;border-radius:20rpx;background:#fffdf7}
+.person{color:#667267;font-size:13px}.servings{width:144rpx}
+.ingredients{margin-top:24rpx;border-radius:20rpx;overflow:hidden;background:#fffdf7}
+.block-title{display:block;padding:20rpx 24rpx;background:#e9eee1;font-size:14px;font-weight:600}.plain-title{padding:0;background:transparent}
+.ingredient-row{display:flex;align-items:flex-start;gap:16rpx;padding:24rpx;border-bottom:1px solid #e5e8dc;font-size:13px}
+.ingredient-row.shortage,.ingredient-row.absent{background:#fff0e9}.ingredient-row.sufficient,.ingredient-row.present{background:#eef4e8}
+.check{flex:none;display:flex;align-items:center;justify-content:center;width:44px;height:44px;box-sizing:border-box;border:1px solid #b5beaa;border-radius:12px;color:#38674f}
+.ingredient-name{min-width:0;flex:1}.amount-text{display:block;margin-top:8rpx;color:#667267;font-size:12px}
+.stock-status{max-width:40%;overflow-wrap:anywhere;color:#953d2c;font-size:12px}.sufficient .stock-status,.present .stock-status{color:#38674f}
+.history-row{padding:20rpx 0;border-bottom:1px solid #e5e8dc}
+.recipe-detail-mask{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:24rpx;box-sizing:border-box;background:rgba(35,43,36,.45)}
+.recipe-detail-panel{box-sizing:border-box;width:100%;max-height:86vh;display:flex;flex-direction:column;padding:24rpx;border-radius:28rpx;background:#fffdf7}
+.recipe-detail-panel .menu-line{flex-wrap:nowrap;flex:none}.recipe-detail-panel .recipe-name{min-width:0;flex:1}.recipe-detail-panel .small-action{flex:none}
+.recipe-detail-content{height:58vh;min-height:0;margin-top:16rpx}
+.detail-cover{width:100%;height:280rpx;border-radius:18rpx}
+.detail-step{display:block;padding:20rpx 0;font-size:14px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}
+.recipe-detail-panel .block-title{margin-top:20rpx}
 </style>

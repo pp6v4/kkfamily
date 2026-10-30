@@ -12,9 +12,8 @@ export default {
 </script>
 
 <style>
-page { background: #f6f8fb; color: #162033; font-family: -apple-system, BlinkMacSystemFont, "Microsoft YaHei", sans-serif; }
+page { --home-bg:#f7f6ef; --home-ink:#34453b; --home-primary:#38674f; --home-muted:#667267; background:var(--home-bg); color:var(--home-ink); font-family:-apple-system,BlinkMacSystemFont,"Microsoft YaHei",sans-serif; font-size:14px; line-height:1.55; }
 /* Native inputs have a small platform default height. Keep their text area
    visible even when a page adds padding inside a border-box field. */
 input { box-sizing: border-box; height: 88rpx; min-height: 88rpx; }
 </style>
-

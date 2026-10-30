@@ -1,32 +1,131 @@
 {
   "pages": [
-    { "path": "pages/index/index", "style": { "navigationBarTitleText": "日历" } },
-    { "path": "pages/meal/index", "style": { "navigationBarTitleText": "今天吃什么" } },
-    { "path": "pages/shopping/index", "style": { "navigationBarTitleText": "购物清单" } },
-    { "path": "pages/camping/index", "style": { "navigationBarTitleText": "露营出行" } },
-    { "path": "pages/profile/index", "style": { "navigationBarTitleText": "我的家" } },
-    { "path": "pages/date-detail/index", "style": { "navigationBarTitleText": "当天安排" } },
-    { "path": "pages/recipe-editor/index", "style": { "navigationBarTitleText": "添加菜谱" } },
-    { "path": "pages/join/index", "style": { "navigationBarTitleText": "欢迎回家" } },
-    { "path": "pages/members/index", "style": { "navigationBarTitleText": "成员与权限" } },
-    { "path": "pages/tasks/index", "style": { "navigationBarTitleText": "家庭待办" } }
-    ,{ "path": "pages/favorites/index", "style": { "navigationBarTitleText": "收藏与灵感" } }
-    ,{ "path": "pages/archive/index", "style": { "navigationBarTitleText": "家庭档案" } }
-    ,{ "path": "pages/dashboard/index", "style": { "navigationBarTitleText": "生活小看板" } }
-    ,{ "path": "pages/notifications/index", "style": { "navigationBarTitleText": "消息与提醒" } }
+    {
+      "path": "pages/index/index",
+      "style": {
+        "navigationBarTitleText": "日历"
+      }
+    },
+    {
+      "path": "pages/meal/index",
+      "style": {
+        "navigationBarTitleText": "今天吃什么"
+      }
+    },
+    {
+      "path": "pages/shopping/index",
+      "style": {
+        "navigationBarTitleText": "购物清单"
+      }
+    },
+    {
+      "path": "pages/camping/index",
+      "style": {
+        "navigationBarTitleText": "露营出行"
+      }
+    },
+    {
+      "path": "pages/profile/index",
+      "style": {
+        "navigationBarTitleText": "我的家"
+      }
+    },
+    {
+      "path": "pages/date-detail/index",
+      "style": {
+        "navigationBarTitleText": "当天安排"
+      }
+    },
+    {
+      "path": "pages/recipe-editor/index",
+      "style": {
+        "navigationBarTitleText": "添加菜谱"
+      }
+    },
+    {
+      "path": "pages/join/index",
+      "style": {
+        "navigationBarTitleText": "欢迎回家"
+      }
+    },
+    {
+      "path": "pages/members/index",
+      "style": {
+        "navigationBarTitleText": "成员与权限"
+      }
+    },
+    {
+      "path": "pages/tasks/index",
+      "style": {
+        "navigationBarTitleText": "家庭待办"
+      }
+    },
+    {
+      "path": "pages/favorites/index",
+      "style": {
+        "navigationBarTitleText": "收藏与灵感"
+      }
+    },
+    {
+      "path": "pages/archive/index",
+      "style": {
+        "navigationBarTitleText": "家庭档案"
+      }
+    },
+    {
+      "path": "pages/dashboard/index",
+      "style": {
+        "navigationBarTitleText": "生活小看板"
+      }
+    },
+    {
+      "path": "pages/notifications/index",
+      "style": {
+        "navigationBarTitleText": "消息与提醒"
+      }
+    }
   ],
-  "globalStyle": { "navigationBarTextStyle": "black", "navigationBarBackgroundColor": "#fffdf7", "backgroundColor": "#f7f3e8" },
+  "globalStyle": {
+    "navigationBarTextStyle": "black",
+    "navigationBarBackgroundColor": "#fffdf7",
+    "backgroundColor": "#f7f3e8"
+  },
   "tabBar": {
-    "color": "#8f897e",
-    "selectedColor": "#4e9c78",
+    "color": "#667267",
+    "selectedColor": "#38674f",
     "backgroundColor": "#fffdf7",
     "borderStyle": "white",
     "list": [
-      { "pagePath": "pages/index/index", "text": "日历" },
-      { "pagePath": "pages/meal/index", "text": "吃什么" },
-      { "pagePath": "pages/camping/index", "text": "去露营" },
-      { "pagePath": "pages/shopping/index", "text": "买东西" },
-      { "pagePath": "pages/profile/index", "text": "我的家" }
+      {
+        "pagePath": "pages/index/index",
+        "text": "日历",
+        "iconPath": "static/icons/calendar.png",
+        "selectedIconPath": "static/icons/calendar-active.png"
+      },
+      {
+        "pagePath": "pages/meal/index",
+        "text": "吃什么",
+        "iconPath": "static/icons/bowl.png",
+        "selectedIconPath": "static/icons/bowl-active.png"
+      },
+      {
+        "pagePath": "pages/camping/index",
+        "text": "去露营",
+        "iconPath": "static/icons/tent.png",
+        "selectedIconPath": "static/icons/tent-active.png"
+      },
+      {
+        "pagePath": "pages/shopping/index",
+        "text": "买东西",
+        "iconPath": "static/icons/bag.png",
+        "selectedIconPath": "static/icons/bag-active.png"
+      },
+      {
+        "pagePath": "pages/profile/index",
+        "text": "我的家",
+        "iconPath": "static/icons/home.png",
+        "selectedIconPath": "static/icons/home-active.png"
+      }
     ]
   }
 }

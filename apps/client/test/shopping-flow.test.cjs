@@ -5,7 +5,8 @@ const path = require('node:path');
 const vm = require('node:vm');
 const ts = require('typescript');
 const vue = require('vue');
-const { parse, compileScript } = require('vue/compiler-sfc');
+const { parse, compileScript, compileTemplate } = require('vue/compiler-sfc');
+const { renderToString } = require('vue/server-renderer');
 const ROOT = path.resolve(__dirname, '..');
 class ApiError extends Error { constructor(message, statusCode) { super(message); this.statusCode=statusCode; } }
 const context={householdId:'house-a',membershipId:'member-a',effectivePermissions:{shopping:'EDIT',inventory:'EDIT'}};
@@ -28,6 +29,21 @@ function form(api={},access){
   const filename=path.join(ROOT,'src/pages/shopping/index.vue'),{descriptor}=parse(fs.readFileSync(filename,'utf8'),{filename});
   const page=evaluate(compileScript(descriptor,{id:'shopping-test',inlineTemplate:false}).content,deps,uni).default.setup({},{expose(){}});
   return{page,life,toasts,setStored:value=>stored=value};
+}
+async function renderPage(page,tapButton){
+  const filename=path.join(ROOT,'src/pages/shopping/index.vue'),{descriptor}=parse(fs.readFileSync(filename,'utf8'),{filename});
+  const script=compileScript(descriptor,{id:'shopping-render',inlineTemplate:false});
+  const compiled=compileTemplate({source:descriptor.template.content,filename,id:'shopping-render',compilerOptions:{bindingMetadata:script.bindings,isCustomElement:tag=>['view','text','input','button','picker'].includes(tag)}});
+  assert.deepEqual(compiled.errors,[]);
+  const{render}=evaluate(compiled.code,{vue},{});let tree;
+  const html=await renderToString(vue.createSSRApp({setup:()=>()=>{tree=render({},[],{},vue.proxyRefs(page));return tree;}}));
+  const text=value=>Array.isArray(value)?value.map(text).join(''):value&&typeof value==='object'?text(value.children):typeof value==='string'?value:'';
+  const find=predicate=>{const result=[];const visit=value=>{if(Array.isArray(value)){value.forEach(visit);return;}if(!value||typeof value!=='object')return;if(predicate(value))result.push(value);visit(value.children);};visit(tree);return result;};
+  if(tapButton){
+    const buttons=find(value=>value.type==='button'&&text(value.children)===tapButton);assert.equal(buttons.length,1,'Exactly one visible button: '+tapButton);
+    assert.equal(Boolean(buttons[0].props?.disabled),false);assert.equal(typeof buttons[0].props?.onTap,'function');await buttons[0].props.onTap({});
+  }
+  return{html,texts:className=>find(value=>String(value.props?.class??'').split(/\s+/).includes(className)).map(value=>text(value.children))};
 }
 
 test('Shopping and stock privacy: hide/unload clears lists, forms and ignores old reads',async()=>{
@@ -88,7 +104,7 @@ test('Repeat retries reuse request ids for one identity, not another; purchased 
 });
 test('Manual stock input matches DTO: zero allowed, unknown blank, seasoning omits quantity/unit',async()=>{
   const sent=[],{page,life}=form({setInventoryItem:async input=>sent.push(input)});await life.show();
-  assert.equal(page.stockText({...stock,quantity:null,availability:'PRESENT'}),'有 · 数量待确认');assert.equal(page.stockText({...stock,quantity:'0',availability:'ABSENT'}),'0 g');assert.equal(page.stockText({...stock,ingredient:{kind:'SEASONING'},quantity:null,availability:'UNKNOWN'}),'待确认');
+  assert.equal(page.stockText({...stock,quantity:null,availability:'PRESENT'}),'有 · 数量待确认 · g');assert.equal(page.stockText({...stock,quantity:'0',availability:'ABSENT'}),'0 g');assert.equal(page.stockText({...stock,ingredient:{kind:'SEASONING'},quantity:null,availability:'UNKNOWN'}),'待确认');
   page.stockItem.value={...page.stockItem.value,name:' 番茄 ',quantity:'0',unit:' g '};await page.saveStock();assert.equal(sent[0].quantity,0);assert.equal(sent[0].availability,undefined);assert.equal(sent[0].name,'番茄');
   page.stockItem.value={...page.stockItem.value,name:'鸡蛋',quantity:'',availability:'UNKNOWN'};await page.saveStock();assert.equal(sent[1].quantity,undefined);assert.equal(sent[1].availability,'UNKNOWN');
   page.chooseKind('SEASONING');page.stockItem.value.name='盐';page.stockItem.value.quantity='999';page.stockItem.value.unit='g';page.chooseAvailability('PRESENT');await page.saveStock();assert.equal(sent[2].kind,'SEASONING');assert.equal(sent[2].quantity,undefined);assert.equal(sent[2].unit,undefined);assert.equal(sent[2].availability,'PRESENT');
@@ -127,4 +143,34 @@ test('Live permission revocation or account change prevents direct-handler write
     setStored(change==='permission'?{...context,effectivePermissions:{shopping:'VIEW',inventory:'VIEW'}}:{...context,membershipId:'other'});
     await page.setStatus(item,'NEXT_TRIP');await page.saveStock();assert.equal(writes,0);assert.equal(page.items.value.length,0);assert.equal(page.inventory.value.length,0);
   }
+});
+
+test('Rendered manual inventory retains different units after saving unknown quantities, including for viewers',async()=>{
+  const saved=[],sent=[];const{page,life,setStored}=form({listShoppingLists:async()=>[],listInventory:async()=>saved,setInventoryItem:async input=>{
+    sent.push(input);saved.push({id:'saved-'+saved.length,version:1,ingredient:{id:'flour',name:input.name,kind:input.kind},quantity:input.quantity??null,unit:input.unit,location:input.location??null,availability:input.availability,expiresAt:null});
+  }});
+  await life.show();page.switchView('inventory');
+  for(const unit of ['g','kg']){await renderPage(page,'＋ 登记库存');page.stockItem.value={...page.stockItem.value,name:'面粉',quantity:'',unit,availability:'UNKNOWN'};await renderPage(page,'登记库存');}
+  assert.equal(saved.length,2);assert.deepEqual(sent.map(input=>({quantity:input.quantity,availability:input.availability,unit:input.unit})),[{quantity:undefined,availability:'UNKNOWN',unit:'g'},{quantity:undefined,availability:'UNKNOWN',unit:'kg'}]);
+  assert.deepEqual(saved.map(row=>row.quantity),[null,null]);
+  setStored({...context,effectivePermissions:{inventory:'VIEW'}});await life.show();
+  const rendered=await renderPage(page);assert.deepEqual(rendered.texts('stock-quantity'),['待确认 · 数量待确认 · g','待确认 · 数量待确认 · kg']);assert.doesNotMatch(rendered.html,/核实 \/ 调整/);
+});
+
+test('Rendered shopping keeps a saved unknown quantity unit and clean labels for missing units, zero and decimal quantities',async()=>{
+  const rows=[],sent=[];const{page,life}=form({listShoppingLists:async()=>[{items:rows}],listInventory:async()=>[],addShoppingItem:async input=>{
+    sent.push(input);rows.push({...item,id:'saved',...input,quantity:input.quantity??null,unit:input.unit??null});
+  }});
+  await life.show();await renderPage(page,'＋ 添加物品');page.newItem.value={name:'面粉',quantity:'',unit:'kg'};await renderPage(page,'记到清单');
+  assert.equal(sent[0].quantity,undefined);assert.equal(sent[0].unit,'kg');assert.equal(rows[0].quantity,null);
+  for(const [id,quantity,unit]of [['missing-unit',null,null],['known-decimal','200.125','g'],['known-zero','0',''],['maximum','999999999.999','g']])rows.push({...item,id,quantity,unit,status:'NEXT_TRIP'});
+  await life.show();const rendered=await renderPage(page);
+  assert.deepEqual(rendered.texts('category'),['下次超市 · 数量待确认 · kg','下次超市 · 数量待确认','下次超市 · 200.125 g','下次超市 · 0','下次超市 · 999999999.999 g']);assert.doesNotMatch(rendered.html,/undefined|null|NaN/);
+});
+
+test('Rendered stock leaves seasonings unitless and preserves known zero and decimal quantities',async()=>{
+  const rows=[{...stock,id:'zero',quantity:'0',availability:'ABSENT'},{...stock,id:'decimal',quantity:'200.125'}];
+  for(const [id,availability]of [['salt','PRESENT'],['vinegar','ABSENT'],['pepper','UNKNOWN']])rows.push({...stock,id,ingredient:{id,name:id,kind:'SEASONING'},quantity:null,unit:'',availability});
+  const{page,life}=form({listInventory:async()=>rows});await life.show();page.switchView('inventory');const rendered=await renderPage(page);
+  assert.deepEqual(rendered.texts('stock-quantity'),['0 g','200.125 g','有','无','待确认']);assert.doesNotMatch(rendered.html,/undefined|null|NaN/);
 });
