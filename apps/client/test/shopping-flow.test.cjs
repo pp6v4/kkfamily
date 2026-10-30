@@ -150,7 +150,7 @@ test('Rendered manual inventory retains different units after saving unknown qua
     sent.push(input);saved.push({id:'saved-'+saved.length,version:1,ingredient:{id:'flour',name:input.name,kind:input.kind},quantity:input.quantity??null,unit:input.unit,location:input.location??null,availability:input.availability,expiresAt:null});
   }});
   await life.show();page.switchView('inventory');
-  for(const unit of ['g','kg']){page.stockItem.value={...page.stockItem.value,name:'面粉',quantity:'',unit,availability:'UNKNOWN'};await renderPage(page,'登记库存');}
+  for(const unit of ['g','kg']){await renderPage(page,'＋ 登记库存');page.stockItem.value={...page.stockItem.value,name:'面粉',quantity:'',unit,availability:'UNKNOWN'};await renderPage(page,'登记库存');}
   assert.equal(saved.length,2);assert.deepEqual(sent.map(input=>({quantity:input.quantity,availability:input.availability,unit:input.unit})),[{quantity:undefined,availability:'UNKNOWN',unit:'g'},{quantity:undefined,availability:'UNKNOWN',unit:'kg'}]);
   assert.deepEqual(saved.map(row=>row.quantity),[null,null]);
   setStored({...context,effectivePermissions:{inventory:'VIEW'}});await life.show();
@@ -161,7 +161,7 @@ test('Rendered shopping keeps a saved unknown quantity unit and clean labels for
   const rows=[],sent=[];const{page,life}=form({listShoppingLists:async()=>[{items:rows}],listInventory:async()=>[],addShoppingItem:async input=>{
     sent.push(input);rows.push({...item,id:'saved',...input,quantity:input.quantity??null,unit:input.unit??null});
   }});
-  await life.show();page.newItem.value={name:'面粉',quantity:'',unit:'kg'};await renderPage(page,'记到清单');
+  await life.show();await renderPage(page,'＋ 添加物品');page.newItem.value={name:'面粉',quantity:'',unit:'kg'};await renderPage(page,'记到清单');
   assert.equal(sent[0].quantity,undefined);assert.equal(sent[0].unit,'kg');assert.equal(rows[0].quantity,null);
   for(const [id,quantity,unit]of [['missing-unit',null,null],['known-decimal','200.125','g'],['known-zero','0',''],['maximum','999999999.999','g']])rows.push({...item,id,quantity,unit,status:'NEXT_TRIP'});
   await life.show();const rendered=await renderPage(page);

@@ -37,13 +37,13 @@ function clearView(){viewEpoch++;session.value=undefined;favorites.value=[];sele
 async function load(target=targetForSelection()||returnTarget){
   const previousNotice=notice.value;clearView();returnTarget=undefined;const epoch=viewEpoch;busy.value=true;
   try{
-    const context=await refreshAccess();if(epoch!==viewEpoch||!canAccess(context,'favorites'))return false;
+    const context=await refreshAccess();if(epoch!==viewEpoch)return false;if(!canAccess(context,'favorites')){notice.value='尚未获得收藏权限';return false;}
     const rows=await listFavorites();if(epoch!==viewEpoch)return false;
     const candidate=target&&matches(context,target)?rows.find(item=>item.id===target.id):undefined;
     const detail=candidate?await getFavorite(candidate.id):undefined;if(epoch!==viewEpoch)return false;
     const urls=detail?await imageUrls(detail,epoch):[];if(epoch!==viewEpoch)return false;
     session.value=context;favorites.value=rows;selected.value=detail;previews.value=urls;return true;
-  }catch(error){if(epoch===viewEpoch){if(responseStatus(error)!==401&&responseStatus(error)!==403){returnTarget=target;notice.value=previousNotice;}uni.showToast({title:message(error),icon:'none'});}return false;}
+  }catch(error){if(epoch===viewEpoch){if(responseStatus(error)!==401&&responseStatus(error)!==403){returnTarget=target;notice.value=previousNotice;}notice.value=[401,403].includes(Number(responseStatus(error)))?message(error):(previousNotice||message(error));uni.showToast({title:message(error),icon:'none'});}return false;}
   finally{if(epoch===viewEpoch)busy.value=false;}
 }
 async function reloadSaved(target:ReturnTarget,success:string){
@@ -139,18 +139,19 @@ onUnload(unloadPage);
 
 <template>
   <view class="page">
-    <view class="head"><text class="eyebrow">收藏与灵感</text><text class="title">喜欢的，先收起来</text><text class="subtitle">记文字、图片或链接；不自动抓取网页内容。</text></view>
+    <text v-if="busy && !session" class="empty">正在读取收藏…</text>
+    <view class="head"><text class="eyebrow">收藏与灵感</text><text class="title">喜欢的，先收起来</text><text class="subtitle">记录文字、图片和链接。</text></view>
     <view v-if="notice" class="card"><text class="note">{{notice}}</text><button :disabled="busy" @tap="load()">重试读取</button></view>
     <text v-if="uploading" class="subtitle">正在处理所选图片…</text>
     <template v-if="!selected&&!showForm">
       <view v-for="item in favorites" :key="item.id" class="favorite" @tap="openFavorite(item)"><view class="stamp">{{item.type==='LINK'?'🔗':item.type==='IMAGE'?'🖼️':'💡'}}</view><view class="grow"><text class="favorite-title">{{item.title}}</text><text class="meta">{{typeLabel(item.type)}} · {{item.visibility==='PRIVATE'?'仅自己':'家庭可见'}} · {{personName(item)}}</text><view v-if="item.tags?.length" class="tags"><text v-for="tag in item.tags" :key="tag">#{{tag}}</text></view></view><text class="go">›</text></view>
-      <text v-if="!favorites.length" class="empty">还没有收藏，先记下一点想法吧。</text>
+      <text v-if="!busy && !notice && !favorites.length" class="empty">还没有收藏，先记下一点想法吧。</text>
       <view v-if="canAccess(session,'favorites','EDIT')" class="primary" @tap="newFavorite">＋ 记录一个灵感</view>
     </template>
     <view v-if="showForm" class="card">
       <text class="back" @tap="showForm=false">‹ 返回</text><text class="card-title">{{editing?'编辑收藏':'记录一个灵感'}}</text>
       <picker :range="types" range-key="label" :value="form.typeIndex" @change="form.typeIndex=Number($event.detail.value)"><view class="input">类型：{{types[form.typeIndex].label}} ›</view></picker>
-      <input v-model="form.title" class="input" placeholder="标题"/><textarea v-model="form.text" class="textarea" placeholder="写下自己的想法（文字类型必填）"/><input v-model="form.sourceUrl" class="input" placeholder="http(s) 来源链接（链接类型必填）"/><input v-model="form.tags" class="input" placeholder="标签，用逗号分隔"/>
+      <text class="field-label">标题</text><input :cursor-spacing="100" :disabled="busy" v-model="form.title" class="input" placeholder="标题"/><text class="field-label">内容</text><textarea :cursor-spacing="100" :disabled="busy" v-model="form.text" class="textarea" placeholder="写下自己的想法（文字类型必填）"/><text class="field-label">来源链接</text><input :cursor-spacing="100" :disabled="busy" v-model="form.sourceUrl" class="input" placeholder="http(s) 来源链接（链接类型必填）"/><text class="field-label">标签</text><input :cursor-spacing="100" :disabled="busy" v-model="form.tags" class="input" placeholder="标签，用逗号分隔"/>
       <picker :range="visibilities" range-key="label" :value="form.visibilityIndex" @change="form.visibilityIndex=Number($event.detail.value)"><view class="input">可见范围：{{visibilities[form.visibilityIndex].label}} ›</view></picker>
       <view class="primary" :class="{disabled:busy}" @tap="save">{{busy?'保存中…':'保存收藏'}}</view><view class="cancel" @tap="showForm=false">取消</view>
     </view>
@@ -159,7 +160,7 @@ onUnload(unloadPage);
       <view v-if="previews.length" class="grid"><image v-for="(url,index) in previews" :key="url" class="photo" :src="url" mode="aspectFill" @tap="preview(index)"/></view>
       <view v-if="selected.tags?.length" class="tags large"><text v-for="tag in selected.tags" :key="tag">#{{tag}}</text></view><text class="owner">由 {{personName(selected)}} 收藏 · 原收藏会一直保留</text>
       <view v-if="editable" class="actions"><view @tap="editFavorite">编辑</view><view @tap="addImage">{{uploading?'上传中…':'添加图片'}}</view><view class="danger" @tap="askArchive">归档</view></view>
-      <view v-if="canAccess(session,'favorites','EDIT')" class="convert"><view v-if="!convertOpen" class="secondary" @tap="startConvert">变成可继续编辑的草稿</view><template v-else><text class="card-title small-title">转换草稿</text><picker :range="conversions" range-key="label" :value="convertIndex" @change="convertIndex=Number($event.detail.value)"><view class="input">目标：{{conversions[convertIndex].label}} ›</view></picker><input v-model="convertTitle" class="input" placeholder="确认草稿标题"/><textarea v-model="convertDescription" class="textarea short-area" placeholder="补充说明（可选）"/><text class="note">转成菜谱时不猜食材和做法，也不会自动发布；请进入草稿后自己补全。</text><view class="primary" :class="{disabled:busy}" @tap="runConvert">{{busy?'创建中…':'确认创建草稿'}}</view></template></view>
+      <view v-if="canAccess(session,'favorites','EDIT')" class="convert"><view v-if="!convertOpen" class="secondary" @tap="startConvert">创建菜谱或待办草稿</view><template v-else><text class="card-title small-title">转换草稿</text><picker :range="conversions" range-key="label" :value="convertIndex" @change="convertIndex=Number($event.detail.value)"><view class="input">目标：{{conversions[convertIndex].label}} ›</view></picker><text class="field-label">草稿标题</text><input :cursor-spacing="100" :disabled="busy" v-model="convertTitle" class="input" placeholder="确认草稿标题"/><text class="field-label">补充说明（选填）</text><textarea :cursor-spacing="100" :disabled="busy" v-model="convertDescription" class="textarea short-area" placeholder="补充说明（可选）"/><text class="note">创建后可继续补充内容。</text><view class="primary" :class="{disabled:busy}" @tap="runConvert">{{busy?'创建中…':'确认创建草稿'}}</view></template></view>
     </view>
   </view>
 </template>
@@ -167,3 +168,4 @@ onUnload(unloadPage);
 <style scoped>
 .page{min-height:100vh;padding:36rpx 28rpx 70rpx;background:linear-gradient(180deg,#fff3cf,#f7f3e8 35%)}.eyebrow,.title,.subtitle,.favorite-title,.meta,.card-title,.detail-title,.body,.owner,.note,.empty{display:block}.eyebrow{color:#bd8a49;font-size:20rpx;letter-spacing:3rpx}.title{margin-top:8rpx;color:#66523b;font-size:42rpx;font-weight:700}.subtitle{margin-top:10rpx;color:#9b8c79;font-size:22rpx}.favorite,.card{margin-top:16rpx;padding:22rpx;border:3rpx solid #fffdf6;border-radius:25rpx;background:#fffdf8;box-shadow:0 8rpx 18rpx rgba(112,91,61,.06)}.favorite{display:flex;align-items:center;gap:16rpx}.stamp{display:flex;align-items:center;justify-content:center;width:66rpx;height:66rpx;border-radius:20rpx;background:#fff0bd;font-size:34rpx}.grow{min-width:0;flex:1}.favorite-title{color:#625648;font-size:27rpx}.meta{margin-top:7rpx;color:#9b9185;font-size:19rpx}.tags{display:flex;flex-wrap:wrap;gap:9rpx;margin-top:8rpx}.tags text{padding:4rpx 9rpx;border-radius:9rpx;background:#eef1d9;color:#78805e;font-size:17rpx}.tags.large{margin-top:20rpx}.go{font-size:38rpx;color:#c8bba8}.empty{padding:80rpx 0 45rpx;color:#9a9185;text-align:center;font-size:23rpx}.primary,.secondary{margin-top:22rpx;padding:21rpx;border-radius:20rpx;background:#e3a64e;color:#fff;text-align:center;font-size:25rpx}.secondary{background:#eaf1d9;color:#6b7953}.disabled{opacity:.55}.back{display:block;margin-bottom:16rpx;color:#a47740;font-size:22rpx}.card-title{color:#665744;font-size:30rpx;font-weight:650}.input,.textarea{box-sizing:border-box;width:100%;margin-top:13rpx;padding:18rpx;border:2rpx solid #eee4d3;border-radius:15rpx;background:#fff;color:#655b50;font-size:23rpx}.textarea{height:150rpx}.short-area{height:105rpx}.cancel{padding:18rpx;text-align:center;color:#9a9187;font-size:22rpx}.badges{display:flex;gap:9rpx}.badges text{padding:7rpx 11rpx;border-radius:11rpx;background:#fff0c6;color:#98703d;font-size:18rpx}.detail-title{margin-top:18rpx;color:#5d5143;font-size:36rpx;font-weight:700}.body{margin-top:18rpx;color:#70675d;font-size:24rpx;line-height:1.7;white-space:pre-wrap}.link{display:flex;gap:15rpx;justify-content:space-between;margin-top:18rpx;padding:16rpx;border-radius:14rpx;background:#f4f0e8;color:#8f714f;font-size:20rpx;word-break:break-all}.link text{flex:none;color:#bf833a}.grid{display:grid;grid-template-columns:repeat(3,1fr);gap:9rpx;margin-top:18rpx}.photo{width:100%;height:190rpx;border-radius:15rpx;background:#eee}.owner{margin-top:21rpx;color:#a0988c;font-size:19rpx}.actions{display:flex;gap:9rpx;margin-top:18rpx}.actions view{flex:1;padding:15rpx;border-radius:14rpx;background:#f0eadf;color:#88725a;text-align:center;font-size:20rpx}.actions .danger{background:#f8e5dc;color:#a36955}.convert{margin-top:22rpx;padding-top:8rpx;border-top:1rpx solid #efe8dd}.small-title{margin-top:17rpx;font-size:25rpx}.note{margin-top:14rpx;color:#9c8f7e;font-size:19rpx;line-height:1.55}
 </style>
+<style scoped src="../../styles/page-foundation.css"></style>

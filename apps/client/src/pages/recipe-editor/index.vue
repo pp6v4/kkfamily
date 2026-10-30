@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue';
+import { computed, nextTick, ref, watch } from 'vue';
 import { onHide, onLoad, onShow, onUnload } from '@dcloudio/uni-app';
 import { confirmMediaAsset, createMediaUploadIntent, createRecipe, getMediaReadUrl, getRecipe, listRecipeCategories, publicMediaUrl, updateRecipe, uploadMediaContent, type Recipe, type RecipeCategory } from '../../services/family-api';
 import { canAccess, getStoredSession, refreshAccess, type HouseholdContext } from '../../services/session';
@@ -15,6 +15,11 @@ const coverUploading = ref(false);
 type PendingCover = { tempFilePath: string; size: number; mimeType: 'image/jpeg' | 'image/png' | 'image/webp'; localSaved?: boolean; confirmation?: { intentId: string; checksumSha256: string; expectedVersion: number } };
 const pendingCover = ref<PendingCover>();
 const name = ref('');
+const validationErrors = ref<Record<string,string>>({});
+class RecipeValidationError extends Error {
+  constructor(public field:string,message:string){super(message);}
+}
+function invalid(field:string,message:string):never{throw new RecipeValidationError(field,message);}
 const categories = ref<RecipeCategory[]>([]);
 const categoryIndex = ref(0);
 const originalCategoryId = ref<string | null>(null);
@@ -59,6 +64,7 @@ function removeStep(index: number) { if (ready() && steps.value.length > 1) step
 function pickCategory(event: { detail: { value: string } }) { if (ready()) { categoryNeedsReview.value = false; missingCategoryId.value = null; categoryIndex.value = Number(event.detail.value); checkpointDraft(); } }
 function sameIdentity(a?: HouseholdContext, b?: HouseholdContext) { return Boolean(a && b && a.householdId === b.householdId && a.membershipId === b.membershipId); }
 function clearPrivate() {
+  validationErrors.value={};
   const wasHydrating = hydrating; hydrating = true;
   session.value = undefined; recipeId.value = ''; recipeVersion.value = 0; recipeStatus.value = 'DRAFT'; name.value = '';
   coverAssetId.value = ''; coverPreview.value = ''; coverError.value = ''; pendingCover.value = undefined; categories.value = []; categoryIndex.value = 0; originalCategoryId.value = null;
@@ -185,25 +191,25 @@ function discardLocalDraft() {
 function recipeInput(draft: Draft) {
   const rows = draft.ingredients.filter(item => item.name.trim()), cleanSteps = draft.steps.map(item => item.trim()).filter(Boolean);
   const cleanSeasonings = draft.seasonings.map(item => item.trim()).filter(Boolean);
-  if (!draft.name.trim()) throw new Error('请填写菜品名称，例如：番茄炒蛋');
-  if (draft.name.trim().length > 80) throw new Error('菜品名称最多80字，请缩短后保存');
-  if (!rows.length) throw new Error('请至少填写一种食材，例如：鸡蛋');
-  if (rows.length > 100) throw new Error('一道菜最多保存100种食材，请合并后保存');
-  if (draft.ingredients.some(item => !item.name.trim() && item.quantity.trim())) throw new Error('填写了数量的食材还需要填写名称');
-  if (rows.some(item => item.name.trim().length > 60)) throw new Error('每种食材名称最多60字，请缩短后保存');
-  if (rows.some(item => !item.unit.trim())) throw new Error('请填写食材单位，例如：个、克、把');
-  if (rows.some(item => item.unit.trim().length > 12)) throw new Error('食材单位最多12字，请缩短后保存');
-  if (!cleanSteps.length) throw new Error('请至少填写一个做法步骤');
-  if (cleanSteps.length > 50) throw new Error('一道菜最多保存50个做法步骤，请合并后保存');
-  if (cleanSteps.some(item => item.length > 4000)) throw new Error('每个做法步骤最多4000字，请拆分后保存');
-  if (cleanSeasonings.length > 40) throw new Error('一道菜最多保存40种调料，请合并后保存');
+  if (!draft.name.trim()) invalid('name','请填写菜品名称，例如：番茄炒蛋');
+  if (draft.name.trim().length > 80) invalid('name','菜品名称最多80字，请缩短后保存');
+  if (!rows.length) invalid('ingredients','请至少填写一种食材，例如：鸡蛋');
+  if (rows.length > 100) invalid('ingredients','一道菜最多保存100种食材，请合并后保存');
+  if (draft.ingredients.some(item => !item.name.trim() && item.quantity.trim())) invalid('ingredients','填写了数量的食材还需要填写名称');
+  if (rows.some(item => item.name.trim().length > 60)) invalid('ingredients','每种食材名称最多60字，请缩短后保存');
+  if (rows.some(item => !item.unit.trim())) invalid('ingredients','请填写食材单位，例如：个、克、把');
+  if (rows.some(item => item.unit.trim().length > 12)) invalid('ingredients','食材单位最多12字，请缩短后保存');
+  if (!cleanSteps.length) invalid('steps','请至少填写一个做法步骤');
+  if (cleanSteps.length > 50) invalid('steps','一道菜最多保存50个做法步骤，请合并后保存');
+  if (cleanSteps.some(item => item.length > 4000)) invalid('steps','每个做法步骤最多4000字，请拆分后保存');
+  if (cleanSeasonings.length > 40) invalid('seasonings','一道菜最多保存40种调料，请合并后保存');
   const prepared = rows.map(item => {
     const text = item.quantity.trim();
-    if (text && (!/^\d+(?:\.\d{1,3})?$/.test(text) || Number(text) < 0.001 || Number(text) > 999999999.999)) throw new Error('食材数量请填大于0、最多3位小数的数字，或留空待确认');
+    if (text && (!/^\d+(?:\.\d{1,3})?$/.test(text) || Number(text) < 0.001 || Number(text) > 999999999.999)) invalid('ingredients','食材数量请填大于0、最多3位小数的数字，或留空待确认');
     return { name: item.name.trim(), quantity: text ? Number(text) : undefined, unit: item.unit.trim() };
   });
   const selected = draft.categoryIndex === 0 ? undefined : draft.categories[draft.categoryIndex - 1];
-  if (draft.categoryIndex !== 0 && !selected) throw new Error('分类已变化，请重新选择');
+  if (draft.categoryIndex !== 0 && !selected) invalid('category','分类已变化，请重新选择');
   const keepArchived = Boolean(selected?.archivedAt && selected.id === draft.originalCategoryId);
   return { name: draft.name.trim(), ingredients: prepared, seasonings: cleanSeasonings, steps: cleanSteps,
     ...(draft.id ? (keepArchived ? {} : { categoryId: selected?.id || null }) : (selected ? { categoryId: selected.id } : {})) };
@@ -284,12 +290,13 @@ async function loadPage() {
 
 async function persist(leave=true) {
   if (!ready() || !session.value) return false;
+  validationErrors.value={};
   const draft = snapshot(), token = epoch, identity = session.value;
   let textSaved = false;
   saving.value = true;
   if (draft.pendingCover) coverError.value = '';
   try {
-    if (categoryNeedsReview.value) throw new Error('请重新选择菜谱分类');
+    if (categoryNeedsReview.value) invalid('category','请重新选择菜谱分类');
     // A confirmation may have committed before its response was lost. Resolve
     // that exact intent before sending a text update with an obsolete version.
     if (draft.pendingCover?.confirmation) await confirmPendingCover(draft, token, identity);
@@ -307,6 +314,11 @@ async function persist(leave=true) {
     return true;
   } catch (error) {
     if (current(token, identity)) {
+      if(error instanceof RecipeValidationError){
+        validationErrors.value={[error.field]:error.message};
+        await nextTick();
+        if(current(token,identity))uni.pageScrollTo?.({selector:'#field-'+error.field,duration:200});
+      }
       if (textSaved && draft.pendingCover && recipeId.value) coverError.value = draft.pendingCover.confirmation
         ? '文字已保存，封面确认结果待核实。再次保存会核对本次上传，不会重复创建。'
         : '文字已保存，封面尚未上传成功。请重试保存，或重新选择图片。';
@@ -516,20 +528,20 @@ onUnload(() => { hide(); disposed = true; cancelNative(); hiddenDraft = undefine
       <text v-else-if="draftNotice" class="draft-notice">{{ draftNotice }}</text>
       <view class="section">
         <text class="title">基本信息</text>
-        <text class="field-label">菜品名称 · 必填</text><input v-model="name" :disabled="locked" maxlength="80" class="input" placeholder="例如：番茄炒蛋" placeholder-class="input-placeholder" />
-        <text class="field-label">菜品分类</text><picker :disabled="locked" :value="categoryIndex" :range="categoryOptions" range-key="name" @change="pickCategory"><view class="input picker">{{ categoryName }}<text>选择分类 ›</text></view></picker>
+        <text id="field-name" class="field-label">菜品名称 · 必填</text><text v-if="validationErrors.name" class="field-error">{{validationErrors.name}}</text><input :cursor-spacing="100" v-model="name" :disabled="locked" maxlength="80" class="input" placeholder="例如：番茄炒蛋" placeholder-class="input-placeholder" />
+        <text id="field-category" class="field-label">菜品分类</text><text v-if="validationErrors.category" class="field-error">{{validationErrors.category}}</text><picker :disabled="locked" :value="categoryIndex" :range="categoryOptions" range-key="name" @change="pickCategory"><view class="input picker">{{ categoryName }}<text>选择分类 ›</text></view></picker>
         <text v-if="categoryOptions[categoryIndex]?.archivedAt" class="cover-note">该分类已停用，可选择其他分类。</text>
       </view>
       <view class="section">
-        <text class="title">食材 · 至少一种</text>
+        <text id="field-ingredients" class="title">食材 · 至少一种</text><text v-if="validationErrors.ingredients" class="field-error">{{validationErrors.ingredients}}</text>
         <view v-for="(item,index) in ingredients" :key="index" class="ingredient-card">
           <view class="row"><text class="field-label">食材 {{ index + 1 }}</text><button class="remove" :disabled="locked" @tap="removeIngredient(index)">{{ingredients.length>1?'移除':'清空'}}</button></view>
-          <input v-model="item.name" :disabled="locked" maxlength="60" class="input" placeholder="食材名称，例如：鸡蛋" placeholder-class="input-placeholder" />
-          <view class="row amounts"><view><text class="field-label">数量 · 可不填</text><input v-model="item.quantity" :disabled="locked" type="digit" class="input" placeholder="例如：2" placeholder-class="input-placeholder" /></view><view><text class="field-label">单位 · 必填</text><input v-model="item.unit" :disabled="locked" maxlength="12" class="input" placeholder="例如：个、克、把" placeholder-class="input-placeholder" /></view></view>
+          <input :cursor-spacing="100" v-model="item.name" :disabled="locked" maxlength="60" class="input" placeholder="食材名称，例如：鸡蛋" placeholder-class="input-placeholder" />
+          <view class="row amounts"><view><text class="field-label">数量 · 可不填</text><input :cursor-spacing="100" v-model="item.quantity" :disabled="locked" type="digit" class="input" placeholder="例如：2" placeholder-class="input-placeholder" /></view><view><text class="field-label">单位 · 必填</text><input :cursor-spacing="100" v-model="item.unit" :disabled="locked" maxlength="12" class="input" placeholder="例如：个、克、把" placeholder-class="input-placeholder" /></view></view>
         </view><text class="add" @tap="addIngredient">＋ 再加一种食材</text>
       </view>
-      <view class="section"><text class="title">调料 · 可不填</text><view v-for="(_,index) in seasonings" :key="index"><view class="row"><text class="field-label">调料 {{ index + 1 }}</text><button class="remove" :disabled="locked" @tap="removeSeasoning(index)">{{seasonings.length>1?'移除':'清空'}}</button></view><input v-model="seasonings[index]" :disabled="locked" maxlength="60" class="input" placeholder="例如：生抽" placeholder-class="input-placeholder" /></view><text class="add" @tap="addSeasoning">＋ 再加一种调料</text></view>
-      <view class="section"><text class="title">做法 · 至少一步</text><view v-for="(_,index) in steps" :key="index" class="step"><view class="row"><text class="field-label">第 {{ index + 1 }} 步</text><text v-if="steps.length>1" class="remove" @tap="removeStep(index)">移除</text></view><textarea v-model="steps[index]" :disabled="locked" maxlength="4000" class="textarea" :placeholder="index===0?'例如：番茄切块，鸡蛋打散备用。':'写下接着怎么做，例如：倒入鸡蛋翻炒至凝固。'" placeholder-class="input-placeholder" /></view><text class="add" @tap="addStep">＋ 再加一个步骤</text></view>
+      <view class="section"><text id="field-seasonings" class="title">调料 · 可不填</text><text v-if="validationErrors.seasonings" class="field-error">{{validationErrors.seasonings}}</text><view v-for="(_,index) in seasonings" :key="index"><view class="row"><text class="field-label">调料 {{ index + 1 }}</text><button class="remove" :disabled="locked" @tap="removeSeasoning(index)">{{seasonings.length>1?'移除':'清空'}}</button></view><input :cursor-spacing="100" v-model="seasonings[index]" :disabled="locked" maxlength="60" class="input" placeholder="例如：生抽" placeholder-class="input-placeholder" /></view><text class="add" @tap="addSeasoning">＋ 再加一种调料</text></view>
+      <view class="section"><text id="field-steps" class="title">做法 · 至少一步</text><text v-if="validationErrors.steps" class="field-error">{{validationErrors.steps}}</text><view v-for="(_,index) in steps" :key="index" class="step"><view class="row"><text class="field-label">第 {{ index + 1 }} 步</text><text v-if="steps.length>1" class="remove" @tap="removeStep(index)">移除</text></view><textarea :cursor-spacing="100" v-model="steps[index]" :disabled="locked" maxlength="4000" class="textarea" :placeholder="index===0?'例如：番茄切块，鸡蛋打散备用。':'写下接着怎么做，例如：倒入鸡蛋翻炒至凝固。'" placeholder-class="input-placeholder" /></view><text class="add" @tap="addStep">＋ 再加一个步骤</text></view>
       <view class="section"><text class="title">成品图片</text><image v-if="coverPreview" class="cover" :src="coverPreview" mode="aspectFill" @error="coverPreview='';coverError='封面预览暂不可用，点击重新加载'" /><view v-else class="cover-empty">🍲<text>{{ coverAssetId ? '已有封面，预览暂不可用' : '添加菜品封面' }}</text></view><text v-if="coverError" class="cover-note" @tap="reloadCover">{{ coverError }}</text><view class="cover-action" :class="{disabled:locked}" @tap="chooseCover">{{coverUploading?'正在处理封面…':coverAssetId||pendingCover?'更换封面':'选择封面'}}</view><text class="cover-note">{{pendingCover?'图片待保存':'发布菜谱前请添加成品图'}}</text></view>
       <view class="save" :class="{ disabled: locked }" @tap="save">{{ saving ? '保存中…' : recipeId ? '保存修改' : '保存草稿' }}</view>
     </template>
@@ -542,3 +554,4 @@ onUnload(() => { hide(); disposed = true; cancelNative(); hiddenDraft = undefine
 .cover{width:100%;height:330rpx;border-radius:20rpx}.cover-empty{display:flex;flex-direction:column;align-items:center;justify-content:center;height:260rpx;border-radius:20rpx;background:#f8ead4;color:#8c6c43;font-size:68rpx}.cover-empty text{margin-top:12rpx;font-size:24rpx}.cover-action{margin-top:16rpx;padding:19rpx;border-radius:16rpx;background:#e8b86f;color:#fff;text-align:center;font-size:26rpx}.cover-note{display:block;margin-top:14rpx;color:#988b7b;font-size:22rpx;line-height:1.6}
 .recovery{border:2rpx solid #e8c78b}.recovery .row{margin-top:18rpx}.recovery .cover-action{flex:1;margin:0}.draft-warning,.draft-notice{display:block;margin:0 4rpx 20rpx;font-size:24rpx;line-height:1.6}.draft-warning{color:#ad573c}.draft-notice{color:#768658}
 </style>
+<style scoped src="../../styles/page-foundation.css"></style>

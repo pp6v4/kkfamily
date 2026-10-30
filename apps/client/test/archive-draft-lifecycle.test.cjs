@@ -127,3 +127,20 @@ test('Normal definition errors retain the draft while viewers cannot save defini
   const rendered = await renderPage(f.page); assert.doesNotMatch(rendered.html, /字段与授权|修改内容|加密保存|新建档案字段/);
   await f.page.saveField(); await f.page.saveValue(); assert.equal(sent.length, 1);
 });
+test('UI13 member grant requires an explicit picker choice and preserves the exact grants payload',async()=>{
+ const f=form();await f.lifecycle.show();f.page.newField();
+ f.page.members.value=[{id:'member-b',user:{nickname:'家人乙'}}];
+ assert.equal(f.page.grantMode('member-b'),0);
+ f.page.chooseGrant('member-b',{detail:{value:'2'}});
+ assert.deepEqual(JSON.parse(JSON.stringify(f.page.grants())),[{membershipId:'member-b',canRead:true,canEdit:true}]);
+ f.page.chooseGrant('member-b',{detail:{value:'1'}});assert.equal(f.page.grants()[0].canEdit,false);
+ for(const value of ['-1','3','1.5','oops'])f.page.chooseGrant('member-b',{detail:{value}});
+ assert.equal(f.page.grantMode('member-b'),1);
+ f.page.busy.value=true;f.page.chooseGrant('member-b',{detail:{value:'0'}});assert.equal(f.page.grantMode('member-b'),1);
+ f.page.busy.value=false;f.page.chooseGrant('member-b',{detail:{value:'0'}});assert.equal(f.page.grants().length,0);
+});
+test('UI03 archive read error is retryable and is not displayed as an empty archive',async()=>{
+ const f=form({listArchiveFields:async()=>{throw new Error('档案读取失败');}});
+ await f.lifecycle.show();const html=(await renderPage(f.page)).html;
+ assert.match(html,/档案读取失败/);assert.match(html,/重试读取/);assert.doesNotMatch(html,/当前没有你可以查看的档案字段/);
+});

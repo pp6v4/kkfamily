@@ -35,7 +35,7 @@ function camping(api={}){
     '@dcloudio/uni-app':{onShow:fn=>lifecycle.show=fn,onHide:fn=>lifecycle.hide=fn,onUnload:fn=>lifecycle.unload=fn},
     '../../components/trip-itinerary.vue':{},'../../components/trip-photos.vue':{},
     '../../services/session':session,'../../services/calendar-navigation':{takeCalendarTarget:()=>undefined},
-    '../../services/trip-form':{},'../../services/transport':{ApiError},'../../services/trip-native':{},
+    '../../services/trip-form':evaluate(fs.readFileSync(path.join(ROOT,'src/services/trip-form.ts'),'utf8'),{},{}),'../../services/transport':{ApiError},'../../services/trip-native':{},
     '../../services/family-api':{listTrips:async()=>[trip],getTrip:async()=>trip,listTripPackingItems:async()=>[],listTripCandidates:async()=>[],listPackingTemplates:async()=>[],...api},
   },uni);
   target.page.pageVisible.value=true;target.page.session.value=stored;
@@ -215,4 +215,33 @@ test('Nonadjacent mode changes are single-flight and old success or forbidden re
 
 test('Packing unknown amounts retain saved units without inventing zero or performing conversions',()=>{
   const target=camping();for(const [quantity,unit,expected] of [[null,'箱','箱'],[null,null,''],['2.000','箱','2 箱'],[1.5,'kg','1.5 kg'],[0,'个','0 个']])assert.equal(target.page.quantityText(quantity,unit),expected);target.unmount();
+});
+test('UI04 a failed photo URL keeps other photos visible; retry restores only the failed tile state',async()=>{
+ let failed=true;const rows=[{id:'ok',createdBy:{nickname:'甲'}},{id:'broken',createdBy:{nickname:'乙'}}];
+ const props=vue.reactive({trip:{...trip},active:true,canUpload:true});
+ const target=load('src/components/trip-photos.vue',{'../services/transport':{ApiError},'../services/family-api':{
+ listTripPhotos:async()=>rows,getMediaReadUrl:async id=>{if(id==='broken'&&failed)throw new Error('网络中断');return{path:'/test/'+id};},publicMediaUrl:v=>v
+ }},{showToast(){}},props);
+ await new Promise(setImmediate);assert.equal(target.page.photos.value.length,2);
+ assert.equal(target.page.photos.value[0].url,'/test/ok');assert.equal(target.page.photos.value[1].url,'');
+ let nodes=await rendered(target);assert.equal(nodes.filter(n=>n.type==='image').length,1);
+ assert.ok(nodes.some(n=>text(n.children)==='图片未加载 · 重试'));
+ failed=false;await target.page.load();assert.equal(target.page.photos.value[1].url,'/test/broken');target.unmount();
+});
+test('UI04 failed album lists expose retry instead of empty; revoked access still clears all photos',async()=>{
+ for(const status of [500,403]){
+ const props=vue.reactive({trip:{...trip},active:true,canUpload:true});
+ const target=load('src/components/trip-photos.vue',{'../services/transport':{ApiError},'../services/family-api':{listTripPhotos:async()=>{throw new ApiError('相册读取失败',status);}}},{showToast(){}},props);
+ await new Promise(setImmediate);assert.equal(target.page.photos.value.length,0);
+ if(status===500){assert.equal(target.page.loadError.value,'相册读取失败');assert.ok((await rendered(target)).some(n=>text(n.children)==='重新读取相册'));}
+ else assert.deepEqual(target.events,[['accessLost',trip.id]]);
+ target.unmount();
+ }
+});
+test('UI10 trip progression is visible without opening collaboration and remains owner-only',async()=>{
+ const target=camping();target.page.trips.value=[trip];await target.page.openTrip(trip.id);
+ assert.equal(target.page.showingCollaboration.value,false);
+ let nodes=await rendered(target);assert.ok(nodes.some(n=>String(n.props?.class||'').includes('trip-progress')));
+ target.page.trips.value=[{...trip,members:[{...trip.members[0],tripRole:'MEMBER'}]}];
+ assert.equal((await rendered(target)).some(n=>String(n.props?.class||'').includes('trip-progress')),false);target.unmount();
 });

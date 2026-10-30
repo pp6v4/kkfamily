@@ -1552,3 +1552,16 @@ test('Anniversary client preserves recurrence choices and optimistic versions',a
   assert.equal(sent[1].path,'/calendar/anniversaries/anniversary-a');assert.equal(sent[1].method,'PATCH');assert.equal(sent[1].data.expectedVersion,3);
   assert.equal(sent[2].path,'/calendar/anniversaries/anniversary-a/archive');assert.equal(sent[2].data.expectedVersion,3);
 });
+test('UI03 task and favorite loading failures remain explicit, retry clears them, and stale errors cannot return after hide',async()=>{
+ for(const feature of ['tasks','favorites']){
+  let fail=true,resolve;
+  const access={...family,effectivePermissions:{[feature]:'MANAGE'}},lifecycle={};
+  const api={listTaskAssignees:async()=>[],listTasks:async()=>{if(fail)throw new Error('读取失败');return[];},listFavorites:async()=>{if(fail)throw new Error('读取失败');return[];}};
+  const page=loadPage('src/pages/'+feature+'/index.vue',{'@dcloudio/uni-app':{onShow:fn=>lifecycle.show=fn,onHide:fn=>lifecycle.hide=fn,onUnload(){},onLoad(){}},'../../services/session':{canAccess:allowed,refreshAccess:async()=>access},'../../services/family-api':api},mockUni());
+  await page.load();const error=feature==='tasks'?page.loadError:page.notice;assert.equal(error.value,'读取失败');assert.equal(page.busy.value,false);
+  fail=false;await page.load();assert.equal(error.value,'');assert.equal(page.session.value.householdId,access.householdId);
+  const method=feature==='tasks'?'listTasks':'listFavorites';api[method]=()=>new Promise((yes,no)=>resolve=no);
+  const pending=page.load();await new Promise(setImmediate);lifecycle.hide();resolve(new Error('旧请求失败'));await pending;
+  assert.equal(error.value,'');assert.equal(page.session.value,undefined);
+ }
+});

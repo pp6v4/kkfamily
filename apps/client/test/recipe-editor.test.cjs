@@ -437,3 +437,14 @@ test('Cover confirmation finishing after unload never reads a URL or repopulates
   life.unload(); confirmation.resolve({ asset: { id: 'asset-a' }, ownerVersion: 4 }); await pending;
   assert.equal(reads, 0); assert.equal(page.coverAssetId.value, ''); assert.equal(page.name.value, ''); assert.equal(toasts.length, 0);
 });
+test('UI06 validation runs on save, renders beside the matching field and scrolls there without changing the draft',async()=>{
+ const scrolls=[],writes=[];const f=form({updateRecipe:async(...args)=>writes.push(args)});f.uni.pageScrollTo=input=>scrolls.push(input.selector);
+ await f.show();f.page.name.value='';
+ assert.equal(Object.keys(f.page.validationErrors.value).length,0);
+ assert.equal(await f.page.persist(false),false);assert.equal(writes.length,0);
+ assert.equal(scrolls.at(-1),'#field-name');assert.match(f.page.validationErrors.value.name,/菜品名称/);
+ let tree=await renderedEditor(f.page);assert.ok(descendants(tree,n=>hasClass(n,'field-error')&&vnodeText(n).includes('菜品名称')).length);
+ f.page.name.value='番茄炒蛋';f.page.ingredients.value=[{name:'鸡蛋',quantity:'2',unit:''}];
+ assert.equal(await f.page.persist(false),false);assert.equal(scrolls.at(-1),'#field-ingredients');assert.match(f.page.validationErrors.value.ingredients,/单位/);
+ assert.equal(f.page.name.value,'番茄炒蛋');assert.equal(f.page.ingredients.value[0].quantity,'2');assert.equal(writes.length,0);
+});

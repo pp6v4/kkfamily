@@ -83,10 +83,10 @@ test('Ordering entry creates the selected date and meal, then adds and withdraws
   await renderPage(page, '开始点菜');
   assert.equal(page.meal.value.id, 'selected-lunch'); assert.equal(page.active.value, 'order');
   assert.deepEqual(writes, [['create', { scheduledAt: '2026-10-23T12:00:00+08:00', mealType: 'LUNCH', slotKey: undefined }]]);
-  await renderPage(page, '点这道菜');
-  html = await renderPage(page); assert.match(html, /撤回我的选择/); assert.match(html, /查看待做菜单（1道）/);
+  await renderPage(page, '点菜');
+  html = await renderPage(page); assert.match(html, /我已选/); assert.match(html, /撤回/); assert.match(html, /查看待做菜单（1道）/);
   assert.equal(page.mealItems.value.length, 1); assert.equal(page.mealItems.value[0].wantedBy[0].membershipId, context.membershipId);
-  await renderPage(page, '撤回我的选择');
+  await renderPage(page, '撤回');
   assert.equal(page.mealItems.value.length, 0); assert.equal(page.ownRecipeIds.value.size, 0);
   assert.deepEqual(writes.slice(1), [['add', 'selected-lunch', recipe.id], ['withdraw', 'selected-lunch', recipe.id]]);
 });

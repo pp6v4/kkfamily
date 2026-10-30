@@ -62,13 +62,13 @@ test('Successful withdrawal followed by meal-read failure is explicit and disabl
   await f.lifecycle.show(); await f.page.toggleRecipe(recipe.id);
   assert.equal(withdrawals, 1); assert.equal(f.page.meal.value, undefined);
   assert.match(f.page.errorText.value, /已保存.*刷新失败/);
-  const rendered = await f.rendered(), button = rendered.buttons.find(value => value.label === '点这道菜');
+  const rendered = await f.rendered(), button = rendered.buttons.find(value => value.label === '点菜');
   assert.ok(button); assert.equal(button.disabled, true);
   await f.page.toggleRecipe(recipe.id);
   assert.equal(adds, 0); assert.equal(creates, 0);
   failReads = false; await f.page.loadPage();
   assert.equal(f.page.meal.value.id, initial.id); assert.equal(f.page.ownRecipeIds.value.size, 0);
-  assert.equal((await f.rendered()).buttons.find(value => value.label === '点这道菜').disabled, false);
+  assert.equal((await f.rendered()).buttons.find(value => value.label === '点菜').disabled, false);
 });
 
 test('Inventory comparison failure retains the authoritative meal and reports a saved withdrawal instead of pretending no meal exists', async () => {
@@ -88,7 +88,7 @@ test('Initial meal-read failure is not treated as an empty meal and cannot creat
   const f = fixture({ listMeals: async () => { throw new ApiError('餐点读取失败', 503); }, createMeal: async () => { writes++; return initial; }, addMealRecipe: async () => { writes++; } });
   await f.lifecycle.show(); await f.page.toggleRecipe(recipe.id); await f.page.beginOrdering();
   assert.equal(writes, 0);
-  assert.equal((await f.rendered()).buttons.find(value => value.label === '点这道菜').disabled, true);
+  assert.equal((await f.rendered()).buttons.find(value => value.label === '点菜').disabled, true);
 });
 
 for (const status of [401, 403, 404]) test('Comparison ' + status + ' after a saved withdrawal invalidates the private meal instead of retaining stale choices', async () => {

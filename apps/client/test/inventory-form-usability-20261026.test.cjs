@@ -95,7 +95,7 @@ async function tap(f, label) {
 }
 
 test('Inventory labels stay visible after typing and optional location starts blank rather than prefilled kitchen', async () => {
-  const f = fixture(); await f.lifecycle.show(); f.page.switchView('inventory');
+  const f = fixture(); await f.lifecycle.show(); f.page.switchView('inventory'); await tap(f, '＋ 登记库存');
   assert.equal(f.page.stockItem.value.location, '');
   await fill(f, '食材名称', '番茄');
   const { tree, html } = await f.rendered();
@@ -109,7 +109,7 @@ test('Inventory labels stay visible after typing and optional location starts bl
 });
 
 test('Rendered inventory submission omits empty optional location and preserves unknown quantity with its unit', async () => {
-  const f = fixture(); await f.lifecycle.show(); f.page.switchView('inventory');
+  const f = fixture(); await f.lifecycle.show(); f.page.switchView('inventory'); await tap(f, '＋ 登记库存');
   await fill(f, '食材名称', ' 面粉 '); await fill(f, '计量单位', ' kg ');
   await tap(f, '登记库存');
   assert.equal(f.stockWrites.length, 1);
@@ -119,7 +119,7 @@ test('Rendered inventory submission omits empty optional location and preserves 
 });
 
 test('Rendered food inputs submit exact numeric amount, explicit location and Shanghai end-of-day expiry', async () => {
-  const f = fixture(); await f.lifecycle.show(); f.page.switchView('inventory');
+  const f = fixture(); await f.lifecycle.show(); f.page.switchView('inventory'); await tap(f, '＋ 登记库存');
   await fill(f, '食材名称', ' 番茄 '); await fill(f, '数量（选填）', '200.125');
   await fill(f, '计量单位', ' g '); await fill(f, '存放位置（选填）', ' 冰箱冷藏室 ');
   const picker = find(field((await f.rendered()).tree, '到期日（选填）'), node => node.type === 'picker')[0];
@@ -130,7 +130,7 @@ test('Rendered food inputs submit exact numeric amount, explicit location and Sh
 });
 
 test('Seasoning labels do not expose food quantities and retain availability-only payload', async () => {
-  const f = fixture(); await f.lifecycle.show(); f.page.switchView('inventory');
+  const f = fixture(); await f.lifecycle.show(); f.page.switchView('inventory'); await tap(f, '＋ 登记库存');
   const type = field((await f.rendered()).tree, '库存类型');
   const seasoning = find(type, node => node.type === 'text' && text(node) === '调料' && typeof node.props?.onTap === 'function')[0];
   seasoning.props.onTap({}); await fill(f, '调料名称', ' 生抽 ');
@@ -151,7 +151,7 @@ test('Existing inventory edit keeps original name/unit/location and version whil
 });
 
 test('Shopping form has persistent labels and submits unchanged list status without any inventory write', async () => {
-  const f = fixture(); await f.lifecycle.show();
+  const f = fixture(); await f.lifecycle.show(); await tap(f, '＋ 添加物品');
   for (const label of ['商品名称', '数量（选填）', '单位（选填）', '购物分类']) field((await f.rendered()).tree, label);
   await fill(f, '商品名称', ' 洗衣液 '); await fill(f, '数量（选填）', '2'); await fill(f, '单位（选填）', ' 瓶 ');
   await tap(f, '记到清单');
@@ -164,4 +164,15 @@ test('Read-only inventory still displays saved location but no editable fields o
   const { tree, html } = await f.rendered(); assert.equal(fields(tree).length, 0);
   assert.match(html, /橱柜/); assert.doesNotMatch(html, /登记库存|保存核实后的库存|库存仅辅助判断/);
   await f.page.saveStock(); assert.equal(f.stockWrites.length, 0);
+});
+test('UI09 lists open first, collapsed forms retain input, and successful submit closes the form', async () => {
+  const f=fixture();await f.lifecycle.show();
+  let rendered=await f.rendered();assert.equal(fields(rendered.tree).length,0);
+  await tap(f,'＋ 添加物品');await fill(f,'商品名称','保留的购物草稿');
+  await tap(f,'收起添加');assert.equal(fields((await f.rendered()).tree).length,0);
+  await tap(f,'＋ 添加物品');assert.equal(input((await f.rendered()).tree,'商品名称').dirs[0].value,'保留的购物草稿');
+  await tap(f,'记到清单');assert.equal(f.shoppingWrites.length,1);assert.equal(fields((await f.rendered()).tree).length,0);
+  f.page.switchView('inventory');assert.equal(fields((await f.rendered()).tree).length,0);
+  await tap(f,'＋ 登记库存');await fill(f,'食材名称','保留的食材草稿');await tap(f,'收起登记');await tap(f,'＋ 登记库存');
+  assert.equal(input((await f.rendered()).tree,'食材名称').dirs[0].value,'保留的食材草稿');
 });

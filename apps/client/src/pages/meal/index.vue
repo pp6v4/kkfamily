@@ -297,7 +297,7 @@ onUnload(()=>{disposed=true;hide();resume=undefined;});
 </script>
 <template>
   <view class="page">
-    <view class="heading"><text class="label">吃什么</text><text class="title">一起好好吃饭</text></view>
+    <view class="heading"><text class="title">今天想吃什么？</text></view>
     <view class="tabs"><view class="tab" :class="{selected:active==='order'}" @tap="switchView('order')">去点餐</view><view class="tab" :class="{selected:active==='recipes'}" @tap="switchView('recipes')">菜谱</view><view class="tab" :class="{selected:active==='menu'}" @tap="switchView('menu')">待做菜单</view></view>
     <view v-if="errorText" class="error">{{errorText}}<text class="small-action" @tap="loadPage">刷新</text></view>
     <view v-if="comparisonError" class="error">{{comparisonError}}<text class="small-action" @tap="loadPage">刷新库存对照</text></view>
@@ -318,7 +318,16 @@ onUnload(()=>{disposed=true;hide();resume=undefined;});
         <text v-else class="material">请联系厨师添加菜品。</text>
       </view>
       <view v-else-if="!loading && !errorText && publishedRecipes.length && !visibleRecipes.length" class="ordering-guide"><text class="material">这个分类还没有可点的菜。</text><button class="order-start secondary-order" :disabled="busy" @tap="category='全部'">查看全部菜谱</button></view>
-      <view v-for="recipe in visibleRecipes" :key="recipe.id" class="recipe-card"><image v-if="coverUrls[recipe.id]" class="recipe-cover" :src="coverUrls[recipe.id]" mode="aspectFill" /><view v-else class="recipe-icon">🍽️</view><view class="recipe-info" @tap="openRecipeDetail(recipe.id,'CURRENT')"><text class="recipe-name">{{recipe.name}}</text><text v-for="i in recipe.ingredients" :key="i.ingredientId" class="material">{{i.ingredient.name}} {{formatQuantity(i.quantity)}} {{i.unit}}</text><text class="material">调料：{{recipe.seasonings.map(s=>s.name).join('、')||'无'}}</text><text class="detail-link">查看用料与做法 ›</text></view><button v-if="canOrder && (!meal || meal.status==='DRAFT')" :disabled="busy || !mealLoaded" class="add" :class="{added:selectedRecipeIds.has(recipe.id)}" @tap.stop="toggleRecipe(recipe.id)">{{ownRecipeIds.has(recipe.id)?'撤回我的选择':selectedRecipeIds.has(recipe.id)?'我也想吃':'点这道菜'}}</button></view>
+      <view v-for="recipe in visibleRecipes" :key="recipe.id" class="recipe-card order-card">
+        <view class="recipe-main" @tap="openRecipeDetail(recipe.id,'CURRENT')">
+          <image v-if="coverUrls[recipe.id]" class="recipe-cover" :src="coverUrls[recipe.id]" mode="aspectFill" />
+          <view v-else class="recipe-placeholder"><text>暂无图片</text></view>
+          <view class="recipe-info"><text class="recipe-name">{{recipe.name}}</text><text class="material recipe-summary">{{recipe.ingredients.slice(0,3).map(i=>i.ingredient.name).join(' · ') || '查看用料与做法'}}{{recipe.ingredients.length>3?' 等':''}}</text><text class="detail-link">用料与做法 ›</text></view>
+        </view>
+        <view class="recipe-footer"><text class="selection-note">{{ownRecipeIds.has(recipe.id)?'我已选':selectedRecipeIds.has(recipe.id)?'家人已选':''}}</text>
+          <button v-if="canOrder && (!meal || meal.status==='DRAFT')" :disabled="busy || !mealLoaded" class="add" :class="{added:ownRecipeIds.has(recipe.id)}" @tap.stop="toggleRecipe(recipe.id)">{{ownRecipeIds.has(recipe.id)?'撤回':selectedRecipeIds.has(recipe.id)?'我也想吃':'点菜'}}</button>
+        </view>
+      </view>
       <view v-if="canAccess(session,'meals')" class="primary" @tap="switchView('menu')">查看待做菜单（{{mealItems.length}}道）</view>
     </view>
     <view v-else-if="active==='recipes'">
@@ -333,7 +342,7 @@ onUnload(()=>{disposed=true;hide();resume=undefined;});
       </view>
       <scroll-view v-if="recipes.length || recipeCategories.length" class="categories" scroll-x><text v-for="item in categories" :key="item.id" class="category" :class="{chosen:category===item.id}" @tap="chooseCategory(item.id)">{{item.name}}</text></scroll-view>
       <view v-if="!loading && !errorText && !libraryRecipes.length" class="empty">{{category==='全部'?'还没有菜谱':'这个分类还没有菜谱'}}</view>
-      <view v-for="recipe in libraryRecipes" :key="recipe.id" class="recipe-card"><view class="recipe-info" @tap="openRecipeDetail(recipe.id,'CURRENT')"><text class="recipe-name">{{recipe.name}}</text><text class="recipe-meta">{{recipe.category?.name||'未分类'}} · {{recipe.status==='DRAFT'?'草稿':recipe.status==='PUBLISHED'?'已发布':'已下架'}}</text><text class="detail-link">查看用料与做法 ›</text></view><text v-if="canAccess(session,'recipes','EDIT')" class="small-action" @tap="editRecipe(recipe.id)">编辑菜谱</text><text v-if="recipe.status==='DRAFT' && canAccess(session,'recipes','EDIT')" class="publish" @tap="changeRecipeStatus(recipe,'PUBLISHED')">发布</text><text v-else-if="recipe.status==='PUBLISHED' && canAccess(session,'recipes','EDIT')" class="archive-action" @tap="changeRecipeStatus(recipe,'ARCHIVED')">下架</text><text v-else-if="recipe.status==='ARCHIVED' && canAccess(session,'recipes','EDIT')" class="restore-action" @tap="changeRecipeStatus(recipe,'DRAFT')">恢复草稿</text><text v-else class="status">{{recipe.status==='PUBLISHED'?'已发布':recipe.status==='DRAFT'?'草稿':'已下架'}}</text></view>
+      <view v-for="recipe in libraryRecipes" :key="recipe.id" class="recipe-card library-card"><view class="recipe-info" @tap="openRecipeDetail(recipe.id,'CURRENT')"><text class="recipe-name">{{recipe.name}}</text><text class="recipe-meta">{{recipe.category?.name||'未分类'}} · {{recipe.status==='DRAFT'?'草稿':recipe.status==='PUBLISHED'?'已发布':'已下架'}}</text><text class="detail-link">查看用料与做法 ›</text></view><view class="library-actions"><text v-if="canAccess(session,'recipes','EDIT')" class="small-action" @tap="editRecipe(recipe.id)">编辑菜谱</text><text v-if="recipe.status==='DRAFT' && canAccess(session,'recipes','EDIT')" class="publish" @tap="changeRecipeStatus(recipe,'PUBLISHED')">发布</text><text v-else-if="recipe.status==='PUBLISHED' && canAccess(session,'recipes','EDIT')" class="archive-action" @tap="changeRecipeStatus(recipe,'ARCHIVED')">下架</text><text v-else-if="recipe.status==='ARCHIVED' && canAccess(session,'recipes','EDIT')" class="restore-action" @tap="changeRecipeStatus(recipe,'DRAFT')">恢复草稿</text><text v-else class="status">{{recipe.status==='PUBLISHED'?'已发布':recipe.status==='DRAFT'?'草稿':'已下架'}}</text></view></view>
     </view>
     <view v-else>
       <view v-if="!loading && !canAccess(session,'meals')" class="empty">尚未获得餐点查看权限</view>
@@ -375,9 +384,64 @@ onUnload(()=>{disposed=true;hide();resume=undefined;});
   </view>
 </template>
 <style scoped>
-.page{min-height:100vh;padding:36rpx 28rpx 48rpx;background:#fff7e9}.label,.title,.field-label,.field-value,.recipe-name,.recipe-meta,.block-title,.amount-text{display:block}.label{font-size:23rpx;letter-spacing:3rpx;color:#9a7746}.title{margin-top:8rpx;font-size:42rpx;font-weight:700;color:#55452f}.tabs{display:flex;margin:28rpx 0 22rpx;padding:7rpx;border-radius:20rpx;background:#f5e8d0}.tab{flex:1;padding:16rpx 4rpx;border-radius:15rpx;text-align:center;color:#876f50;font-size:24rpx}.tab.selected{background:#fffdf8;color:#5c472e;font-weight:600}.picker-row{display:flex;justify-content:space-between;padding:24rpx;border-radius:24rpx;background:#fffdf8}.field-label{font-size:20rpx;color:#a49788}.field-value{margin-top:8rpx;font-size:28rpx;color:#4e463c}.meal-types{display:flex;gap:9rpx;margin-top:8rpx}.meal-type{padding:7rpx 11rpx;border-radius:99rpx;background:#f1ece4;color:#8b8378;font-size:20rpx}.meal-type.chosen{background:#f7d99a;color:#795321}.categories{white-space:nowrap;margin:22rpx 0}.category{display:inline-block;margin-right:12rpx;padding:12rpx 20rpx;border-radius:99rpx;background:#fffdf8;color:#837668;font-size:23rpx}.category.chosen{background:#dfb96c;color:#fff}.recipe-card{display:flex;align-items:center;gap:16rpx;margin-top:15rpx;padding:22rpx;border-radius:24rpx;background:#fffdf8}.recipe-icon{display:flex;align-items:center;justify-content:center;width:66rpx;height:66rpx;border-radius:20rpx;background:#fbe4b4;font-size:31rpx}.recipe-info{min-width:0;flex:1}.recipe-name{font-size:28rpx;color:#54483b}.recipe-meta{max-width:100%;margin-top:7rpx;overflow:hidden;white-space:nowrap;text-overflow:ellipsis;font-size:20rpx;color:#a09382}.add,.status,.publish,.archive-action,.restore-action{flex:none;margin-left:auto;padding:10rpx 14rpx;border-radius:99rpx;color:#967d5b;font-size:21rpx}.add{border:2rpx solid #dec497}.add.added{border-color:#71a57a;background:#e1f0df;color:#4f8058}.status{background:#e2f0df;color:#54825c}.publish{background:#f6ddb0;color:#8c5c20}.archive-action{background:#fbe5dc;color:#a05d43}.restore-action{background:#e3eee0;color:#54825c}.primary,.secondary{margin-top:28rpx;padding:25rpx;border-radius:24rpx;text-align:center;font-size:28rpx}.primary{background:#d99c48;color:#fff}.secondary{border:2rpx solid #d99c48;color:#9b6525}.recipe-actions{display:flex;justify-content:space-between;align-items:center;padding:20rpx 4rpx;color:#8b7b68;font-size:23rpx}.new-recipe{padding:12rpx 16rpx;border-radius:16rpx;background:#d99c48;color:#fff}.hint{margin-top:25rpx;color:#968c80;font-size:21rpx;line-height:1.6}.meal-summary{display:flex;justify-content:space-between;margin-bottom:15rpx;padding:23rpx;border-radius:22rpx;background:#fff0cd;color:#765328;font-size:25rpx}.menu-item,.ingredient-row{display:flex;align-items:center;justify-content:space-between;padding:22rpx;border-bottom:1rpx solid #eee5d6;background:#fffdf8;color:#574d42;font-size:25rpx}.person{color:#9b8e7e;font-size:21rpx}.ingredients{margin-top:24rpx;border-radius:20rpx;overflow:hidden}.block-title{padding:20rpx;background:#f5ead4;color:#785b35;font-size:25rpx}.plain-title{padding:0;background:transparent}.inline-form{display:flex;align-items:center;gap:12rpx}.category-entry{min-width:0;flex:1}.ingredient-row{gap:14rpx;font-size:23rpx}.ingredient-row.shortage{background:#fff1ec}.ingredient-row.sufficient{background:#f1f8ee}.check{display:flex;align-items:center;justify-content:center;width:34rpx;height:34rpx;border:2rpx solid #d6b58c;border-radius:10rpx;color:#c47639}.ingredient-name{min-width:0;flex:1}.amount-text{margin-top:5rpx;color:#9b9387;font-size:19rpx}.stock-status{flex:none;color:#b06a3e;font-size:21rpx}.sufficient .stock-status{color:#5f8b63}.empty{margin-top:80rpx;text-align:center;color:#8f867a;font-size:27rpx}.back{display:inline-block;margin-top:24rpx;padding:17rpx 30rpx;border-radius:18rpx;background:#d99c48;color:white}
-.form-box{margin-top:24rpx;padding:24rpx;border-radius:22rpx;background:#fffdf7}.entry{min-height:88rpx;border:2rpx solid #e4d7bd;border-radius:16rpx;padding:0 16rpx;margin-top:12rpx;font-size:28rpx}.form-box button{margin-top:12rpx;font-size:28rpx}.menu-item{display:block}.menu-line{display:flex;justify-content:space-between;align-items:center;gap:16rpx}.servings{width:130rpx}.small-action{padding:20rpx;color:#8b5d23}.material{display:block;margin-top:10rpx;color:#7c756b;font-size:24rpx}.error{padding:24rpx;background:#fff0e9;color:#ab4f28;line-height:1.6}.history-row{padding:18rpx;border-bottom:1rpx solid #e4d7bd}.needs_check .stock-status{color:#ac5a24}.ingredient-row{align-items:flex-start}.hint{font-size:26rpx}.person{font-size:24rpx}.ingredient-row.absent{background:#fff1ec}.ingredient-row.present{background:#f1f8ee}.recipe-cover{width:100rpx;height:100rpx;flex:none;border-radius:20rpx;background:#fbe4b4}
-.category-manage-row{display:flex;align-items:center;justify-content:space-between;padding:18rpx 0;border-bottom:1rpx solid #eee5d6;color:#574d42;font-size:25rpx}.archive-link{padding:20rpx;color:#aa6245}.category-editor{margin-top:16rpx;padding-top:8rpx;border-top:2rpx dashed #e4d7bd}.order-entry{width:220rpx}
-.detail-link,.detail-source{display:block;margin-top:14rpx;color:#8b652f;font-size:25rpx}.recipe-detail-mask{position:fixed;inset:0;z-index:50;display:flex;align-items:center;padding:28rpx;box-sizing:border-box;background:rgba(45,38,27,.45)}.recipe-detail-panel{width:100%;padding:26rpx;box-sizing:border-box;border-radius:28rpx;background:#fffdf7}.recipe-detail-content{height:65vh;margin-top:20rpx}.detail-cover{width:100%;height:300rpx;border-radius:18rpx}.detail-step{display:block;padding:20rpx 4rpx;font-size:28rpx;line-height:1.7;color:#574d42;white-space:pre-wrap}.recipe-detail-panel .block-title{margin-top:20rpx}.detail-source{font-size:24rpx;color:#8b7b68}
-.ordering-guide{margin-top:22rpx;padding:24rpx;border-radius:22rpx;background:#fffdf7}.order-start{display:flex;align-items:center;justify-content:center;min-height:88rpx;margin:20rpx 0 0;padding:18rpx 24rpx;box-sizing:border-box;border-radius:20rpx;background:#d99c48;color:#fff;font-size:28rpx;line-height:1.5}.order-start::after,.add::after{border:0}.secondary-order{border:2rpx solid #d99c48;background:#fffdf7;color:#9b6525}.recipe-card button.add{display:flex;align-items:center;justify-content:center;min-height:88rpx;max-width:220rpx;box-sizing:border-box;white-space:normal;background:#fffdf8;font-size:26rpx;line-height:1.5}.recipe-card button.add.added{background:#e1f0df}.order-start[disabled],.recipe-card button.add[disabled]{opacity:.55}
+.page{box-sizing:border-box;min-height:100vh;padding:24rpx 32rpx 48rpx;background:#f7f6ef;color:#34453b;font-size:14px;line-height:1.55}
+.heading{padding:8rpx 0 24rpx}.title{display:block;font-size:22px;font-weight:600;line-height:1.35}
+.tabs{display:flex;gap:8rpx;padding:6rpx;margin-bottom:24rpx;background:#e8ede3;border-radius:22rpx}
+.tab{flex:1;min-height:44px;display:flex;align-items:center;justify-content:center;padding:0 8rpx;box-sizing:border-box;border-radius:18rpx;font-size:14px;color:#53624f}
+.tab.selected{background:#38674f;color:#fff;font-weight:500}
+.picker-row{padding:20rpx 24rpx;background:#fffdf7;border-radius:24rpx}
+.field-value{display:block;min-height:44px;line-height:44px;font-size:14px}
+.meal-types{display:flex;gap:12rpx;margin-top:12rpx}
+.meal-type{flex:1;min-height:44px;display:flex;justify-content:center;align-items:center;border-radius:16rpx;background:#efeee6;color:#53624f;font-size:13px}
+.meal-type.chosen{background:#e7c46a;color:#4b3d19;font-weight:500}
+.categories{white-space:nowrap;margin:20rpx 0}
+.category{display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-height:44px;padding:0 24rpx;margin-right:12rpx;border-radius:18rpx;background:#fffdf7;color:#53624f;font-size:13px}
+.category.chosen{background:#dce8d5;color:#31543f;font-weight:600}
+.recipe-card{display:flex;flex-wrap:wrap;align-items:center;gap:16rpx;margin-top:16rpx;padding:24rpx;border-radius:24rpx;background:#fffdf7}
+.order-card{display:block}.recipe-main{display:flex;align-items:center;gap:24rpx;min-width:0}
+.recipe-cover,.recipe-placeholder{width:144rpx;height:144rpx;flex:none;border-radius:16rpx;background:#e9eee1}
+.recipe-placeholder{display:flex;align-items:center;justify-content:center;font-size:12px;color:#53624f}
+.library-card .recipe-info{flex-basis:100%}.library-actions{display:flex;align-items:center;justify-content:flex-end;flex-wrap:wrap;gap:12rpx;width:100%;border-top:1px solid #e9eee3;padding-top:8rpx}
+.recipe-info{min-width:0;flex:1}.recipe-name{display:block;font-size:16px;font-weight:600;overflow-wrap:anywhere}
+.material{display:block;margin-top:8rpx;color:#667267;font-size:13px;line-height:1.6;overflow-wrap:anywhere}
+.recipe-summary{display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+.detail-link{display:block;margin-top:10rpx;color:#38674f;font-size:12px}
+.recipe-footer{display:flex;align-items:center;justify-content:flex-end;gap:16rpx;margin-top:12rpx}
+.selection-note{color:#38674f;font-size:12px}
+.recipe-card button.add{display:flex;align-items:center;justify-content:center;box-sizing:border-box;width:88px;min-width:88px;max-width:88px;min-height:44px;padding:0 10px;margin:0;border:1px solid #38674f;border-radius:12px;background:#fffdf7;color:#38674f;font-size:14px;line-height:1.4;white-space:normal}
+.recipe-card button.add.added{background:#e6eee3;border-color:#e6eee3;color:#31543f}
+button::after{border:0}.tab:active,.category:active,.meal-type:active,.recipe-main:active{opacity:.75}
+.primary,.secondary,.order-start{display:flex;justify-content:center;align-items:center;box-sizing:border-box;min-height:48px;margin-top:24rpx;padding:18rpx 24rpx;border-radius:20rpx;font-size:14px;line-height:1.5}
+.primary,.order-start{background:#38674f;color:#fff}.secondary,.secondary-order{border:1px solid #38674f;background:#fffdf7;color:#38674f}
+button[disabled],.disabled{opacity:.55}.recipe-meta,.detail-source{display:block;margin-top:8rpx;color:#667267;font-size:12px;overflow-wrap:anywhere}
+.status,.publish,.archive-action,.restore-action,.small-action,.archive-link{display:inline-flex;align-items:center;justify-content:center;min-height:44px;padding:0 16rpx;box-sizing:border-box;font-size:13px;color:#38674f}
+.archive-action,.archive-link{color:#9b4132}.status{color:#53624f}.category-toolbar{text-align:right}
+.form-box,.ordering-guide{margin-top:24rpx;padding:24rpx;border-radius:24rpx;background:#fffdf7}
+.field-label{display:block;margin-top:16rpx;font-size:13px;color:#53624f}
+.entry{box-sizing:border-box;min-height:44px;min-width:0;border:1px solid #cdd6c6;border-radius:14rpx;padding:0 16rpx;margin-top:12rpx;background:#fffdf7;font-size:14px;color:#34453b}
+.inline-form{display:flex;align-items:center;gap:12rpx}.category-entry{flex:1}
+.category-manage-row{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:12rpx;padding:16rpx 0;border-bottom:1px solid #e5e8dc}
+.category-editor{margin-top:16rpx;border-top:1px solid #e5e8dc}
+.hint{margin:20rpx 0;color:#667267;font-size:13px;line-height:1.6}
+.error{margin:16rpx 0;padding:24rpx;border-radius:16rpx;background:#fff0e9;color:#953d2c;overflow-wrap:anywhere}
+.empty{padding:60rpx 24rpx;text-align:center;color:#667267;font-size:14px}
+.meal-summary,.menu-line{display:flex;flex-wrap:wrap;align-items:center;justify-content:space-between;gap:16rpx}
+.meal-summary{margin-top:24rpx;padding:24rpx;border-radius:20rpx;background:#e9eee1}
+.menu-item{padding:24rpx;margin-top:16rpx;border-radius:20rpx;background:#fffdf7}
+.person{color:#667267;font-size:13px}.servings{width:144rpx}
+.ingredients{margin-top:24rpx;border-radius:20rpx;overflow:hidden;background:#fffdf7}
+.block-title{display:block;padding:20rpx 24rpx;background:#e9eee1;font-size:14px;font-weight:600}.plain-title{padding:0;background:transparent}
+.ingredient-row{display:flex;align-items:flex-start;gap:16rpx;padding:24rpx;border-bottom:1px solid #e5e8dc;font-size:13px}
+.ingredient-row.shortage,.ingredient-row.absent{background:#fff0e9}.ingredient-row.sufficient,.ingredient-row.present{background:#eef4e8}
+.check{flex:none;display:flex;align-items:center;justify-content:center;width:44px;height:44px;box-sizing:border-box;border:1px solid #b5beaa;border-radius:12px;color:#38674f}
+.ingredient-name{min-width:0;flex:1}.amount-text{display:block;margin-top:8rpx;color:#667267;font-size:12px}
+.stock-status{max-width:40%;overflow-wrap:anywhere;color:#953d2c;font-size:12px}.sufficient .stock-status,.present .stock-status{color:#38674f}
+.history-row{padding:20rpx 0;border-bottom:1px solid #e5e8dc}
+.recipe-detail-mask{position:fixed;inset:0;z-index:50;display:flex;align-items:center;justify-content:center;padding:24rpx;box-sizing:border-box;background:rgba(35,43,36,.45)}
+.recipe-detail-panel{box-sizing:border-box;width:100%;max-height:86vh;display:flex;flex-direction:column;padding:24rpx;border-radius:28rpx;background:#fffdf7}
+.recipe-detail-panel .menu-line{flex-wrap:nowrap;flex:none}.recipe-detail-panel .recipe-name{min-width:0;flex:1}.recipe-detail-panel .small-action{flex:none}
+.recipe-detail-content{height:58vh;min-height:0;margin-top:16rpx}
+.detail-cover{width:100%;height:280rpx;border-radius:18rpx}
+.detail-step{display:block;padding:20rpx 0;font-size:14px;line-height:1.7;white-space:pre-wrap;overflow-wrap:anywhere}
+.recipe-detail-panel .block-title{margin-top:20rpx}
 </style>
